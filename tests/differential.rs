@@ -377,13 +377,17 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
         );
         return;
     }
-    let mut controlled = false;
+    // The interpreter against itself, once for each mode.
+    let mut controlled: Vec<String> = Vec::new();
     for (i, r) in case.runs.iter().enumerate() {
         for mode in &r.modes {
             let name = format!("{} run {} {mode}", case.script, i + 1);
+            let json = mode.split_whitespace().any(|w| w == "json");
             let side = |program: bool| -> (Vec<Outcome>, String, String) {
                 lay_out();
+                let home = sb.path().join("home");
                 let mut outs = Vec::new();
+                let mut order: Vec<String> = Vec::new();
                 for step in &r.steps {
                     let mut c = if program {
                         Command::new(&prog)
@@ -406,14 +410,22 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
                     }
                     c.arg("--").args(&step.args);
                     outs.push(run(&mut c));
+                    // The runs this step made, after the earlier steps':
+                    // two runs in one millisecond still line up the same
+                    // on both sides.
+                    for f in run_folders(&home) {
+                        if !order.contains(&f) {
+                            order.push(f);
+                        }
+                    }
                 }
-                (outs, tree(&work), journals(&sb.path().join("home")))
+                (outs, tree(&work), journals(&home, &order))
             };
             let (a, ta, ja) = side(false);
-            if !controlled {
-                controlled = true;
+            if !controlled.contains(mode) {
+                controlled.push(mode.clone());
                 let (a2, ta2, ja2) = side(false);
-                if canon(&a, false) != canon(&a2, false) || ta != ta2 || ja != ja2 {
+                if canon(&a, false, json) != canon(&a2, false, json) || ta != ta2 || ja != ja2 {
                     report(
                         tally,
                         &format!("{name} (the interpreter against itself)"),
@@ -426,7 +438,7 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
                 }
             }
             let (b, tb, jb) = side(true);
-            let (ca, cb) = (canon(&a, true), canon(&b, false));
+            let (ca, cb) = (canon(&a, true, json), canon(&b, false, json));
             let mut same = ca == cb && ta == tb && ja == jb;
             // The .out files are written with Unix paths (CigScript's own
             // tests skip the path-printing ones on Windows too).
@@ -519,12 +531,13 @@ fn run(c: &mut Command) -> Outcome {
 /// The outcomes with what may differ made the same: run ids, times,
 /// durations; and, for the interpreter, its leading check warnings (a
 /// program shows them when it is compiled, not on every start).
-fn canon(outs: &[Outcome], interpreter: bool) -> Vec<Outcome> {
+fn canon(outs: &[Outcome], interpreter: bool, json: bool) -> Vec<Outcome> {
+    let records = |t: String| if json { json_normal(&t) } else { t };
     outs.iter()
         .map(|o| Outcome {
             code: o.code,
-            stdout: json_normal(&normal(&o.stdout)),
-            stderr: json_normal(&if interpreter {
+            stdout: records(normal(&o.stdout)),
+            stderr: records(if interpreter {
                 without_warnings(&normal(&o.stderr))
             } else {
                 normal(&o.stderr)
@@ -533,37 +546,52 @@ fn canon(outs: &[Outcome], interpreter: bool) -> Vec<Outcome> {
         .collect()
 }
 
-/// `--json` output, line by line. The fields each process has its own of
-/// are dropped: `pid`, `pid_started`, and `journal_head` (a hash chain over
-/// times). A program's run record names the program and carries `program`;
-/// it is read as the interpreter's when its sha256 and cig are the run's,
-/// with `program.file` as the script, so that name is compared too.
+/// `--json` output, line by line, line ends kept. Only cig's own run
+/// records are read: a line that is an object holding a `run` object. Any
+/// other line, a script's own JSON included, is compared as it is. In a
+/// record, what each process has its own of goes (`pid`, `pid_started`,
+/// and `journal_head`, a hash chain over times), and a program's record is
+/// read as the interpreter's.
 fn json_normal(s: &str) -> String {
-    s.lines()
-        .map(|l| match serde_json::from_str::<serde_json::Value>(l) {
-            Ok(mut v) if v.is_object() => {
-                strip(&mut v);
-                if let Some(run) = v.get_mut("run") {
-                    as_interpreted(run);
+    s.split_inclusive('\n')
+        .map(|l| {
+            let body = l.trim_end_matches('\n');
+            match serde_json::from_str::<serde_json::Value>(body) {
+                Ok(mut v) if v.get("run").is_some_and(|r| r.is_object()) => {
+                    if let Some(run) = v.get_mut("run") {
+                        drop_own(run);
+                        as_interpreted(run);
+                    }
+                    format!("{v}{}", &l[body.len()..])
                 }
-                v.to_string()
+                _ => l.to_string(),
             }
-            _ => l.to_string(),
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect()
 }
 
-/// A program's run record, read as the interpreter's: when the program's
-/// sha256 and cig are the run's, `program` goes and `program.file` is the
-/// script (a mismatch is left in place, and differs).
+/// A run record's fields that each process has its own of.
+fn drop_own(run: &mut serde_json::Value) {
+    if let Some(m) = run.as_object_mut() {
+        for k in ["pid", "pid_started", "journal_head"] {
+            m.remove(k);
+        }
+    }
+}
+
+/// A program's run record names the program as its `script` and carries
+/// `program`. It is read as the interpreter's when that name is the
+/// program's and its sha256 and cig are the run's: `program` goes and
+/// `program.file` becomes `script`, so the file name is compared with the
+/// interpreter's. A mismatch is left in place, and differs.
 fn as_interpreted(run: &mut serde_json::Value) {
     let Some(run) = run.as_object_mut() else {
         return;
     };
     let file = run.get("program").and_then(|p| {
-        let same =
-            p.get("sha256") == run.get("script_sha256") && p.get("cig") == run.get("version");
+        let same = p.get("name") == run.get("script")
+            && p.get("sha256") == run.get("script_sha256")
+            && p.get("cig") == run.get("version");
         if same {
             p.get("file").cloned()
         } else {
@@ -576,11 +604,13 @@ fn as_interpreted(run: &mut serde_json::Value) {
     }
 }
 
-/// What the runs left in cig's home, in the order they ran: each run's
-/// record, every journal line and the after-state, without what is a
-/// process's own (ids, times, pids, the hash chain, folder fingerprints),
-/// its snapshots by content, and the names of everything in its folder.
-fn journals(home: &Path) -> String {
+/// What the runs left in cig's home, in the order they ran (`order`, the
+/// run folders as the steps made them): each run's record, every journal
+/// line and the after-state, without what is a process's own (ids, times,
+/// pids, the hash chain; folder fingerprints masked), its snapshots by
+/// content, and the names of everything in its folder. A dry run leaves no
+/// run folder, so for dry runs this compares nothing.
+fn journals(home: &Path, order: &[String]) -> String {
     let read = |p: PathBuf| {
         std::fs::read_to_string(p)
             .ok()
@@ -594,33 +624,18 @@ fn journals(home: &Path) -> String {
             }
         }
         // A folder's fingerprint hashes its entries' times (it is how
-        // unburn sees newer work); each side's tree is laid out afresh.
-        // Its entries are compared one by one, by content.
-        remove_everywhere(&mut v, "fingerprint");
+        // unburn sees newer work), and each side's tree is laid out afresh.
+        // A file's sha256 is of its raw bytes, and a file can carry the time
+        // it was written (a report's timestamp). Both values are masked and
+        // their presence still compared; the contents are compared in the
+        // tree and the snapshots, where such times are normalized.
+        mask_everywhere(&mut v, "fingerprint");
+        mask_everywhere(&mut v, "sha256");
         normal(&v.to_string())
     };
-    let Ok(rd) = std::fs::read_dir(home.join("runs")) else {
-        return String::new();
-    };
-    let mut runs: Vec<(String, PathBuf)> = rd
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .map(|p| {
-            let started = read(p.join("run.json"))
-                .and_then(|t| parse(&t))
-                .and_then(|v| {
-                    v.get("started")
-                        .and_then(|s| s.as_str())
-                        .map(str::to_string)
-                })
-                .unwrap_or_default();
-            (started, p)
-        })
-        .collect();
-    runs.sort();
     let mut out = Vec::new();
-    for (_, d) in runs {
+    for name in order {
+        let d = home.join("runs").join(name);
         let mut names: Vec<String> = std::fs::read_dir(&d)
             .map(|r| {
                 r.flatten()
@@ -631,7 +646,7 @@ fn journals(home: &Path) -> String {
         names.sort();
         out.push(format!("run folder: {}", names.join(" ")));
         if let Some(mut v) = read(d.join("run.json")).and_then(|t| parse(&t)) {
-            strip(&mut v);
+            drop_own(&mut v);
             as_interpreted(&mut v);
             out.push(format!(
                 "record: {}",
@@ -655,28 +670,32 @@ fn journals(home: &Path) -> String {
     out.join("\n")
 }
 
-fn remove_everywhere(v: &mut serde_json::Value, key: &str) {
+fn mask_everywhere(v: &mut serde_json::Value, key: &str) {
     match v {
         serde_json::Value::Object(m) => {
-            m.remove(key);
-            m.values_mut().for_each(|x| remove_everywhere(x, key));
+            if let Some(x) = m.get_mut(key) {
+                *x = serde_json::Value::String(format!("<{key}>"));
+            }
+            m.values_mut().for_each(|x| mask_everywhere(x, key));
         }
-        serde_json::Value::Array(a) => a.iter_mut().for_each(|x| remove_everywhere(x, key)),
+        serde_json::Value::Array(a) => a.iter_mut().for_each(|x| mask_everywhere(x, key)),
         _ => {}
     }
 }
 
-fn strip(v: &mut serde_json::Value) {
-    match v {
-        serde_json::Value::Object(m) => {
-            for k in ["pid", "pid_started", "journal_head"] {
-                m.remove(k);
-            }
-            m.values_mut().for_each(strip);
-        }
-        serde_json::Value::Array(a) => a.iter_mut().for_each(strip),
-        _ => {}
-    }
+/// The run folders in cig's home, by name; a step's new ones are those
+/// not seen after the step before it.
+fn run_folders(home: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(home.join("runs"))
+        .map(|d| {
+            d.flatten()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
 }
 
 fn normal(s: &str) -> String {
