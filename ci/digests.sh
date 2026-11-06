@@ -10,7 +10,7 @@ tag=${1:?usage: digests.sh <tag>}
 version=${tag#v}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-gh release download "$tag" -R otmof-ops/CigScript -p 'cig-*.sha256' -D "$tmp" >/dev/null
+gh release download "$tag" -R otmof-ops/cig-script -p 'cig-*.sha256' -D "$tmp" >/dev/null
 cat <<HEAD
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
 // SPDX-License-Identifier: Apache-2.0

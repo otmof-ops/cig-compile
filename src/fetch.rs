@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 /// Where cig is released.
-pub const REPO: &str = "otmof-ops/CigScript";
+pub const REPO: &str = "otmof-ops/cig-script";
 
 /// The release asset that is the runtime for `t`.
 pub fn asset_file(t: &Target) -> String {

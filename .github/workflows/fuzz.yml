@@ -31,7 +31,7 @@ jobs:
         run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
-          repository: otmof-ops/CigScript
+          repository: otmof-ops/cig-script
           ref: ${{ env.CIGSCRIPT_REF }}
           path: cigscript-src
       - name: its scripts as the seeds
