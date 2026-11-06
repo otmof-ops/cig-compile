@@ -39,6 +39,8 @@ impl Sandbox {
             .env("CIG_INTERNAL_TRACKER_DIR", self.path().join("tracker"))
             .env("CIG_UPDATE_MANIFEST", self.path().join("no-releases.json"))
             .env("CIGCOMPILE_RUNTIME", RT)
+            // Never the network from a test: a runtime not here is an error.
+            .env("CIGCOMPILE_OFFLINE", "1")
             .env_remove("CI");
     }
 

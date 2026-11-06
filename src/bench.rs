@@ -34,7 +34,13 @@ struct Row {
     same: bool,
 }
 
-pub fn bench(ctx: &Ctx, runtime: &Runtime, runs: usize, budgets: bool, orchestrate: Option<&Path>) -> i32 {
+pub fn bench(
+    ctx: &Ctx,
+    runtime: &Runtime,
+    runs: usize,
+    budgets: bool,
+    orchestrate: Option<&Path>,
+) -> i32 {
     let me = std::env::current_exe().expect("this program's path");
     let root = std::env::temp_dir().join(format!("cigcompile-bench-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -56,7 +62,9 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, runs: usize, budgets: bool, orchestra
         std::fs::create_dir_all(&src).expect("a temp folder");
         let script = src.join(format!("{name}.cig"));
         std::fs::write(&script, source).expect("write the script");
-        let bin = root.join("bin").join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        let bin = root
+            .join("bin")
+            .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
         let mut c = Command::new(&me);
         env(&mut c);
         c.arg("build").arg(&script).arg("-o").arg(&bin);
@@ -66,10 +74,16 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, runs: usize, budgets: bool, orchestra
             let mut ms = Vec::new();
             let mut out = String::new();
             for i in 0..runs {
-                let work = root.join("work").join(format!("{name}-{}-{i}", if program { "p" } else { "i" }));
+                let work = root
+                    .join("work")
+                    .join(format!("{name}-{}-{i}", if program { "p" } else { "i" }));
                 std::fs::create_dir_all(&work).expect("a run folder");
                 std::fs::write(work.join(format!("{name}.cig")), source).expect("the script");
-                let mut c = if program { Command::new(&bin) } else { Command::new(&runtime.path) };
+                let mut c = if program {
+                    Command::new(&bin)
+                } else {
+                    Command::new(&runtime.path)
+                };
                 env(&mut c);
                 c.current_dir(&work);
                 if !program {
@@ -95,18 +109,30 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, runs: usize, budgets: bool, orchestra
     // A rebuild of hello that changes nothing.
     let mut c = Command::new(&me);
     env(&mut c);
-    c.arg("build").arg(root.join("src/hello.cig")).arg("-o").arg(root.join("bin").join(format!("hello{}", std::env::consts::EXE_SUFFIX)));
+    c.arg("build")
+        .arg(root.join("src/hello.cig"))
+        .arg("-o")
+        .arg(
+            root.join("bin")
+                .join(format!("hello{}", std::env::consts::EXE_SUFFIX)),
+        );
     let noop_ms = median((0..runs.max(3)).map(|_| timed(&mut c).0).collect());
     let orchestrate_ms = orchestrate.map(|p| {
         let mut c = Command::new(&me);
         env(&mut c);
-        c.arg("build").arg(p).arg("-o").arg(root.join("bin/orchestrate"));
+        c.arg("build")
+            .arg(p)
+            .arg("-o")
+            .arg(root.join("bin/orchestrate"));
         timed(&mut c).0
     });
     let _ = std::fs::remove_dir_all(&root);
 
     let hello = rows.iter().find(|r| r.name == "hello");
-    let speedups: Vec<f64> = rows.iter().map(|r| r.interpreted_ms / r.compiled_ms.max(0.001)).collect();
+    let speedups: Vec<f64> = rows
+        .iter()
+        .map(|r| r.interpreted_ms / r.compiled_ms.max(0.001))
+        .collect();
     let speedup = median(speedups);
     // (what, budget, measured, applies at stage A, met)
     let mut checks: Vec<(String, String, String, bool, bool)> = vec![
@@ -120,7 +146,9 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, runs: usize, budgets: bool, orchestra
         (
             "start-up of a compiled hello".into(),
             "under 5 ms".into(),
-            hello.map(|h| format!("{:.1} ms", h.compiled_ms)).unwrap_or_default(),
+            hello
+                .map(|h| format!("{:.1} ms", h.compiled_ms))
+                .unwrap_or_default(),
             false,
             hello.is_some_and(|h| h.compiled_ms < 5.0),
         ),
@@ -134,7 +162,9 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, runs: usize, budgets: bool, orchestra
         (
             "hello binary size".into(),
             "under 4 MB (the trimmed runtime, #4)".into(),
-            hello.map(|h| format!("{:.1} MB", h.bytes as f64 / 1e6)).unwrap_or_default(),
+            hello
+                .map(|h| format!("{:.1} MB", h.bytes as f64 / 1e6))
+                .unwrap_or_default(),
             false,
             hello.is_some_and(|h| h.bytes < 4_000_000),
         ),
@@ -160,11 +190,20 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, runs: usize, budgets: bool, orchestra
             .iter()
             .map(|c| serde_json::json!({"what": c.0, "budget": c.1, "measured": c.2, "applies": c.3, "met": c.4}))
             .collect();
-        println!("{}", serde_json::json!({"runs": runs, "stage": "A", "cig": runtime.version, "programs": rows, "budgets": checks}));
+        println!(
+            "{}",
+            serde_json::json!({"runs": runs, "stage": "A", "cig": runtime.version, "programs": rows, "budgets": checks})
+        );
     } else {
-        println!("stage A (bundle) on cig {}, median of {runs} runs, CIG_SEAL_KEY=file", runtime.version);
+        println!(
+            "stage A (bundle) on cig {}, median of {runs} runs, CIG_SEAL_KEY=file",
+            runtime.version
+        );
         println!();
-        println!("{:<10} {:>10} {:>10} {:>14} {:>12} {:>8}  output", "program", "build ms", "size MB", "interpreted ms", "compiled ms", "ratio");
+        println!(
+            "{:<10} {:>10} {:>10} {:>14} {:>12} {:>8}  output",
+            "program", "build ms", "size MB", "interpreted ms", "compiled ms", "ratio"
+        );
         for r in &rows {
             println!(
                 "{:<10} {:>10.1} {:>10.1} {:>14.1} {:>12.1} {:>7.2}x  {}",

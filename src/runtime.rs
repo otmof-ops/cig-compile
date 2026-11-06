@@ -161,26 +161,24 @@ pub fn find(
     if let Some(p) = given.map(Path::to_path_buf).or(from_env) {
         return load(&p, target, index);
     }
+    // Another machine's runtime: cig's own release for it, kept or fetched,
+    // and accepted only at the sha256 this compiler pins (src/fetch.rs).
     if target.triple != host().triple {
-        return Err(usage(format!(
-            "no runtime for {} here: cigcompile {} builds for other machines from their cig {}",
-            target.triple,
-            env!("CARGO_PKG_VERSION"),
-            wanted()
-        ))
-        .code("E1001")
-        .with_hint(format!(
-            "download cig-v{}-{}{} from CigScript's releases, check its sha256, and pass it with --runtime",
-            wanted(),
-            target.asset,
-            target.suffix()
-        )));
+        let fetched = crate::fetch::fetch(target, true)?;
+        return load(&fetched, target, index);
     }
     let mut seen = Vec::new();
     for candidate in candidates(target) {
         match load(&candidate, target, index) {
             Ok(r) => return Ok(r),
             Err(d) => seen.push(format!("{} ({})", candidate.display(), d.message)),
+        }
+    }
+    // Nothing here: cig's own release for this machine, when cig ships one.
+    if host().triple != OTHER.triple {
+        match crate::fetch::fetch(target, true) {
+            Ok(p) => return load(&p, target, index),
+            Err(d) => seen.push(format!("its release ({})", d.message)),
         }
     }
     let mut d = usage(format!(

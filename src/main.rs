@@ -6,6 +6,8 @@
 mod bench;
 mod build;
 mod cache;
+mod digests;
+mod fetch;
 mod project;
 mod runtime;
 mod test;
@@ -50,6 +52,18 @@ enum Command {
     Targets,
     /// The benchmark set, interpreted and compiled, and the budgets the stage that exists can meet.
     Bench(BenchArgs),
+    /// Fetch the runtime (cig's own release asset) for other machines, checked against the sha256 this compiler pins.
+    Fetch(FetchArgs),
+}
+
+#[derive(Args)]
+struct FetchArgs {
+    /// The machines to fetch for (`cigcompile targets` lists them).
+    #[arg(long)]
+    target: Vec<String>,
+    /// Every machine cig is released for.
+    #[arg(long)]
+    all: bool,
 }
 
 #[derive(Args)]
@@ -146,12 +160,19 @@ fn run() -> i32 {
         },
         Some(Command::Clean(a)) => clean(&ctx, &a),
         Some(Command::Targets) => targets(&ctx),
+        Some(Command::Fetch(a)) => fetch_cmd(&ctx, &a),
         Some(Command::Bench(a)) => {
             let mut index = cache::Index::load();
             let found = runtime::find(runtime::host(), a.runtime.as_deref(), &mut index);
             index.save();
             match found {
-                Ok(rt) => bench::bench(&ctx, &rt, a.runs.max(1), a.budgets, bench::path(&a.orchestrate)),
+                Ok(rt) => bench::bench(
+                    &ctx,
+                    &rt,
+                    a.runs.max(1),
+                    a.budgets,
+                    bench::path(&a.orchestrate),
+                ),
                 Err(d) => {
                     cigscript::cli::report(&ctx, &d, None, None);
                     exit::USAGE
@@ -227,6 +248,45 @@ fn clean(ctx: &Ctx, a: &CleanArgs) -> i32 {
         }
     }
     exit::OK
+}
+
+fn fetch_cmd(ctx: &Ctx, a: &FetchArgs) -> i32 {
+    let mut wanted: Vec<&'static runtime::Target> = Vec::new();
+    if a.all {
+        wanted.extend(runtime::TARGETS.iter());
+    }
+    for t in &a.target {
+        match runtime::target(Some(t)) {
+            Ok(t) => wanted.push(t),
+            Err(d) => {
+                cigscript::cli::report(ctx, &d, None, None);
+                return exit::USAGE;
+            }
+        }
+    }
+    if wanted.is_empty() {
+        wanted.push(runtime::host());
+    }
+    let mut code = exit::OK;
+    for t in wanted {
+        match fetch::fetch(t, !ctx.json) {
+            Ok(p) => {
+                if ctx.json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"target": t.triple, "runtime": p.to_string_lossy()})
+                    );
+                } else {
+                    println!("{:<32} {}", t.triple, p.display());
+                }
+            }
+            Err(d) => {
+                cigscript::cli::report(ctx, &d, None, None);
+                code = exit::USAGE;
+            }
+        }
+    }
+    code
 }
 
 fn targets(ctx: &Ctx) -> i32 {

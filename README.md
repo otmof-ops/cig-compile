@@ -18,6 +18,14 @@ The runtime is built here, with the compiler: `cig-runtime` is `cig` of the pinn
 2. `cig-runtime` beside `cigcompile`;
 3. a `cig` of the same version on `PATH`, or in the humidor.
 
+## Other machines
+
+`cigcompile build tidy.cig --target aarch64-apple-darwin` builds a program for a Mac from any machine. Since cig 1.15.0 every cig is a runtime, so the runtime for another machine is cig's own release asset for it, of the version this compiler pins. It is:
+- fetched once, into `<cig home>/cigcompile/runtimes/`;
+- accepted only at the sha256 this compiler was built knowing (`src/digests.rs`, written by `ci/digests.sh` from the release's checksums).
+
+A checksum fetched beside the asset would prove nothing against a tampered release; one built into the compiler does. `CIGCOMPILE_OFFLINE=1` forbids the fetch, and `--runtime` names a runtime by hand. CI builds for six machines on one Linux runner and runs each program on its own machine.
+
 ## The commands
 
 | command | does |
@@ -26,6 +34,7 @@ The runtime is built here, with the compiler: `cig-runtime` is `cig` of the pinn
 | `cigcompile test [path]` | builds, then runs each program and its script with `--dry-run` and compares them: the plan, the output and the exit |
 | `cigcompile clean [path]` | removes the programs a build of this path wrote, and nothing else |
 | `cigcompile targets` | the machines cig is released for, and the runtime found for this one |
+| `cigcompile fetch [--target T] [--all]` | fetches the runtime for other machines ahead of a build |
 | `cigcompile bench [--runs N] [--budgets]` | the benchmark set, interpreted and compiled, and the budgets from #14 |
 
 - **Where programs go.** One script builds to `./<name>`; a folder builds to `<folder>/bin/<name>`, and `<folder>/bin/<target>/` for another machine. `-o` says otherwise.
