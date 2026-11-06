@@ -98,6 +98,9 @@ struct BuildArgs {
     /// Check only: write nothing, need no runtime.
     #[arg(long)]
     check: bool,
+    /// Print what a stage of the compiler makes instead of a program: `cir`, the verified IR (#3).
+    #[arg(long, value_name = "WHAT", value_parser = ["cir"])]
+    emit: Option<String>,
 }
 
 #[derive(Args)]
@@ -203,6 +206,10 @@ fn build_cmd(
     };
     let target = runtime::target(a.target.as_deref()).map_err(fail)?;
     let jobs = project::jobs(a.path.as_deref(), a.out.as_deref(), target).map_err(fail)?;
+    if a.emit.is_some() {
+        emit_cir(ctx, &jobs)?;
+        return Ok(None);
+    }
     let mut index = cache::Index::load();
     if a.check {
         build::build(ctx, &jobs, target, None, &mut index)?;
@@ -214,6 +221,53 @@ fn build_cmd(
     let built = build::build(ctx, &jobs, target, Some(&rt), &mut index);
     index.save();
     Ok(Some((built?, rt)))
+}
+
+/// `--emit=cir`: each script's IR, lowered, through the default passes
+/// and verified after each, printed. A script that does not check is said
+/// as `cig check` says it; a verifier failure is the compiler's bug.
+fn emit_cir(ctx: &Ctx, jobs: &[project::Job]) -> Result<(), i32> {
+    use cigcompile::cir::{emit, EmitError, LowerError};
+    for job in jobs {
+        let source = std::fs::read_to_string(&job.script).map_err(|e| {
+            let d = cigscript::diagnostics::usage(format!("cannot read {}: {e}", job.file))
+                .code("E1000")
+                .with_hint("name a .cig script you can read");
+            cigscript::cli::report(ctx, &d, None, None);
+            exit::USAGE
+        })?;
+        match emit(&source, &job.file) {
+            Ok((text, warnings)) => {
+                // V6: an effectful pull called outside every burn, which
+                // the run refuses with E701.
+                for w in &warnings {
+                    eprintln!("{}: {w}", job.file);
+                }
+                print!("{text}")
+            }
+            Err(EmitError::Lower(LowerError::Diagnostic(d))) => {
+                cigscript::cli::report(ctx, &d, Some(&job.file), Some(&source));
+                return Err(exit::CHECK);
+            }
+            Err(EmitError::Lower(LowerError::Internal(e))) => {
+                let d = cigscript::diagnostics::internal(format!("lowering {}: {e}", job.file));
+                cigscript::cli::report(ctx, &d, None, None);
+                return Err(70);
+            }
+            Err(EmitError::Verify(e)) => {
+                let lines: Vec<String> = e.errors.iter().map(|x| x.to_string()).collect();
+                let d = cigscript::diagnostics::internal(format!(
+                    "the IR of {} broke a rule after {}: {}",
+                    job.file,
+                    e.pass,
+                    lines.join("; ")
+                ));
+                cigscript::cli::report(ctx, &d, None, None);
+                return Err(70);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Remove the programs a build of this path wrote: only files that are
