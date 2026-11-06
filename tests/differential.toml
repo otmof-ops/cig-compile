@@ -8,8 +8,9 @@
 # A case: `script` (relative to the checkout), `files` (the work tree, path =
 # content), `setup` (commands run in the work tree first, on both sides), and
 # `runs`: each a list of `steps` run in order in one work tree, with `args`,
-# an optional `light` (a chain: `cig light` / `--light`), and `modes` (default
-# run and dry-run).
+# an optional `light` (a chain: `cig light` / `--light`), and `modes`: the
+# flags both sides get (default `run`, `dry-run`, `json` and `plain`; `run` is
+# a real run, `dry-run json` is `--dry-run --json`).
 
 [[case]]
 script = "examples/hello.cig"
