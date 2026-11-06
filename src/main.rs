@@ -113,7 +113,17 @@ struct CleanArgs {
 }
 
 fn main() {
-    std::process::exit(run());
+    // The same stack cig gives its parser and checker: their depth limits
+    // (E208) are sized for it, and a deeply nested script must be refused,
+    // not overflow the main thread's stack.
+    let code = std::thread::Builder::new()
+        .name("cigcompile".into())
+        .stack_size(256 * 1024 * 1024)
+        .spawn(run)
+        .expect("could not start the compiler thread")
+        .join()
+        .unwrap_or(70);
+    std::process::exit(code);
 }
 
 fn run() -> i32 {

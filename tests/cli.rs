@@ -313,3 +313,17 @@ fn a_build_that_changes_nothing_says_the_warnings_again() {
     );
     assert_eq!(text(&again.stderr), text(&first.stderr));
 }
+
+/// A script nested deeper than the parser allows is refused (E208), as
+/// `cig check` refuses it, never a stack overflow.
+#[test]
+fn a_deeply_nested_script_is_refused_not_a_crash() {
+    let s = Sandbox::new();
+    s.write(
+        "deep.cig",
+        &format!("exhale {}{}\n", "[".repeat(100_000), "]".repeat(100_000)),
+    );
+    let o = s.cc(&["build", "--check", "deep.cig"]);
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o.stderr));
+    assert!(text(&o.stderr).contains("E208"), "{}", text(&o.stderr));
+}
