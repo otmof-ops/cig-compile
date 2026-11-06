@@ -381,7 +381,7 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
     for (i, r) in case.runs.iter().enumerate() {
         for mode in &r.modes {
             let name = format!("{} run {} {mode}", case.script, i + 1);
-            let side = |program: bool| -> (Vec<Outcome>, String) {
+            let side = |program: bool| -> (Vec<Outcome>, String, String) {
                 lay_out();
                 let mut outs = Vec::new();
                 for step in &r.steps {
@@ -407,27 +407,27 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
                     c.arg("--").args(&step.args);
                     outs.push(run(&mut c));
                 }
-                (outs, tree(&work))
+                (outs, tree(&work), journals(&sb.path().join("home")))
             };
-            let (a, ta) = side(false);
+            let (a, ta, ja) = side(false);
             if !controlled {
                 controlled = true;
-                let (a2, ta2) = side(false);
-                if canon(&a, false) != canon(&a2, false) || ta != ta2 {
+                let (a2, ta2, ja2) = side(false);
+                if canon(&a, false) != canon(&a2, false) || ta != ta2 || ja != ja2 {
                     report(
                         tally,
                         &format!("{name} (the interpreter against itself)"),
                         false,
                         || {
-                            format!("the reference is not deterministic under the normalisation:\n{a:#?}\n{a2:#?}")
+                            format!("the reference is not deterministic under the normalisation:\n{a:#?}\n{a2:#?}\nfiles:\n{ta}\n{ta2}\njournals:\n{ja}\n=====\n{ja2}")
                         },
                     );
                     continue;
                 }
             }
-            let (b, tb) = side(true);
+            let (b, tb, jb) = side(true);
             let (ca, cb) = (canon(&a, true), canon(&b, false));
-            let mut same = ca == cb && ta == tb;
+            let mut same = ca == cb && ta == tb && ja == jb;
             // The .out files are written with Unix paths (CigScript's own
             // tests skip the path-printing ones on Windows too).
             if let Some(want) = case
@@ -446,6 +446,9 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
                 }
                 if ta != tb {
                     s += &format!("files differ:\ninterpreter: {ta}\nprogram:     {tb}\n");
+                }
+                if ja != jb {
+                    s += &format!("journals differ:\ninterpreter:\n{ja}\nprogram:\n{jb}\n");
                 }
                 if s.is_empty() {
                     s = "stdout differs from the .out file".to_string();
@@ -540,20 +543,8 @@ fn json_normal(s: &str) -> String {
         .map(|l| match serde_json::from_str::<serde_json::Value>(l) {
             Ok(mut v) if v.is_object() => {
                 strip(&mut v);
-                if let Some(run) = v.get_mut("run").and_then(|r| r.as_object_mut()) {
-                    let file = run.get("program").and_then(|p| {
-                        let same = p.get("sha256") == run.get("script_sha256")
-                            && p.get("cig") == run.get("version");
-                        if same {
-                            p.get("file").cloned()
-                        } else {
-                            None
-                        }
-                    });
-                    if let Some(f) = file {
-                        run.remove("program");
-                        run.insert("script".to_string(), f);
-                    }
+                if let Some(run) = v.get_mut("run") {
+                    as_interpreted(run);
                 }
                 v.to_string()
             }
@@ -561,6 +552,118 @@ fn json_normal(s: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A program's run record, read as the interpreter's: when the program's
+/// sha256 and cig are the run's, `program` goes and `program.file` is the
+/// script (a mismatch is left in place, and differs).
+fn as_interpreted(run: &mut serde_json::Value) {
+    let Some(run) = run.as_object_mut() else {
+        return;
+    };
+    let file = run.get("program").and_then(|p| {
+        let same =
+            p.get("sha256") == run.get("script_sha256") && p.get("cig") == run.get("version");
+        if same {
+            p.get("file").cloned()
+        } else {
+            None
+        }
+    });
+    if let Some(f) = file {
+        run.remove("program");
+        run.insert("script".to_string(), f);
+    }
+}
+
+/// What the runs left in cig's home, in the order they ran: each run's
+/// record, every journal line and the after-state, without what is a
+/// process's own (ids, times, pids, the hash chain, folder fingerprints),
+/// its snapshots by content, and the names of everything in its folder.
+fn journals(home: &Path) -> String {
+    let read = |p: PathBuf| {
+        std::fs::read_to_string(p)
+            .ok()
+            .map(|t| t.replace("\r\n", "\n"))
+    };
+    let parse = |t: &str| serde_json::from_str::<serde_json::Value>(t).ok();
+    let without = |mut v: serde_json::Value, keys: &[&str]| {
+        if let Some(m) = v.as_object_mut() {
+            for k in keys {
+                m.remove(*k);
+            }
+        }
+        // A folder's fingerprint hashes its entries' times (it is how
+        // unburn sees newer work); each side's tree is laid out afresh.
+        // Its entries are compared one by one, by content.
+        remove_everywhere(&mut v, "fingerprint");
+        normal(&v.to_string())
+    };
+    let Ok(rd) = std::fs::read_dir(home.join("runs")) else {
+        return String::new();
+    };
+    let mut runs: Vec<(String, PathBuf)> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .map(|p| {
+            let started = read(p.join("run.json"))
+                .and_then(|t| parse(&t))
+                .and_then(|v| {
+                    v.get("started")
+                        .and_then(|s| s.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            (started, p)
+        })
+        .collect();
+    runs.sort();
+    let mut out = Vec::new();
+    for (_, d) in runs {
+        let mut names: Vec<String> = std::fs::read_dir(&d)
+            .map(|r| {
+                r.flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        out.push(format!("run folder: {}", names.join(" ")));
+        if let Some(mut v) = read(d.join("run.json")).and_then(|t| parse(&t)) {
+            strip(&mut v);
+            as_interpreted(&mut v);
+            out.push(format!(
+                "record: {}",
+                without(v, &["id", "started", "finished"])
+            ));
+        }
+        for l in read(d.join("journal.jsonl")).unwrap_or_default().lines() {
+            match parse(l) {
+                Some(v) => out.push(format!("journal: {}", without(v, &["run", "at", "prev"]))),
+                None => out.push(format!("journal (not JSON): {l}")),
+            }
+        }
+        if let Some(v) = read(d.join("after.json")).and_then(|t| parse(&t)) {
+            out.push(format!("after: {}", without(v, &["recorded"])));
+        }
+        let snaps = tree(&d.join("snapshots"));
+        if !snaps.is_empty() {
+            out.push(format!("snapshots: {snaps}"));
+        }
+    }
+    out.join("\n")
+}
+
+fn remove_everywhere(v: &mut serde_json::Value, key: &str) {
+    match v {
+        serde_json::Value::Object(m) => {
+            m.remove(key);
+            m.values_mut().for_each(|x| remove_everywhere(x, key));
+        }
+        serde_json::Value::Array(a) => a.iter_mut().for_each(|x| remove_everywhere(x, key)),
+        _ => {}
+    }
 }
 
 fn strip(v: &mut serde_json::Value) {
