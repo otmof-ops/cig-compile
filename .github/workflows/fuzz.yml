@@ -1,0 +1,47 @@
+name: fuzz
+
+# #16: the front end is the first reader of code that may come from someone
+# else; every night, each target runs under libFuzzer, seeded with the
+# pinned CigScript's own scripts. A crash is kept as an artifact.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: seconds per target
+        default: "300"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse, check, lower, program]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - name: the pinned CigScript
+        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: otmof-ops/CigScript
+          ref: ${{ env.CIGSCRIPT_REF }}
+          path: cigscript-src
+      - name: its scripts as the seeds
+        run: |
+          mkdir -p "fuzz/corpus/${{ matrix.target }}"
+          cp cigscript-src/examples/*.cig cigscript-src/tests/scripts/*.cig cigscript-src/tests/corpus/*.cig "fuzz/corpus/${{ matrix.target }}/"
+      - name: fuzz
+        run: cargo fuzz run ${{ matrix.target }} "fuzz/corpus/${{ matrix.target }}" -- -max_total_time=${{ inputs.seconds || 300 }} -max_len=65536 -rss_limit_mb=4096
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-${{ matrix.target }}
+          path: fuzz/artifacts

@@ -54,6 +54,20 @@ CIGSCRIPT_SRC=../CigScript cargo test --release --test differential   # the diff
 
 The differential suite reads its scripts from a CigScript checkout of the pinned version: the examples, the error corpus, `tests/scripts`, and the `cig` fences in the docs. It runs each under `cig run` and as a program, and fails on any difference in output, exit code or files left behind.
 
+## Fuzzing
+
+The compiler is the first reader of code that may come from someone else, so its front end is fuzzed (#16). The four targets live in `src/fuzz.rs`:
+- `parse`: any text into the parser;
+- `check`: a parsed program into the checker;
+- `lower`: a program the checker accepts must lower to IR that verifies through every pass;
+- `program`: any bytes as a program's trailer.
+
+`fuzz/` holds them for cargo-fuzz, and `.github/workflows/fuzz.yml` runs each for five minutes every night, seeded with CigScript's own scripts. `tests/fuzz_smoke.rs` drives the same bodies on stable over a fixed sample on every test run, nesting past the parser's ceilings included. Each target runs on cig's 256 MB stack, as the compiler does: a script nested deeper than the parser allows is refused (E208), never a stack overflow.
+
+```sh
+cargo +nightly fuzz run lower fuzz/corpus/lower -- -max_total_time=60
+```
+
 ## Status
 
 Phase one, stage A. The plan, and what is left of it, is in the issues: #1 (the crate split), #3 (the IR), #10 (cross-compiling and signing), #12 (the window) and on.

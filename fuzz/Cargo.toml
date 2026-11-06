@@ -1,0 +1,48 @@
+# The front end's fuzz targets (#16): the compiler is the first reader of
+# code that may come from someone else. cargo-fuzz (nightly) runs them; the
+# workflow in .github/workflows/fuzz.yml does it every night.
+[package]
+name = "cigcompile-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+cigcompile = { path = ".." }
+cigscript = { git = "https://github.com/otmof-ops/CigScript", tag = "v1.15.0" }
+
+# Its own workspace: the compiler's build never builds it.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "check"
+path = "fuzz_targets/check.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lower"
+path = "fuzz_targets/lower.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "program"
+path = "fuzz_targets/program.rs"
+test = false
+doc = false
+bench = false
