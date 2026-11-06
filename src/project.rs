@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! What to compile: one script, or every script at the top of a folder,
 //! and where each program goes.
 

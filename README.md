@@ -71,3 +71,32 @@ cargo +nightly fuzz run lower fuzz/corpus/lower -- -max_total_time=60
 ## Status
 
 Phase one, stage A. The plan, and what is left of it, is in the issues: #1 (the crate split), #3 (the IR), #10 (cross-compiling and signing), #12 (the window) and on.
+
+## Licensing
+
+- **Code** (`src/`, `tests/`, `bench/`, `ci/`, `fuzz/`): [Apache-2.0](LICENSE),
+  the same license as CigScript. In plain words: use, copy, change, sell and
+  embed cigcompile freely, including in closed products; keep the copyright
+  notice and the [NOTICE](NOTICE) file with any copy; you get a patent license
+  from every contributor; and you can't use the name to endorse your
+  derivative.
+- **Documentation** (`docs/`, this README and the other guides at the root):
+  [CC BY 4.0](LICENSES/CC-BY-4.0.txt). Reuse and adapt with credit.
+- **The programs it makes.** A program is cig with your script appended. Your
+  script stays yours, under whatever license you give it. cig is CigScript's,
+  under Apache-2.0, so whoever passes a program on gives the recipient a copy
+  of that license and CigScript's
+  [NOTICE](https://github.com/otmof-ops/cig-script/blob/main/NOTICE), as its
+  section 4 asks of any copy of cig.
+- **The name.** CigCompile and cigcompile are trademarks of Jay Taylor, as
+  CigScript is. A fork needs a name of its own;
+  [TRADEMARKS.md](TRADEMARKS.md) says what is free to do and what to ask about
+  first.
+
+Crates compiled into cigcompile are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), all under permissive
+licenses compatible with Apache-2.0. [REUSE.toml](REUSE.toml) maps every path
+to its license. Contributions are accepted under the same terms, signed off
+under the DCO; see [CONTRIBUTING.md](CONTRIBUTING.md). Security reports:
+[SECURITY.md](SECURITY.md).
+

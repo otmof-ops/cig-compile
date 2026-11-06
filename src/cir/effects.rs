@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! What the prelude's names are, and which stdlib calls are effects.
 
 use super::ir::OpKind;

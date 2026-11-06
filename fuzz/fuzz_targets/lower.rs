@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 #![no_main]
 //! Fuzz target `lower`: see cigcompile::fuzz.
 

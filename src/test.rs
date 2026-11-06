@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! `cigcompile test`: each program beside its script, both with `--dry-run`
 //! (nothing burns), on the runtime it was built from. The plan, the output
 //! and the exit code must be the same.

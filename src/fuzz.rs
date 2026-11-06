@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! The fuzz targets' bodies (#16). The compiler is the first reader of code
 //! that may come from someone else (a carton package), so its front end is
 //! fuzzed. The bodies live here, so the nightly libFuzzer runs (`fuzz/`)

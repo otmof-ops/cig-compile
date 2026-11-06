@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! Targets, and the runtime a program is appended to: the `cig` of the
 //! version this compiler pins, built for the target.
 

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! The sha256 of every runtime this compiler accepts from a release: cig
 //! v1.15.0's assets, as its release published them. Written by
 //! `ci/digests.sh v1.15.0`; the version below must be the one Cargo.toml pins

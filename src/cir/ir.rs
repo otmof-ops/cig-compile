@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! CIR's data (#3): structured SSA. `burn`, `try`, `if`, loops and the
 //! short-circuit operators own nested blocks, so "inside a burn" is lexical
 //! nesting under a `Burn` node, and moving an effect out of its region
