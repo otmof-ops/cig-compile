@@ -14,7 +14,10 @@ use std::process::{Command, Output};
 pub fn compare(ctx: &Ctx, built: &[Built], runtime: &Runtime) -> i32 {
     let mut differ = 0;
     for b in built {
-        let script = run(Command::new(&runtime.path).args(["run", "--dry-run", &b.job.file]));
+        let mut script = run(Command::new(&runtime.path).args(["run", "--dry-run", &b.job.file]));
+        if let Some(o) = script.as_mut() {
+            o.stderr = as_named(&o.stderr, &b.job);
+        }
         let program = run(Command::new(absolute(&b.job.out)).arg("--dry-run"));
         let found = differences(&script, &program);
         if ctx.json {
@@ -42,6 +45,22 @@ pub fn compare(ctx: &Ctx, built: &[Built], runtime: &Runtime) -> i32 {
     } else {
         exit::DIFFERS
     }
+}
+
+/// The interpreter names the script by the path it was given, and a
+/// program by its file name (#9): `tools/x.cig:4:8` is said `x.cig:4:8`.
+fn as_named(text: &[u8], job: &crate::project::Job) -> Vec<u8> {
+    let name = crate::build::recorded_file(job);
+    if job.file == name {
+        return text.to_vec();
+    }
+    let re =
+        regex::Regex::new(&format!(r"{}:(\d)", regex::escape(&job.file))).expect("an escaped path");
+    re.replace_all(&String::from_utf8_lossy(text), |c: &regex::Captures| {
+        format!("{name}:{}", &c[1])
+    })
+    .into_owned()
+    .into_bytes()
 }
 
 fn absolute(p: &Path) -> std::path::PathBuf {

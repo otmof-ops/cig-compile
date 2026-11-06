@@ -354,3 +354,19 @@ fn one_script_gives_the_same_bytes_however_it_is_named() {
     );
     assert_eq!(ok(&sb.prog(&by_path, &[])).trim(), "hello");
 }
+
+/// A script named by a path says `tools/x.cig:1:8` when it fails, its
+/// program `x.cig:1:8` (#9): `cigcompile test` hears the two as the same.
+#[test]
+fn test_hears_a_script_named_by_a_path_as_its_program() {
+    let s = Sandbox::new();
+    s.write("tools/x.cig", "exhale args[5]\n");
+    let o = s.cc(&["test", "tools/x.cig"]);
+    assert!(
+        o.status.success() && text(&o.stdout).contains("same"),
+        "exit {:?}\n{}{}",
+        o.status.code(),
+        text(&o.stdout),
+        text(&o.stderr)
+    );
+}
