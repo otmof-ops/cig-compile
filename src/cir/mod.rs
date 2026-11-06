@@ -34,11 +34,12 @@ pub enum LowerError {
     Internal(String),
 }
 
-/// Lower, run the default passes, print: `--emit=cir`.
-pub fn emit(source: &str, file: &str) -> Result<String, EmitError> {
+/// Lower, run the default passes, print: `--emit=cir`. The verifier's
+/// warnings (V6) come back beside the text.
+pub fn emit(source: &str, file: &str) -> Result<(String, Vec<VerifyError>), EmitError> {
     let mut m = lower_source(source, file).map_err(EmitError::Lower)?;
-    pass::run_passes(&mut m, &pass::default_passes()).map_err(EmitError::Verify)?;
-    Ok(print::print(&m))
+    let warnings = pass::run_passes(&mut m, &pass::default_passes()).map_err(EmitError::Verify)?;
+    Ok((print::print(&m), warnings))
 }
 
 #[derive(Debug)]

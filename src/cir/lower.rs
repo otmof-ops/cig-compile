@@ -220,7 +220,8 @@ impl Lowerer<'_> {
                 _ => continue,
             };
             if self.cur().scopes.last().expect("pushed").contains_key(name) {
-                continue;
+                // E306 in the interpreter; the checker refuses it first.
+                return Err(format!("`{name}` is declared twice in one scope"));
             }
             let var = self.new_var(name, mutable, span);
             self.cur().scopes.last_mut().expect("pushed").insert(
@@ -617,6 +618,17 @@ impl Lowerer<'_> {
         Ok(())
     }
 
+    /// Is this expression a name for a prelude module (not shadowed)?
+    fn module_ident(&mut self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Ident(m) => {
+                matches!(self.resolve(m), Ok(Name::Prelude))
+                    && matches!(self.resolver.get(m), Some(Resolved::Module(_)))
+            }
+            _ => false,
+        }
+    }
+
     fn args(
         &mut self,
         args: &[Expr],
@@ -869,40 +881,20 @@ impl Lowerer<'_> {
                 safe,
             } => self.method(receiver, name, args, *safe, span, out, None)?,
             ExprKind::Member { object, name, safe } => {
+                // `a?.k` evaluates nothing after `a`, and is null for a null
+                // `a` and for a map without `k` (eval.rs member()): one
+                // instruction carries both rules.
                 let obj = self.expr(object, out)?;
-                if *safe {
-                    let mut rhs = Block::default();
-                    let m = self.value(
-                        &mut rhs,
-                        span,
-                        Kind::Member {
-                            obj,
-                            name: name.clone(),
-                        },
-                        Ty::Dynamic,
-                    );
-                    self.emit(&mut rhs, span, Kind::Yield(m), None);
-                    self.value(
-                        out,
-                        span,
-                        Kind::Short {
-                            op: ShortOp::Safe,
-                            subject: obj,
-                            rhs,
-                        },
-                        Ty::Dynamic,
-                    )
-                } else {
-                    self.value(
-                        out,
-                        span,
-                        Kind::Member {
-                            obj,
-                            name: name.clone(),
-                        },
-                        Ty::Dynamic,
-                    )
-                }
+                self.value(
+                    out,
+                    span,
+                    Kind::Member {
+                        obj,
+                        name: name.clone(),
+                        safe: *safe,
+                    },
+                    Ty::Dynamic,
+                )
             }
             ExprKind::Index { object, index } => {
                 let obj = self.expr(object, out)?;
@@ -932,6 +924,17 @@ impl Lowerer<'_> {
                         args,
                         safe,
                     } => self.method(receiver, name, args, *safe, rhs.span, out, Some(l))?,
+                    // `x >> fs.rm` and `x >> f`: the bare name resolves as a
+                    // call of it would, so an effect stays a burn.op and a
+                    // pull a call.user.
+                    ExprKind::Ident(_) => self.call(rhs, &[], rhs.span, out, Some(l))?,
+                    ExprKind::Member {
+                        object,
+                        name,
+                        safe: false,
+                    } if self.module_ident(object) => {
+                        self.method(object, name, &[], false, rhs.span, out, Some(l))?
+                    }
                     _ => {
                         let f = self.expr(rhs, out)?;
                         self.value(out, span, Kind::CallValue { f, args: vec![l] }, Ty::Dynamic)

@@ -1,5 +1,6 @@
 //! CIR (#3): lowering, the verifier, the passes, the text form.
 
+use cigcompile::cir::ir::{Kind, VarId};
 use cigcompile::cir::pass::{self, broken, run_passes, Pass};
 use cigcompile::cir::verify::{errors, verify, Severity};
 use cigcompile::cir::{lower_source, print, LowerError};
@@ -48,7 +49,7 @@ fn the_demo_lowers_and_verifies_and_reads_as_the_spec_shows() {
 fn the_demo_matches_its_golden_text() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cir");
     let src = std::fs::read_to_string(dir.join("demo.cig")).unwrap();
-    let text = cigcompile::cir::emit(&src, "demo.cig").unwrap();
+    let (text, _) = cigcompile::cir::emit(&src, "demo.cig").unwrap();
     let golden = dir.join("demo.cir");
     if std::env::var_os("CIR_UPDATE_GOLDEN").is_some() {
         std::fs::write(&golden, &text).unwrap();
@@ -152,6 +153,100 @@ fn a_script_that_does_not_check_is_not_lowered() {
         lower_source("fs.rm(\"x\")\n", "x.cig"),
         Err(LowerError::Diagnostic(_))
     ));
+}
+
+#[test]
+fn an_effect_moved_out_of_its_if_is_caught_only_by_the_places_t1() {
+    let src = "roll c = true\nburn {\n  if c {\n    fs.rm(\"a\")\n  }\n}\n";
+    let mut m = lower_source(src, "i.cig").unwrap();
+    let e =
+        run_passes(&mut m, &[&broken::HoistOutOfIf as &dyn Pass]).expect_err("the move is caught");
+    assert_eq!(e.pass, "hoist-out-of-if");
+    assert!(!e.errors.is_empty());
+    // The same order, the same region, every value defined before use:
+    // only the effect's place says it is no longer conditional.
+    assert!(e.errors.iter().all(|x| x.code == "T1"), "{:#?}", e.errors);
+    assert!(
+        e.errors.iter().any(|x| x.message.contains("if.then")),
+        "{:#?}",
+        e.errors
+    );
+}
+
+#[test]
+fn a_compensation_that_reaches_outside_its_state_is_caught_v8() {
+    let src = "roll n = 1\nburn (s) {\n  s.n = n\n  fs.mkdir(\"d\")\n} unburn {\n  exhale s.n\n}\n";
+    let mut m = lower_source(src, "u.cig").unwrap();
+    let found = verify(&m);
+    assert!(errors(&found).is_empty(), "{found:#?}");
+    // Read `n` in the compensation instead of the state: the checker's
+    // E754, which a pass must not bring back.
+    let n = VarId(m.vars.iter().position(|v| v.name == "n").unwrap() as u32);
+    let comp = m.funcs[0]
+        .body
+        .instrs
+        .iter_mut()
+        .find_map(|i| match &mut i.kind {
+            Kind::Burn(b) => b.compensate.as_mut(),
+            _ => None,
+        })
+        .unwrap();
+    let load = comp
+        .instrs
+        .iter_mut()
+        .find(|i| matches!(i.kind, Kind::Load(_)))
+        .unwrap();
+    load.kind = Kind::Load(n);
+    let found = verify(&m);
+    assert!(
+        found
+            .iter()
+            .any(|e| e.code == "V8" && e.message.contains(":n, which")),
+        "{found:#?}"
+    );
+}
+
+#[test]
+fn a_capture_the_flags_do_not_record_is_caught_v9() {
+    let src = "roll total = 0\nstick add = pack(x) => total + x\nexhale add(1)\n";
+    let mut m = lower_source(src, "c.cig").unwrap();
+    let total = m.vars.iter().position(|v| v.name == "total").unwrap();
+    assert!(m.vars[total].captured);
+    m.vars[total].captured = false;
+    let found = verify(&m);
+    assert!(
+        found
+            .iter()
+            .any(|e| e.code == "V9" && e.message.contains("total")),
+        "{found:#?}"
+    );
+}
+
+#[test]
+fn a_safe_member_is_null_for_a_missing_key_too() {
+    // eval.rs member(): `?.` gives null for a null subject and for a map
+    // without the key. One instruction carries both; a short.safe around
+    // it would leave the second to a back end to forget.
+    let src = "roll cfg = {a: 1}\nexhale cfg?.missing\n";
+    let mut m = lower_source(src, "s.cig").unwrap();
+    run_passes(&mut m, &pass::default_passes()).unwrap();
+    let text = print::print(&m);
+    assert!(text.contains("?.missing"), "{text}");
+    assert!(!text.contains("short.safe"), "{text}");
+}
+
+#[test]
+fn a_bare_name_piped_into_resolves_as_a_call_would() {
+    let src = "pull dbl(x) {\n  snuff x * 2\n}\nburn {\n  \"x\" >> fs.rm\n}\nexhale 3 >> dbl\n";
+    let mut m = lower_source(src, "p.cig").unwrap();
+    run_passes(&mut m, &pass::default_passes()).unwrap();
+    let text = print::print(&m);
+    assert!(
+        text.contains("burn.op rm fs.rm("),
+        "the effect stays an effect: {text}"
+    );
+    assert!(text.contains("call.user @1("), "{text}");
+    assert!(!text.contains("call.value"), "{text}");
 }
 
 /// Every script in a CigScript checkout of the pinned version lowers and

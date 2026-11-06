@@ -5,6 +5,15 @@
 //! Temporaries (`ValueId`) are defined once; `roll`, `stick`, parameters
 //! and loop variables are slots (`VarId`) that closures share, as the
 //! interpreter's environments are.
+//!
+//! What a back end must honour, because the interpreter does:
+//! - a slot exists from its block's entry (hoisted pulls capture each
+//!   other before their `decl`); `decl` initialises it;
+//! - a slot declared in a loop body, and a `foreach` variable, is a fresh
+//!   cell each iteration (`Scope::child` per iteration), so a closure made
+//!   in one iteration keeps that iteration's value;
+//! - `call.user @f` calls the closure most recently made for `f` in scope
+//!   (a pull made inside a loop or a recursion has one closure per entry).
 
 use cigscript::syntax::ast::{AssignOp, BinOp, BurnClass, UnOp};
 use cigscript::syntax::span::Span;
@@ -200,9 +209,11 @@ pub enum Kind {
     MakeList(Vec<ValueId>),
     MakeMap(Vec<(MapKey, ValueId)>),
     Interp(Vec<Piece>),
+    /// `safe`: `?.`, null for a null subject and for a map without the key.
     Member {
         obj: ValueId,
         name: String,
+        safe: bool,
     },
     Index {
         obj: ValueId,
@@ -296,12 +307,20 @@ impl Kind {
 
     /// The nested blocks, in evaluation order.
     pub fn blocks(&self) -> Vec<&Block> {
+        self.slots().into_iter().map(|(_, b)| b).collect()
+    }
+
+    /// The nested blocks with where each one is (`if.then`,
+    /// `burn.compensate`), in evaluation order. The transition check
+    /// compares these, so moving an instruction out of a branch, or from a
+    /// burn's body into its compensation, is seen.
+    pub fn slots(&self) -> Vec<(&'static str, &Block)> {
         match self {
-            Kind::Short { rhs, .. } => vec![rhs],
+            Kind::Short { rhs, .. } => vec![("short.rhs", rhs)],
             Kind::Burn(b) => {
-                let mut v = vec![&b.body];
+                let mut v = vec![("burn.body", &b.body)];
                 if let Some(c) = &b.compensate {
-                    v.push(c);
+                    v.push(("burn.compensate", c));
                 }
                 v
             }
@@ -310,26 +329,26 @@ impl Kind {
                 catch,
                 finally,
             } => {
-                let mut v = vec![body];
+                let mut v = vec![("try.body", body)];
                 if let Some((_, c)) = catch {
-                    v.push(c);
+                    v.push(("try.catch", c));
                 }
                 if let Some(f) = finally {
-                    v.push(f);
+                    v.push(("try.finally", f));
                 }
                 v
             }
             Kind::If {
                 then, otherwise, ..
             } => {
-                let mut v = vec![then];
+                let mut v = vec![("if.then", then)];
                 if let Some(o) = otherwise {
-                    v.push(o);
+                    v.push(("if.else", o));
                 }
                 v
             }
-            Kind::Loop { cond, body } => vec![cond, body],
-            Kind::ForEach { body, .. } => vec![body],
+            Kind::Loop { cond, body } => vec![("loop.cond", cond), ("loop.body", body)],
+            Kind::ForEach { body, .. } => vec![("foreach.body", body)],
             _ => Vec::new(),
         }
     }

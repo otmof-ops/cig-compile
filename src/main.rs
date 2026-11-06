@@ -237,7 +237,14 @@ fn emit_cir(ctx: &Ctx, jobs: &[project::Job]) -> Result<(), i32> {
             exit::USAGE
         })?;
         match emit(&source, &job.file) {
-            Ok(text) => print!("{text}"),
+            Ok((text, warnings)) => {
+                // V6: an effectful pull called outside every burn, which
+                // the run refuses with E701.
+                for w in &warnings {
+                    eprintln!("{}: {w}", job.file);
+                }
+                print!("{text}")
+            }
             Err(EmitError::Lower(LowerError::Diagnostic(d))) => {
                 cigscript::cli::report(ctx, &d, Some(&job.file), Some(&source));
                 return Err(exit::CHECK);

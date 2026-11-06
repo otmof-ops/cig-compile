@@ -317,4 +317,46 @@ pub mod broken {
         }
         false
     }
+
+    /// Moves the then-branch of the first `if` holding a `burn.op` out to
+    /// just after the `if`. The order and the region stay the same and
+    /// every use still follows its definition, but the effect is no longer
+    /// conditional: only T1's places see it.
+    pub struct HoistOutOfIf;
+
+    impl Pass for HoistOutOfIf {
+        fn name(&self) -> &'static str {
+            "hoist-out-of-if"
+        }
+
+        fn run(&self, m: &mut Module) {
+            for f in &mut m.funcs {
+                if unwrap_if(&mut f.body) {
+                    return;
+                }
+            }
+        }
+    }
+
+    fn unwrap_if(b: &mut Block) -> bool {
+        for k in 0..b.instrs.len() {
+            if let Kind::If { then, .. } = &mut b.instrs[k].kind {
+                let effect = then
+                    .instrs
+                    .iter()
+                    .any(|i| matches!(i.kind, Kind::BurnOp { .. }));
+                if effect && !then.instrs.iter().any(|i| i.kind.is_terminator()) {
+                    let moved = std::mem::take(&mut then.instrs);
+                    b.instrs.splice(k + 1..k + 1, moved);
+                    return true;
+                }
+            }
+            for blk in b.instrs[k].kind.blocks_mut() {
+                if unwrap_if(blk) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }

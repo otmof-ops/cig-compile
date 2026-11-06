@@ -155,9 +155,16 @@ fn block(m: &Module, b: &Block, depth: usize, out: &mut String) {
                     i,
                 )
             }
-            Kind::Member { obj, name } => {
-                line(out, depth, &simple(format!("member %{}.{name}", obj.0)), i)
-            }
+            Kind::Member { obj, name, safe } => line(
+                out,
+                depth,
+                &simple(format!(
+                    "member %{}{}{name}",
+                    obj.0,
+                    if *safe { "?." } else { "." }
+                )),
+                i,
+            ),
             Kind::Index { obj, idx } => line(
                 out,
                 depth,

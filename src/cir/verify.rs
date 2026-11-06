@@ -1,8 +1,29 @@
 //! The verifier (#3). `verify` is structural and runs after lowering and
 //! after every pass; `verify_transition` compares a module with a snapshot
 //! taken before a pass, because an output alone cannot show that something
-//! was reordered. Every error names its invariant, its function and its
-//! span.
+//! was moved or reordered. Every error names its rule, its function and
+//! its span.
+//!
+//! | rule | holds |
+//! |---|---|
+//! | V1 | ids are unique, and a value is used only where it is defined |
+//! | V2 | every instruction and function has a span |
+//! | V3 | a terminator ends its block; `yield` ends a value block, and only one; `break` and `continue` sit in loops; the top level does not `ret` |
+//! | V4 | a `burn.op` sits in a burn, or in a function that requires one |
+//! | V5 | `requires_burn` is what the call graph says |
+//! | V6 | (a warning) an effectful pull is called outside every burn |
+//! | V7 | a `burn.op`'s kind is its callee's |
+//! | V8 | regions are unique; `pack` is declared once, in the top level's own block, before any burn (E753); a compensation names only its state, what it declares and what the functions made in it own, and calls only those functions (E754) |
+//! | V9 | a variable is its function's or captured by it; only a mutable one is stored to; a closure's captures resolve where it is made; `captured` is set exactly when another function captures the variable |
+//! | V10 | the top level is the first function and is never made; any other is made at one place at most; `call.user` calls a pull that is made |
+//! | T1 | no ordered instruction changes its place: every block around it, so its burn region, its branch of an `if`, its loop, its `try` handler, and a burn's body or compensation |
+//! | T2 | no ordered instruction is reordered |
+//! | T3 | no `burn.op` is lost or cloned |
+//!
+//! Not seen by any rule: an effect reached dynamically (through `light`, a
+//! method that takes a callback, a function kept in a map) is a call here,
+//! not a `burn.op`. The runtime's E701 is its backstop, as it is the
+//! interpreter's.
 
 use super::effects::kind_of;
 use super::ir::*;
@@ -17,7 +38,7 @@ pub enum Severity {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifyError {
-    /// The invariant: `V1`..`V10`, `T1`..`T3`.
+    /// The rule: `V1`..`V10`, `T1`..`T3`.
     pub code: &'static str,
     pub severity: Severity,
     pub func: String,
@@ -105,6 +126,40 @@ fn scan(b: &Block, depth: usize, f: &mut dyn FnMut(&Instr, usize)) {
     }
 }
 
+/// Every instruction of a block, nested blocks included; not the bodies of
+/// the functions it makes, which are their own.
+fn each<'a>(b: &'a Block, f: &mut dyn FnMut(&'a Instr)) {
+    for i in &b.instrs {
+        f(i);
+        for blk in i.kind.blocks() {
+            each(blk, f);
+        }
+    }
+}
+
+/// The variables an instruction declares.
+fn declared(k: &Kind) -> Vec<VarId> {
+    match k {
+        Kind::Decl(v, _) => vec![*v],
+        Kind::ForEach { var, .. } => vec![*var],
+        Kind::MakeChain { name, .. } => vec![*name],
+        Kind::Try {
+            catch: Some((Some(v), _)),
+            ..
+        } => vec![*v],
+        Kind::Burn(b) => b.state.into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The variables an instruction names: what it reads, writes or declares.
+fn named(k: &Kind) -> Vec<VarId> {
+    match k {
+        Kind::Load(v) | Kind::Store(v, _) => vec![*v],
+        other => declared(other),
+    }
+}
+
 struct Walk<'m> {
     m: &'m Module,
     f: &'m Func,
@@ -113,6 +168,8 @@ struct Walk<'m> {
     defined: HashSet<ValueId>,
     regions: &'m mut HashSet<RegionId>,
     flags: &'m [bool],
+    /// How many `closure` instructions make each function.
+    made: &'m HashMap<FuncId, usize>,
 }
 
 impl Walk<'_> {
@@ -136,12 +193,21 @@ impl Walk<'_> {
         });
     }
 
+    /// The variable is this function's, or captured by it.
+    fn reaches(&self, v: VarId) -> bool {
+        self.m
+            .vars
+            .get(v.0 as usize)
+            .is_some_and(|x| x.owner == self.f.id)
+            || self.f.captures.contains(&v)
+    }
+
     fn var_ok(&mut self, v: VarId, span: Span) {
         let Some(info) = self.m.vars.get(v.0 as usize) else {
             self.err("V9", span, format!("${} is not a variable", v.0));
             return;
         };
-        if info.owner != self.f.id && !self.f.captures.contains(&v) {
+        if !self.reaches(v) {
             self.err(
                 "V9",
                 span,
@@ -150,6 +216,97 @@ impl Walk<'_> {
                     v.0, info.name
                 ),
             );
+        }
+    }
+
+    /// V8: a compensation runs later, in another process, from the journal
+    /// alone (E754). It may name its burn's state, what it declares itself
+    /// and what the functions made inside it own, and call only those
+    /// functions.
+    fn compensation(&mut self, state: Option<VarId>, comp: &Block) {
+        let m = self.m;
+        // The functions made inside it, and inside those.
+        let mut inner: HashSet<FuncId> = HashSet::new();
+        let mut todo: Vec<&Block> = vec![comp];
+        while let Some(b) = todo.pop() {
+            each(b, &mut |i| {
+                if let Kind::Closure(g) = i.kind {
+                    if inner.insert(g) {
+                        if let Some(func) = m.funcs.get(g.0 as usize) {
+                            todo.push(&func.body);
+                        }
+                    }
+                }
+            });
+        }
+        let mut allowed: HashSet<VarId> = state.into_iter().collect();
+        each(comp, &mut |i| allowed.extend(declared(&i.kind)));
+        allowed.extend(
+            m.vars
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| inner.contains(&v.owner))
+                .map(|(k, _)| VarId(k as u32)),
+        );
+        let name = |v: VarId| m.vars.get(v.0 as usize).map_or("?", |x| x.name.as_str());
+        let mut found: Vec<(Span, String)> = Vec::new();
+        each(comp, &mut |i| {
+            for v in named(&i.kind) {
+                if !allowed.contains(&v) {
+                    found.push((
+                        i.span,
+                        format!(
+                            "the compensation names ${}:{}, which is neither its state nor its own",
+                            v.0,
+                            name(v)
+                        ),
+                    ));
+                }
+            }
+            if let Kind::CallUser { func, .. } = i.kind {
+                if !inner.contains(&func) {
+                    found.push((
+                        i.span,
+                        format!("the compensation calls @{}, which it does not make", func.0),
+                    ));
+                }
+            }
+        });
+        let mut made_inside: Vec<FuncId> = inner.iter().copied().collect();
+        made_inside.sort();
+        for g in made_inside {
+            let Some(func) = m.funcs.get(g.0 as usize) else {
+                continue;
+            };
+            for v in &func.captures {
+                if !allowed.contains(v) {
+                    found.push((
+                        func.span,
+                        format!(
+                            "@{} in the compensation captures ${}:{}, which is neither its state nor its own",
+                            g.0,
+                            v.0,
+                            name(*v)
+                        ),
+                    ));
+                }
+            }
+            each(&func.body, &mut |i| {
+                if let Kind::CallUser { func: c, .. } = i.kind {
+                    if !inner.contains(&c) {
+                        found.push((
+                            i.span,
+                            format!(
+                                "@{} in the compensation calls @{}, which it does not make",
+                                g.0, c.0
+                            ),
+                        ));
+                    }
+                }
+            });
+        }
+        for (span, message) in found {
+            self.err("V8", span, message);
         }
     }
 
@@ -163,6 +320,7 @@ impl Walk<'_> {
         loop_depth: usize,
         yields: bool,
     ) {
+        let m = self.m;
         let mut scope = visible.clone();
         let n = b.instrs.len();
         for (k, i) in b.instrs.iter().enumerate() {
@@ -216,6 +374,10 @@ impl Walk<'_> {
                 ..
             } = &i.kind
             {
+                // Outside the top level, an effect outside every burn is
+                // what makes its function require one (V5 derives the flag
+                // from it), so this cannot fail there: a pass that moves an
+                // effect out of a burn inside a pull is T1's to catch.
                 let allowed = burn_depth > 0
                     || (self.f.kind != FuncKind::Main && self.flags[self.f.id.0 as usize]);
                 if !allowed {
@@ -246,14 +408,33 @@ impl Walk<'_> {
                         format!("calls @{} (which effects) outside any burn", func.0),
                     );
                 }
-                if func.0 as usize >= self.m.funcs.len() {
-                    self.err("V10", i.span, format!("@{} is not a function", func.0));
+                // V10: what it calls is a pull, made somewhere.
+                match m.funcs.get(func.0 as usize) {
+                    None => self.err("V10", i.span, format!("@{} is not a function", func.0)),
+                    Some(g) if g.kind != FuncKind::Pull => self.err(
+                        "V10",
+                        i.span,
+                        format!("call.user of @{}, which is not a pull", func.0),
+                    ),
+                    Some(_) if !self.made.contains_key(func) => self.err(
+                        "V10",
+                        i.span,
+                        format!("calls @{}, which nothing makes", func.0),
+                    ),
+                    Some(_) => {}
                 }
             }
-            // V8, V9.
+            // V9: every variable it names.
+            for v in named(&i.kind) {
+                self.var_ok(v, i.span);
+            }
+            if let Kind::Store(v, _) = &i.kind {
+                if !m.vars.get(v.0 as usize).is_some_and(|x| x.mutable) {
+                    self.err("V9", i.span, format!("a store to the immutable ${}", v.0));
+                }
+            }
+            // V8, V9, V10.
             match &i.kind {
-                Kind::Load(v) | Kind::Store(v, _) | Kind::Decl(v, _) => self.var_ok(*v, i.span),
-                Kind::ForEach { var, .. } => self.var_ok(*var, i.span),
                 Kind::Burn(b) => {
                     if b.region == RegionId::ROOT || !self.regions.insert(b.region) {
                         self.err(
@@ -262,18 +443,35 @@ impl Walk<'_> {
                             format!("region r{} is not unique", b.region.0),
                         );
                     }
+                    if let Some(c) = &b.compensate {
+                        self.compensation(b.state, c);
+                    }
                 }
-                Kind::Closure(f) if f.0 as usize >= self.m.funcs.len() => self.err(
-                    "V10",
-                    i.span,
-                    format!("closure of @{}, which is not a function", f.0),
-                ),
+                Kind::Closure(g) => match m.funcs.get(g.0 as usize) {
+                    None => self.err(
+                        "V10",
+                        i.span,
+                        format!("closure of @{}, which is not a function", g.0),
+                    ),
+                    Some(func) if func.kind == FuncKind::Main => {
+                        self.err("V10", i.span, "a closure of the top level".to_string())
+                    }
+                    Some(func) => {
+                        for v in &func.captures {
+                            if !self.reaches(*v) {
+                                self.err(
+                                    "V9",
+                                    i.span,
+                                    format!(
+                                        "closure of @{} captures ${}, which this function neither owns nor captures",
+                                        g.0, v.0
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                },
                 _ => {}
-            }
-            if let Kind::Store(v, _) = &i.kind {
-                if !self.m.vars.get(v.0 as usize).is_some_and(|x| x.mutable) {
-                    self.err("V9", i.span, format!("a store to the immutable ${}", v.0));
-                }
             }
             // Nested blocks.
             let inner_burn = if matches!(i.kind, Kind::Burn(_)) {
@@ -326,20 +524,94 @@ impl Walk<'_> {
     }
 }
 
+/// V8: `pack` is declared once, in the top level's own block, before any
+/// burn (E753): the scope is declared before anything can burn.
+fn pack(m: &Module, errors: &mut Vec<VerifyError>) {
+    let mut all = 0;
+    for f in &m.funcs {
+        each(&f.body, &mut |i| {
+            if matches!(i.kind, Kind::PackDecl(_)) {
+                all += 1;
+            }
+        });
+    }
+    let main = &m.funcs[0];
+    let top: Vec<usize> = main
+        .body
+        .instrs
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| matches!(i.kind, Kind::PackDecl(_)))
+        .map(|(k, _)| k)
+        .collect();
+    let mk = |span: Span, message: &str| VerifyError {
+        code: "V8",
+        severity: Severity::Error,
+        func: "main".to_string(),
+        span,
+        message: message.to_string(),
+    };
+    if all > top.len() {
+        errors.push(mk(main.span, "pack declared inside a block or a function"));
+    }
+    if let Some(k) = top.get(1) {
+        errors.push(mk(main.body.instrs[*k].span, "a second pack"));
+    }
+    if let Some(k) = top.first() {
+        let mut burned = None;
+        for i in &main.body.instrs[..*k] {
+            each_with(i, &mut |x| {
+                if burned.is_none() && matches!(x.kind, Kind::Burn(_) | Kind::BurnOp { .. }) {
+                    burned = Some(x.span);
+                }
+            });
+        }
+        if let Some(span) = burned {
+            errors.push(mk(span, "a burn before the pack is declared"));
+        }
+    }
+}
+
+/// One instruction and everything nested in it.
+fn each_with<'a>(i: &'a Instr, f: &mut dyn FnMut(&'a Instr)) {
+    f(i);
+    for blk in i.kind.blocks() {
+        each(blk, f);
+    }
+}
+
 /// Every structural rule, every error (never only the first).
 pub fn verify(m: &Module) -> Vec<VerifyError> {
     let mut errors = Vec::new();
+    let v10 = |message: String| VerifyError {
+        code: "V10",
+        severity: Severity::Error,
+        func: "main".to_string(),
+        span: Span::new(0, 0, 1, 1),
+        message,
+    };
     if m.funcs.first().is_none_or(|f| f.kind != FuncKind::Main) {
-        errors.push(VerifyError {
-            code: "V10",
-            severity: Severity::Error,
-            func: "main".to_string(),
-            span: Span::new(0, 0, 1, 1),
-            message: "the first function is not the top level".to_string(),
-        });
+        errors.push(v10("the first function is not the top level".to_string()));
+        return errors;
+    }
+    if let Some((k, f)) = m
+        .funcs
+        .iter()
+        .enumerate()
+        .find(|(k, f)| f.id.0 as usize != *k)
+    {
+        errors.push(v10(format!("function {k} carries the id @{}", f.id.0)));
         return errors;
     }
     let flags = requires_burn(m);
+    let mut made: HashMap<FuncId, usize> = HashMap::new();
+    for f in &m.funcs {
+        each(&f.body, &mut |i| {
+            if let Kind::Closure(g) = i.kind {
+                *made.entry(g).or_default() += 1;
+            }
+        });
+    }
     let mut seen_instr = HashSet::new();
     let mut regions = HashSet::new();
     for f in &m.funcs {
@@ -357,6 +629,16 @@ pub fn verify(m: &Module) -> Vec<VerifyError> {
                 ),
             });
         }
+        // V10: one function, one place that makes it.
+        if let Some(n) = made.get(&f.id).filter(|n| **n > 1) {
+            errors.push(VerifyError {
+                code: "V10",
+                severity: Severity::Error,
+                func: fname(f),
+                span: f.span,
+                message: format!("@{} is made at {n} places", f.id.0),
+            });
+        }
         let mut w = Walk {
             m,
             f,
@@ -365,6 +647,7 @@ pub fn verify(m: &Module) -> Vec<VerifyError> {
             defined: HashSet::new(),
             regions: &mut regions,
             flags: &flags,
+            made: &made,
         };
         if f.span.line < 1 {
             w.err("V2", f.span, "a function without a span".to_string());
@@ -372,6 +655,35 @@ pub fn verify(m: &Module) -> Vec<VerifyError> {
         w.block(&f.body, &HashSet::new(), 0, 0, false);
         errors.extend(w.errors);
     }
+    // V9: `captured` is set exactly when another function captures it.
+    let mut captured: HashSet<VarId> = HashSet::new();
+    for f in &m.funcs {
+        for v in &f.captures {
+            if m.vars.get(v.0 as usize).is_some_and(|x| x.owner != f.id) {
+                captured.insert(*v);
+            }
+        }
+    }
+    for (k, v) in m.vars.iter().enumerate() {
+        let want = captured.contains(&VarId(k as u32));
+        if v.captured != want {
+            errors.push(VerifyError {
+                code: "V9",
+                severity: Severity::Error,
+                func: m
+                    .funcs
+                    .get(v.owner.0 as usize)
+                    .map(fname)
+                    .unwrap_or_default(),
+                span: v.span,
+                message: format!(
+                    "${k}:{} is marked captured: {}, and the functions say {want}",
+                    v.name, v.captured
+                ),
+            });
+        }
+    }
+    pack(m, &mut errors);
     errors
 }
 
@@ -383,10 +695,20 @@ pub fn errors(found: &[VerifyError]) -> Vec<&VerifyError> {
         .collect()
 }
 
+/// Where an ordered instruction sits: every structured instruction around
+/// it and which of its blocks, outermost first.
+type Place = Vec<(InstrId, &'static str)>;
+
+struct Spot {
+    id: InstrId,
+    place: Place,
+    effect: bool,
+}
+
 /// Before a pass: every ordered instruction of every function, in order,
-/// with the region it sits in.
+/// with its place.
 pub struct Trace {
-    funcs: HashMap<FuncId, Vec<(InstrId, RegionId, bool)>>,
+    funcs: HashMap<FuncId, Vec<Spot>>,
 }
 
 impl Trace {
@@ -394,30 +716,45 @@ impl Trace {
         let mut funcs = HashMap::new();
         for f in &m.funcs {
             let mut seq = Vec::new();
-            trace(&f.body, RegionId::ROOT, &mut seq);
+            trace(&f.body, &mut Vec::new(), &mut seq);
             funcs.insert(f.id, seq);
         }
         Trace { funcs }
     }
 }
 
-fn trace(b: &Block, region: RegionId, out: &mut Vec<(InstrId, RegionId, bool)>) {
+fn trace(b: &Block, place: &mut Place, out: &mut Vec<Spot>) {
     for i in &b.instrs {
         if i.kind.is_ordered() {
-            out.push((i.id, region, matches!(i.kind, Kind::BurnOp { .. })));
+            out.push(Spot {
+                id: i.id,
+                place: place.clone(),
+                effect: matches!(i.kind, Kind::BurnOp { .. }),
+            });
         }
-        let inner = match &i.kind {
-            Kind::Burn(n) => n.region,
-            _ => region,
-        };
-        for blk in i.kind.blocks() {
-            trace(blk, inner, out);
+        for (slot, blk) in i.kind.slots() {
+            place.push((i.id, slot));
+            trace(blk, place, out);
+            place.pop();
         }
     }
 }
 
-/// What a pass may not do: move an ordered instruction to another region
+fn show(p: &Place) -> String {
+    if p.is_empty() {
+        return "the function's own block".to_string();
+    }
+    p.iter()
+        .map(|(id, slot)| format!("#{} {slot}", id.0))
+        .collect::<Vec<_>>()
+        .join(" > ")
+}
+
+/// What a pass may not do: move an ordered instruction to another place
 /// (T1), reorder ordered instructions (T2), lose or clone an effect (T3).
+/// A pass that removes a structure on purpose (folding an `if` on a
+/// constant) changes places, and T1 has to be taught it first; no pass
+/// does yet.
 pub fn verify_transition(before: &Trace, m: &Module) -> Vec<VerifyError> {
     let after = Trace::of(m);
     let mut errors = Vec::new();
@@ -432,31 +769,38 @@ pub fn verify_transition(before: &Trace, m: &Module) -> Vec<VerifyError> {
             span: f.span,
             message,
         };
-        let before_ids: HashMap<InstrId, (RegionId, bool)> =
-            b.iter().map(|(i, r, e)| (*i, (*r, *e))).collect();
-        let after_ids: HashMap<InstrId, RegionId> = a.iter().map(|(i, r, _)| (*i, *r)).collect();
+        let before_ids: HashMap<InstrId, &Spot> = b.iter().map(|s| (s.id, s)).collect();
+        let after_ids: HashMap<InstrId, &Spot> = a.iter().map(|s| (s.id, s)).collect();
         // T3.
-        for (id, (_, effect)) in &before_ids {
-            if *effect && !after_ids.contains_key(id) {
-                errors.push(mk("T3", format!("burn.op #{} was removed", id.0)));
+        for s in b {
+            if s.effect && !after_ids.contains_key(&s.id) {
+                errors.push(mk("T3", format!("burn.op #{} was removed", s.id.0)));
             }
         }
         let mut count: HashMap<InstrId, usize> = HashMap::new();
-        for (id, _, _) in a {
-            *count.entry(*id).or_default() += 1;
+        for s in a {
+            *count.entry(s.id).or_default() += 1;
         }
-        for (id, n) in count {
-            if n > 1 && before_ids.get(&id).is_some_and(|x| x.1) {
-                errors.push(mk("T3", format!("burn.op #{} appears {n} times", id.0)));
-            }
+        let mut cloned: Vec<(InstrId, usize)> = count
+            .into_iter()
+            .filter(|(id, n)| *n > 1 && before_ids.get(id).is_some_and(|s| s.effect))
+            .collect();
+        cloned.sort();
+        for (id, n) in cloned {
+            errors.push(mk("T3", format!("burn.op #{} appears {n} times", id.0)));
         }
         // T1.
-        for (id, r) in &after_ids {
-            if let Some((rb, _)) = before_ids.get(id) {
-                if rb != r {
+        for s in a {
+            if let Some(was) = before_ids.get(&s.id) {
+                if was.place != s.place {
                     errors.push(mk(
                         "T1",
-                        format!("#{} moved from region r{} to r{}", id.0, rb.0, r.0),
+                        format!(
+                            "#{} moved from {} to {}",
+                            s.id.0,
+                            show(&was.place),
+                            show(&s.place)
+                        ),
                     ));
                 }
             }
@@ -464,12 +808,12 @@ pub fn verify_transition(before: &Trace, m: &Module) -> Vec<VerifyError> {
         // T2: the common instructions in the same order.
         let common_b: Vec<InstrId> = b
             .iter()
-            .map(|x| x.0)
+            .map(|s| s.id)
             .filter(|i| after_ids.contains_key(i))
             .collect();
         let common_a: Vec<InstrId> = a
             .iter()
-            .map(|x| x.0)
+            .map(|s| s.id)
             .filter(|i| before_ids.contains_key(i))
             .collect();
         if common_b != common_a {
