@@ -24,7 +24,9 @@ The runtime is built here, with the compiler: `cig-runtime` is `cig` of the pinn
 - fetched once, into `<cig home>/cigcompile/runtimes/`;
 - accepted only at the sha256 this compiler was built knowing (`src/digests.rs`, written by `ci/digests.sh` from the release's checksums).
 
-A checksum fetched beside the asset would prove nothing against a tampered release; one built into the compiler does. `CIGCOMPILE_OFFLINE=1` forbids the fetch, and `--runtime` names a runtime by hand. CI builds for six machines on one Linux runner and runs each program on its own machine.
+`--target universal2-apple-darwin` makes one program for every Mac. Its runtime is the arm64 and x86_64 releases in one universal binary, made here as lipo makes one, from the two pinned assets. Each slice keeps its own signature, and the program's payload goes after both, where cig finds it.
+
+A checksum fetched beside the asset would prove nothing against a tampered release; one built into the compiler does. `CIGCOMPILE_OFFLINE=1` forbids the fetch, and `--runtime` names a runtime by hand. CI builds for six machines and the universal Mac on one Linux runner, and runs each program on its own machine: the universal one on both Macs.
 
 ## The commands
 

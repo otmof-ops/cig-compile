@@ -80,16 +80,19 @@ impl Index {
     }
 
     /// The version a runtime was found to be, when it is unchanged since.
-    pub fn runtime_version(&self, path: &Path, id: &FileId) -> Option<String> {
+    /// The version of the runtime at `path`, when it is unchanged and was
+    /// checked as the runtime for `triple`: a check for one machine says
+    /// nothing about another's.
+    pub fn runtime_version(&self, path: &Path, id: &FileId, triple: &str) -> Option<String> {
         let e = &self.doc["runtimes"][path.to_string_lossy().as_ref()];
-        (FileId::from_json(&e["id"]).as_ref() == Some(id))
+        (FileId::from_json(&e["id"]).as_ref() == Some(id) && e["for"].as_str() == Some(triple))
             .then(|| e["version"].as_str().map(str::to_string))
             .flatten()
     }
 
-    pub fn note_runtime(&mut self, path: &Path, id: &FileId, version: &str) {
+    pub fn note_runtime(&mut self, path: &Path, id: &FileId, version: &str, triple: &str) {
         self.doc["runtimes"][path.to_string_lossy().as_ref()] =
-            json!({"id": id.to_json(), "version": version});
+            json!({"id": id.to_json(), "version": version, "for": triple});
         self.changed = true;
     }
 

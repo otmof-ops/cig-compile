@@ -144,7 +144,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl aarch64-apple-darwin x86_64-apple-darwin universal2-apple-darwin x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
             ext=""; case "$t" in *windows*) ext=".exe" ;; esac
             target/release/cigcompile build cigscript-src/examples/hello.cig --target "$t" -o "out/$t/hello$ext"
             target/release/cigcompile build cigscript-src/examples/tidy-downloads.cig --target "$t" -o "out/$t/tidy$ext"
@@ -177,15 +177,21 @@ jobs:
       - name: run them
         shell: bash
         run: |
-          d="$PWD/out/${{ matrix.target }}"
           ext=""; case "${{ matrix.target }}" in *windows*) ext=".exe" ;; esac
-          chmod +x "$d"/* 2>/dev/null || true
           export CIGSCRIPT_HOME="$RUNNER_TEMP/cig" NO_COLOR=1 CIG_SEAL_KEY=file CIG_REPORTS=never CIG_DOCTOR=0
-          got=$("$d/hello$ext" Ada | tr -d '\r')
-          [ "$got" = "hello, Ada" ] || { echo "hello said: $got"; exit 1; }
-          mkdir -p w/downloads && cd w
-          echo 1 > downloads/a.jpg; echo 2 > downloads/b.pdf; echo 3 > downloads/c.weird
-          "$d/tidy$ext" downloads
-          test -f downloads/image/a.jpg && test -f downloads/doc/b.pdf && test -f downloads/other/c.weird
-          echo "the programs ran on ${{ matrix.target }}"
+          # A Mac runs its own programs and the universal ones (#10).
+          dirs="${{ matrix.target }}"
+          case "${{ matrix.target }}" in *apple-darwin) dirs="$dirs universal2-apple-darwin" ;; esac
+          for t in $dirs; do
+            d="$PWD/out/$t"
+            chmod +x "$d"/* 2>/dev/null || true
+            got=$("$d/hello$ext" Ada | tr -d '\r')
+            [ "$got" = "hello, Ada" ] || { echo "$t hello said: $got"; exit 1; }
+            rm -rf "w-$t" && mkdir -p "w-$t/downloads"
+            (cd "w-$t"
+             echo 1 > downloads/a.jpg; echo 2 > downloads/b.pdf; echo 3 > downloads/c.weird
+             "$d/tidy$ext" downloads
+             test -f downloads/image/a.jpg && test -f downloads/doc/b.pdf && test -f downloads/other/c.weird)
+            echo "the $t programs ran on ${{ matrix.target }}"
+          done
 
