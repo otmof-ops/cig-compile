@@ -411,7 +411,9 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
             let (b, tb) = side(true);
             let (ca, cb) = (canon(&a, true), canon(&b, false));
             let mut same = ca == cb && ta == tb;
-            if let Some(want) = &case.expect_stdout {
+            // The .out files are written with Unix paths (CigScript's own
+            // tests skip the path-printing ones on Windows too).
+            if let Some(want) = case.expect_stdout.as_ref().filter(|_| cfg!(unix)) {
                 same &= b.first().is_some_and(|o| &o.stdout == want);
             }
             report(tally, &name, same, || {
@@ -578,8 +580,14 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
             out.push(format!("{rel}/"));
             walk(root, &p, out);
         } else {
+            // Text is hashed as the streams are compared: a timestamp or a
+            // run id written into a file (a report's `generated`) is not a
+            // difference between the interpreter and the program.
             let sha = std::fs::read(&p)
-                .map(|b| hex::encode(Sha256::digest(b)))
+                .map(|b| match String::from_utf8(b) {
+                    Ok(t) => hex::encode(Sha256::digest(normal(&t).as_bytes())),
+                    Err(e) => hex::encode(Sha256::digest(e.as_bytes())),
+                })
                 .unwrap_or_default();
             #[cfg(unix)]
             let mode = {
