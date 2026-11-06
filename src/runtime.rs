@@ -23,6 +23,9 @@ pub struct Target {
     /// The name of cig's release asset for it (`cig-v<version>-<asset>`).
     pub asset: &'static str,
     pub format: Format,
+    /// For a target made of others, the triples of its parts: the
+    /// universal macOS binary is the arm64 and the x86_64 runtime in one.
+    pub parts: &'static [&'static str],
 }
 
 impl Target {
@@ -42,41 +45,56 @@ pub static TARGETS: &[Target] = &[
         triple: "x86_64-unknown-linux-musl",
         asset: "linux-x86_64",
         format: Format::Elf,
+        parts: &[],
     },
     Target {
         triple: "aarch64-unknown-linux-musl",
         asset: "linux-aarch64",
         format: Format::Elf,
+        parts: &[],
     },
     Target {
         triple: "armv7-unknown-linux-musleabihf",
         asset: "linux-arm",
         format: Format::Elf,
+        parts: &[],
     },
     Target {
         triple: "aarch64-apple-darwin",
         asset: "macos-aarch64",
         format: Format::MachO,
+        parts: &[],
     },
     Target {
         triple: "x86_64-apple-darwin",
         asset: "macos-x86_64",
         format: Format::MachO,
+        parts: &[],
+    },
+    // Not a release asset: made here from the two above (src/fat.rs).
+    Target {
+        triple: "universal2-apple-darwin",
+        asset: "macos-universal",
+        format: Format::MachO,
+        parts: &["aarch64-apple-darwin", "x86_64-apple-darwin"],
     },
     Target {
         triple: "x86_64-pc-windows-msvc",
         asset: "windows-x86_64",
         format: Format::Pe,
+        parts: &[],
     },
     Target {
         triple: "aarch64-pc-windows-msvc",
         asset: "windows-aarch64",
         format: Format::Pe,
+        parts: &[],
     },
     Target {
         triple: "x86_64-unknown-freebsd",
         asset: "freebsd-x86_64",
         format: Format::Elf,
+        parts: &[],
     },
 ];
 
@@ -109,6 +127,7 @@ static OTHER: Target = Target {
     } else {
         Format::Elf
     },
+    parts: &[],
 };
 
 /// The target named, or this machine's.
@@ -238,7 +257,7 @@ pub fn load(
 ) -> Result<Runtime, Diagnostic> {
     let path = &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if let Some(id) = crate::cache::FileId::of(path) {
-        if let Some(version) = index.runtime_version(path, &id) {
+        if let Some(version) = index.runtime_version(path, &id, target.triple) {
             if version == wanted() {
                 return Ok(Runtime {
                     path: path.clone(),
@@ -261,6 +280,18 @@ pub fn load(
                 .with_hint("give the cig binary itself with --runtime"),
         );
     }
+    if !target.parts.is_empty() && crate::fat::slices(&bytes).is_none() {
+        return Err(usage(format!(
+            "{} is not a universal binary, which {} needs",
+            path.display(),
+            target.triple
+        ))
+        .code("E1002")
+        .with_hint(format!(
+            "leave out --runtime and cigcompile makes it from cig's releases for {}",
+            target.parts.join(" and ")
+        )));
+    }
     if format_of(&bytes) != Some(target.format) {
         return Err(usage(format!(
             "{} is not an executable for {}",
@@ -272,6 +303,39 @@ pub fn load(
             "pass the cig built for {} (release asset {})",
             target.triple, target.asset
         )));
+    }
+    // The CPU too: a runtime for another machine of the same kind makes a
+    // program that does not start there.
+    let wrong = |what: String| {
+        usage(format!("{} {what}", path.display()))
+            .code("E1002")
+            .with_hint(format!(
+                "pass the cig built for {} (release asset {})",
+                target.triple, target.asset
+            ))
+    };
+    if target.parts.is_empty() {
+        if let (Some(want), Some(got)) = (triple_arch(target.triple), arch_of(&bytes)) {
+            if want != got {
+                return Err(wrong(format!("is for {got}, not {}", target.triple)));
+            }
+        }
+    } else {
+        let have: Vec<&str> = crate::fat::slices(&bytes)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|s| mach_arch(s.cputype))
+            .collect();
+        for part in target.parts {
+            if let Some(want) = triple_arch(part) {
+                if !have.contains(&want) {
+                    return Err(wrong(format!(
+                        "holds no {want} slice, which {} needs",
+                        target.triple
+                    )));
+                }
+            }
+        }
     }
     let Some(version) = cigscript::program::runtime_version(&bytes) else {
         return Err(usage(format!(
@@ -298,7 +362,7 @@ pub fn load(
             .code("E1001")
             .with_hint("pass a cig binary you can read with --runtime")
     })?;
-    index.note_runtime(path, &id, &version);
+    index.note_runtime(path, &id, &version, target.triple);
     let cell = std::cell::OnceCell::new();
     let _ = cell.set(bytes);
     Ok(Runtime {
@@ -321,9 +385,85 @@ pub fn format_of(bytes: &[u8]) -> Option<Format> {
     }
 }
 
+/// The CPU an executable is for, from its header: ELF's `e_machine`, a
+/// thin Mach-O's `cputype`, PE's `Machine`. None for a universal binary
+/// (each slice has its own) or one that cannot be told.
+pub fn arch_of(bytes: &[u8]) -> Option<&'static str> {
+    let u16_le = |at: usize| Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?));
+    let u32_le = |at: usize| Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
+    match format_of(bytes)? {
+        Format::Elf => {
+            let m = if *bytes.get(5)? == 2 {
+                u16::from_be_bytes(bytes.get(18..20)?.try_into().ok()?)
+            } else {
+                u16_le(18)?
+            };
+            match m {
+                0x3e => Some("x86_64"),
+                0xb7 => Some("aarch64"),
+                0x28 => Some("arm"),
+                _ => None,
+            }
+        }
+        Format::MachO if crate::fat::slices(bytes).is_some() => None,
+        Format::MachO => mach_arch(u32_le(4)?),
+        Format::Pe => {
+            let at = u32_le(0x3c)? as usize;
+            if bytes.get(at..at + 4)? != b"PE\0\0" {
+                return None;
+            }
+            match u16_le(at + 4)? {
+                0x8664 => Some("x86_64"),
+                0xaa64 => Some("aarch64"),
+                _ => None,
+            }
+        }
+    }
+}
+
+fn mach_arch(cputype: u32) -> Option<&'static str> {
+    match cputype {
+        0x0100_0007 => Some("x86_64"),
+        0x0100_000c => Some("aarch64"),
+        _ => None,
+    }
+}
+
+/// The CPU a target's triple names; None for one made of others.
+fn triple_arch(triple: &str) -> Option<&'static str> {
+    match triple.split('-').next()? {
+        "x86_64" => Some("x86_64"),
+        "aarch64" => Some("aarch64"),
+        "armv7" => Some("arm"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_executables_cpu_is_read_from_its_header() {
+        let mut elf = vec![0x7f, b'E', b'L', b'F', 2, 1];
+        elf.resize(18, 0);
+        elf.extend(0xb7u16.to_le_bytes());
+        assert_eq!(arch_of(&elf), Some("aarch64"));
+        let mut mach = vec![0xcf, 0xfa, 0xed, 0xfe];
+        mach.extend(0x0100_0007u32.to_le_bytes());
+        assert_eq!(arch_of(&mach), Some("x86_64"));
+        let mut pe = vec![b'M', b'Z'];
+        pe.resize(0x3c, 0);
+        pe.extend(0x40u32.to_le_bytes());
+        pe.extend(b"PE\0\0");
+        pe.extend(0xaa64u16.to_le_bytes());
+        assert_eq!(arch_of(&pe), Some("aarch64"));
+        assert_eq!(triple_arch("armv7-unknown-linux-musleabihf"), Some("arm"));
+        assert_eq!(triple_arch("universal2-apple-darwin"), None);
+        // This build's own cig is for this machine.
+        let own = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+        assert_eq!(arch_of(&own), triple_arch(host().triple));
+    }
 
     #[test]
     fn targets_are_found_by_triple_or_asset_and_others_refused() {

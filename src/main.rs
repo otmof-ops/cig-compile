@@ -9,6 +9,7 @@ mod bench;
 mod build;
 mod cache;
 mod digests;
+mod fat;
 mod fetch;
 mod project;
 mod runtime;

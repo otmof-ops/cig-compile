@@ -45,6 +45,9 @@ fn no(why: String, hint: String) -> Diagnostic {
 /// The runtime for `t`: the kept copy when its sha256 is the pinned one,
 /// else fetched, checked against the pin, and kept.
 pub fn fetch(t: &Target, say: bool) -> Result<PathBuf, Diagnostic> {
+    if !t.parts.is_empty() {
+        return assemble(t, say);
+    }
     let name = asset_file(t);
     let dest = cache_path(t);
     let Some(want) = crate::digests::of(&name) else {
@@ -118,6 +121,66 @@ pub fn fetch(t: &Target, say: bool) -> Result<PathBuf, Diagnostic> {
     })?;
     if say {
         eprintln!("kept {} (sha256 matches the pin)", dest.display());
+    }
+    Ok(dest)
+}
+
+/// A target made of others (the universal macOS binary): each part fetched
+/// and held to its own pin, then put together. What is kept is made again
+/// whenever it is not exactly what the parts make, so it needs no pin of
+/// its own.
+fn assemble(t: &Target, say: bool) -> Result<PathBuf, Diagnostic> {
+    let mut parts = Vec::new();
+    for triple in t.parts {
+        let part = crate::runtime::target(Some(triple)).expect("a listed part");
+        let path = fetch(part, say)?;
+        parts.push(std::fs::read(&path).map_err(|e| {
+            no(
+                format!("cannot read {}: {e}", path.display()),
+                format!("fetch it again: cigcompile fetch --target {triple}"),
+            )
+        })?);
+    }
+    let refs: Vec<&[u8]> = parts.iter().map(Vec::as_slice).collect();
+    let fat = crate::fat::universal(&refs).map_err(|e| {
+        no(
+            format!("cannot make the runtime for {}: {e}", t.triple),
+            format!(
+                "fetch the parts again: cigcompile fetch --target {}",
+                t.parts.join(" --target ")
+            ),
+        )
+    })?;
+    let dest = cache_path(t);
+    if std::fs::read(&dest).ok().as_deref() == Some(fat.as_slice()) {
+        return Ok(dest);
+    }
+    let dir = dest.parent().expect("a runtime has a folder");
+    let keep = || -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        let tmp = dir.join(format!(".cig.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, &fat)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+        }
+        std::fs::rename(&tmp, &dest).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
+    };
+    keep().map_err(|e| {
+        no(
+            format!(
+                "cannot keep the runtime for {} at {}: {e}",
+                t.triple,
+                dest.display()
+            ),
+            "set CIGSCRIPT_HOME to a folder you can write".to_string(),
+        )
+    })?;
+    if say {
+        eprintln!("made {} from {}", dest.display(), t.parts.join(" and "));
     }
     Ok(dest)
 }

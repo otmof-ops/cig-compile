@@ -370,3 +370,44 @@ fn test_hears_a_script_named_by_a_path_as_its_program() {
         text(&o.stderr)
     );
 }
+
+/// The same kind of machine with the other CPU, and another kind of machine.
+fn other_machines() -> Vec<&'static str> {
+    use std::env::consts::{ARCH, OS};
+    let other_cpu = match (OS, ARCH) {
+        ("linux", "x86_64") => Some("aarch64-unknown-linux-musl"),
+        ("linux", "aarch64") => Some("x86_64-unknown-linux-musl"),
+        ("macos", "aarch64") => Some("x86_64-apple-darwin"),
+        ("macos", "x86_64") => Some("aarch64-apple-darwin"),
+        ("windows", "x86_64") => Some("aarch64-pc-windows-msvc"),
+        ("windows", "aarch64") => Some("x86_64-pc-windows-msvc"),
+        _ => None,
+    };
+    let other_kind = if cfg!(windows) {
+        "x86_64-unknown-linux-musl"
+    } else {
+        "x86_64-pc-windows-msvc"
+    };
+    other_cpu.into_iter().chain([other_kind]).collect()
+}
+
+/// A runtime is checked as the runtime for the machine asked for, its kind
+/// of executable and its CPU, even after the build index has come to know
+/// it as this machine's: that once let a Linux cig through as a Windows
+/// runtime, and wrote an ELF program named for Windows.
+#[test]
+fn a_runtime_known_here_is_still_refused_for_another_machine() {
+    let s = Sandbox::new();
+    s.write("x.cig", "exhale 1\n");
+    ok(&s.cc(&["build", "x.cig"]));
+    for t in other_machines() {
+        let o = s.cc(&["build", "x.cig", "--target", t, "-o", "y"]);
+        assert_eq!(o.status.code(), Some(3), "{t}: {}", text(&o.stderr));
+        assert!(
+            text(&o.stderr).contains("E1002"),
+            "{t}: {}",
+            text(&o.stderr)
+        );
+        assert!(!s.path().join("y").exists(), "{t}: a program was written");
+    }
+}
