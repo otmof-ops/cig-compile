@@ -1,0 +1,7 @@
+# Building a long string from pieces.
+roll parts = []
+for i in 0..60000 {
+  parts.push("item-${i}")
+}
+stick s = parts.join(",")
+exhale s.len()

@@ -1,0 +1,74 @@
+# The differential suite's cases (#7): every script in CigScript's examples,
+# with what each needs to run. The scripts are read from $CIGSCRIPT_SRC, never
+# copied here, so they cannot drift from the interpreter they are compared
+# with. The corpus (tests/corpus), tests/scripts and the docs' `cig` fences
+# are found by the runner itself; a script in examples/ without a case here
+# fails the suite.
+#
+# A case: `script` (relative to the checkout), `files` (the work tree, path =
+# content), `setup` (commands run in the work tree first, on both sides), and
+# `runs`: each a list of `steps` run in order in one work tree, with `args`,
+# an optional `light` (a chain: `cig light` / `--light`), and `modes` (default
+# run and dry-run).
+
+[[case]]
+script = "examples/hello.cig"
+runs = [
+  { steps = [{ args = [] }] },
+  { steps = [{ args = ["Ada"] }] },
+  { steps = [{ args = ["--dry-run"] }], modes = ["run"] },
+]
+
+[[case]]
+script = "examples/audit.cig"
+files = { "build/a.tmp" = "a", "build/deep/b.tmp" = "b", "build/keep.txt" = "keep" }
+runs = [{ steps = [{ args = [] }] }]
+
+[[case]]
+script = "examples/lab-manifest.cig"
+files = { "data/a.txt" = "alpha\n", "data/sub/b.csv" = "x,y\n1,2\n" }
+runs = [
+  { steps = [{ args = ["data"] }, { args = ["data", "verify"] }], modes = ["run"] },
+  { steps = [{ args = ["data"] }], modes = ["dry-run"] },
+  { steps = [{ args = [] }] },
+]
+
+[[case]]
+script = "examples/lab-measurements.cig"
+files = { "readings.csv" = "series,value\ntemperature,21.4\ntemperature,22.0\npressure,101.2\npressure,100.8\n" }
+runs = [{ steps = [{ args = ["readings.csv", "report.json"] }] }]
+
+[[case]]
+script = "examples/report.cig"
+files = { "expenses.csv" = "category,amount\nfood,12.50\nrent,800\nfood,7.25\n" }
+runs = [
+  { steps = [{ args = ["expenses.csv", "report.json"] }] },
+  { steps = [{ args = ["missing.csv", "report.json"] }], modes = ["run"] },
+]
+
+[[case]]
+script = "examples/lab-pipeline.cig"
+runs = [
+  { steps = [{ light = "analysis", args = [] }] },
+  { steps = [{ args = [] }], modes = ["run"] },
+]
+
+[[case]]
+script = "examples/shell-out.cig"
+setup = [["git", "init", "-q"], ["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "start"]]
+files = { "notes.txt" = "untracked\n" }
+needs = ["git"]
+runs = [{ steps = [{ args = [] }] }]
+
+[[case]]
+script = "examples/tasks.cig"
+# Real cargo builds: only the plans are compared.
+runs = [{ steps = [{ light = "check", args = [] }], modes = ["dry-run"] }]
+
+[[case]]
+script = "examples/tidy-downloads.cig"
+files = { "downloads/a.JPG" = "1", "downloads/b.mp4" = "2", "downloads/c.flac" = "3", "downloads/d.pdf" = "4", "downloads/e.tar" = "5", "downloads/f.weird" = "6", "downloads/sub/g.png" = "7" }
+runs = [
+  { steps = [{ args = ["downloads"] }] },
+  { steps = [{ args = [] }], modes = ["run"] },
+]

@@ -1,0 +1,6 @@
+# A tight numeric loop.
+roll total = 0
+for i in 0..400000 {
+  total += i * i % 7
+}
+exhale total

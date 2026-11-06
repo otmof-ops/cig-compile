@@ -1,0 +1,3 @@
+# cig's Diagnostic is 144 bytes; it travels only on the error path, and
+# cigcompile returns cig's own (CigScript sets the same threshold).
+large-error-threshold = 192

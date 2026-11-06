@@ -1,0 +1,7 @@
+# A big burn: a thousand journaled writes.
+burn {
+  for i in 0..1000 {
+    fs.write_text("out${i}.txt", "v${i}")
+  }
+}
+exhale "done"
