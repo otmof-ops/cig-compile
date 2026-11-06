@@ -8,6 +8,10 @@ repository = "https://github.com/otmof-ops/cigcompile"
 publish = false
 default-run = "cigcompile"
 
+[lib]
+name = "cigcompile"
+path = "src/lib.rs"
+
 [[bin]]
 name = "cigcompile"
 path = "src/main.rs"
