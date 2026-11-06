@@ -19,7 +19,7 @@ name = "cig-runtime"
 path = "src/bin/cig-runtime.rs"
 
 [dependencies]
-cigscript = { git = "https://github.com/otmof-ops/CigScript", branch = "feat/programs" }
+cigscript = { git = "https://github.com/otmof-ops/CigScript", tag = "v1.15.0" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
