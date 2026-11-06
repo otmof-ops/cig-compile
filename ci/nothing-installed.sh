@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+# SPDX-License-Identifier: Apache-2.0
 # The proof #5 asks for: programs built on the static runtime run in a
 # container that holds nothing but them (FROM scratch: no cig, no shell, no
 # libc), and say exactly what the interpreter says on the host.

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! Lowering a checked program to CIR, statement by statement as the
 //! interpreter evaluates it (eval.rs in CigScript): the right-hand side of
 //! an assignment before its target, a call's callee before its arguments,

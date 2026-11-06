@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! The differential suite (#7): the interpreter is the reference. Every
 //! script a CigScript checkout carries (its examples, its error corpus,
 //! tests/scripts and the `cig` fences in its docs) runs under `cig` and as

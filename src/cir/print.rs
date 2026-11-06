@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! The text form of CIR (`cigcompile build --emit=cir`): for reading and for
 //! golden tests. Every instruction prints its span, so a golden diff shows
 //! a span that moved. Instruction ids are not printed.

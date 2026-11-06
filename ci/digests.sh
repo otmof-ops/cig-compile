@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+# SPDX-License-Identifier: Apache-2.0
 # Write src/digests.rs from a CigScript release's published checksums: the
 # runtimes cigcompile accepts, pinned in the compiler itself (#10).
 #
@@ -10,6 +12,8 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 gh release download "$tag" -R otmof-ops/CigScript -p 'cig-*.sha256' -D "$tmp" >/dev/null
 cat <<HEAD
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! The sha256 of every runtime this compiler accepts from a release: cig
 //! ${tag}'s assets, as its release published them. Written by
 //! \`ci/digests.sh ${tag}\`; the version below must be the one Cargo.toml pins

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! Passes over CIR. Each runs between two checks: the structural verifier,
 //! and the transition check against a snapshot taken before it, so a pass
 //! that moves an effect out of its region, reorders effects or drops one

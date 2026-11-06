@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! CIR: CigCompile's intermediate representation (#3), between the
 //! checked AST and code generation, where the burn rule is structural: an
 //! effect is a `burn.op` node, and the verifier proves every one sits in a

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: Apache-2.0
 //! The verifier (#3). `verify` is structural and runs after lowering and
 //! after every pass; `verify_transition` compares a module with a snapshot
 //! taken before a pass, because an output alone cannot show that something
