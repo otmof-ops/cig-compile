@@ -48,7 +48,9 @@ fn the_demo_lowers_and_verifies_and_reads_as_the_spec_shows() {
 #[test]
 fn the_demo_matches_its_golden_text() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cir");
-    let src = std::fs::read_to_string(dir.join("demo.cig")).unwrap();
+    // A checkout that ignored .gitattributes still compares by lines.
+    let lf = |t: String| t.replace("\r\n", "\n");
+    let src = lf(std::fs::read_to_string(dir.join("demo.cig")).unwrap());
     let (text, _) = cigcompile::cir::emit(&src, "demo.cig").unwrap();
     let golden = dir.join("demo.cir");
     if std::env::var_os("CIR_UPDATE_GOLDEN").is_some() {
@@ -56,7 +58,7 @@ fn the_demo_matches_its_golden_text() {
     }
     assert_eq!(
         text,
-        std::fs::read_to_string(&golden).unwrap_or_default(),
+        lf(std::fs::read_to_string(&golden).unwrap_or_default()),
         "CIR_UPDATE_GOLDEN=1 writes it again"
     );
 }
