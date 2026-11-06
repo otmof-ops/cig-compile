@@ -58,8 +58,8 @@ A laptop's clock moves between runs. An earlier run of the same set gave hello a
 
 ## Findings for later stages
 
-- **Start-up is cig's.** A dry run of hello starts in about 5 ms. A real run also writes its run record, which brings it to 7 to 15 ms. The 5 ms budget (#14) needs a run that skips the record when nothing burns, or stage B.
-- **The keyring costs about 20 ms per run.** With the default seal key, each real run asks the Secret Service for the journal key. That is a CigScript cost, paid by `cig run` and programs alike, and worth its own issue there.
+- **Start-up is cig's.** Spawned directly (median of 15), a dry run of hello takes 1.6 ms. A real run takes 5.0 ms with the seal key in a file, and 15.0 ms with the default keyring. The table above includes the spawn the bench makes, so its figures are a little higher.
+- **The keyring costs about 10 ms per real run.** It is paid even when nothing burns: the journal asks for the seal key when it is made, and the ledger asks again. That is CigScript's cost, paid by `cig run` and programs alike, and filed as otmof-ops/CigScript#129 (ask on the first journal line, once per process). The 5 ms budget (#14) turns on it.
 - **Size needs the trimmed runtime.** The 4 MB budget (#14) is out of reach while the runtime is all of cig. The crate split (#1) and stdlib features (#4) make a runtime that is only what a program uses.
 - **Signing appended data.** macOS code signatures and Windows Authenticode do not cover bytes appended after signing. Programs run unsigned on both, and CI proves it. `--sign` (#10) puts the payload in a Mach-O section, or appends before Authenticode signs.
 
