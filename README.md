@@ -40,7 +40,11 @@ A checksum fetched beside the asset would prove nothing against a tampered relea
 - **Where programs go.** One script builds to `./<name>`; a folder builds to `<folder>/bin/<name>`, and `<folder>/bin/<target>/` for another machine. `-o` says otherwise.
 - **The write.** A program is written beside its place and renamed over it, so a build that stops halfway leaves the old program or none.
 - **No-op rebuilds.** A rebuild that changes nothing touches nothing, not even the time, and takes about a millisecond: the build index in `<cig home>/cache/compile` remembers what each program was built from.
-- **Reproducible.** The same script, compiler and runtime give the same bytes.
+- **Reproducible.** The same script, compiler and runtime give the same bytes on any machine.
+  - A program records its script's file name, never the path it was built from, and no time.
+  - The runtime for another machine is cig's release, so builds for it agree everywhere. Builds for this machine agree too when its `cig` was installed from the release.
+  - A `cig` built from source is the same version with bytes of its own, and so are the programs built on it.
+  - CI builds one script for all six machines on five runners and checks that the bytes are identical.
 - **Errors.** They are cig's, in the four kinds of no: the compiler's are `E1000` to `E1007`, the programs' `E1050` to `E1053`. `cig explain E1001` has the page.
 - **Exit codes.** `0` ok, `1` a difference (`test`, `bench`), `2` a script that does not check, `3` usage.
 

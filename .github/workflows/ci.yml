@@ -44,6 +44,49 @@ jobs:
       - name: the budgets stage A can meet (#14)
         shell: bash
         run: cargo run --release --bin cigcompile -- bench --runs 3 --budgets --orchestrate cigo-src/orchestrate.cig
+      # #9: the same inputs give the same bytes on every machine. Each runner
+      # builds one script for all six machines, by a path of its own, with
+      # cig's releases as the runtimes: the compiler is run alone, so no
+      # runtime built here is found. `reproducible` compares the five.
+      - name: one script for every machine (#9)
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in Windows) exe=".exe" ;; *) exe="" ;; esac
+          w="$RUNNER_TEMP/repro"
+          mkdir -p "$w/bin" "$w/src" "$w/out"
+          cp "target/release/cigcompile$exe" "$w/bin/"
+          export CIGSCRIPT_HOME="$w/home"
+          printf 'exhale "the same bytes"\n' > "$w/src/same.cig"
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+            "$w/bin/cigcompile$exe" build "$w/src/same.cig" --target "$t" -o "$w/out/$t"
+          done
+          py=$(command -v python3 || command -v python)
+          "$py" -c 'import hashlib, os, sys; d = sys.argv[1]; print("\n".join(hashlib.sha256(open(os.path.join(d, f), "rb").read()).hexdigest() + "  " + f for f in sorted(os.listdir(d))))' "$w/out" | tr -d '\r' | tee "sha256-${{ matrix.os }}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sha256-${{ matrix.os }}
+          path: sha256-${{ matrix.os }}.txt
+
+  reproducible:
+    name: the same bytes on five machines (#9)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sha256-*
+          merge-multiple: true
+      - name: compare
+        run: |
+          n=$(ls sha256-*.txt | wc -l)
+          [ "$n" -eq 5 ] || { echo "$n machines' hashes, not five"; exit 1; }
+          first=$(ls sha256-*.txt | head -1)
+          [ "$(wc -l < "$first")" -eq 6 ] || { echo "not six programs:"; cat "$first"; exit 1; }
+          for f in sha256-*.txt; do
+            diff -u "$first" "$f" || { echo "$f differs from $first"; exit 1; }
+          done
+          echo "five machines built the same six programs, byte for byte:"
+          cat "$first"
 
   nothing-installed:
     name: nothing installed (#5)
