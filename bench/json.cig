@@ -1,0 +1,8 @@
+# JSON out and back in.
+roll rows = []
+for i in 0..20000 {
+  rows.push({id: i, name: "n${i}", tags: ["a", "b"], ok: i % 3 == 0})
+}
+stick body = json.stringify(rows)
+stick back = json.parse(body)
+exhale back.len(), body.len()

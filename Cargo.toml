@@ -1,0 +1,42 @@
+[package]
+name = "cigcompile"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "CigCompile: CigScript scripts as programs that run with nothing installed"
+repository = "https://github.com/otmof-ops/cigcompile"
+publish = false
+default-run = "cigcompile"
+
+[[bin]]
+name = "cigcompile"
+path = "src/main.rs"
+
+# The runtime a program is appended to: `cig` itself, of the cigscript
+# version this compiler pins, built in the same build.
+[[bin]]
+name = "cig-runtime"
+path = "src/bin/cig-runtime.rs"
+
+[dependencies]
+cigscript = { git = "https://github.com/otmof-ops/CigScript", tag = "v1.15.0" }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+
+# The differential suite reports itself: one table, its own exit code.
+[[test]]
+name = "differential"
+harness = false
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = "debuginfo"

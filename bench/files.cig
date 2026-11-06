@@ -1,0 +1,13 @@
+# File walking: a tree made in a burn, then globbed and sized.
+burn {
+  fs.mkdir("tree")
+  for i in 0..300 {
+    fs.write_text("tree/f${i}.txt", "content ${i}")
+  }
+}
+stick found = fs.glob("tree/**/*.txt")
+roll bytes = 0
+for f in found {
+  bytes += fs.size(f)
+}
+exhale found.len(), bytes

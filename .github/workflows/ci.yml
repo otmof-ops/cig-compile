@@ -1,0 +1,129 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      # The scripts the differential suite compares come from the CigScript
+      # the compiler pins: one source, Cargo.toml.
+      - name: the pinned CigScript
+        shell: bash
+        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: otmof-ops/CigScript
+          ref: ${{ env.CIGSCRIPT_REF }}
+          path: cigscript-src
+      - uses: actions/checkout@v4
+        with:
+          repository: otmof-ops/cig-orchestrator
+          path: cigo-src
+      - name: the differential suite (#7)
+        shell: bash
+        run: CIGSCRIPT_SRC="$PWD/cigscript-src" cargo test --release --test differential
+      - name: the budgets stage A can meet (#14)
+        shell: bash
+        run: cargo run --release --bin cigcompile -- bench --runs 3 --budgets --orchestrate cigo-src/orchestrate.cig
+
+  nothing-installed:
+    name: nothing installed (#5)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: the pinned CigScript
+        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: otmof-ops/CigScript
+          ref: ${{ env.CIGSCRIPT_REF }}
+          path: cigscript-src
+      - run: cargo build --release --target x86_64-unknown-linux-musl
+      - run: bash ci/nothing-installed.sh cigscript-src target/x86_64-unknown-linux-musl/release
+
+  # #10: one Linux runner builds for every machine cig ships for, from
+  # cig's own release assets (fetched, and held to the sha256 this
+  # compiler pins), and each program runs on its own machine.
+  cross:
+    name: one runner builds for every machine (#10)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: the pinned CigScript
+        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: otmof-ops/CigScript
+          ref: ${{ env.CIGSCRIPT_REF }}
+          path: cigscript-src
+      - run: cargo build --release --bin cigcompile
+      - name: hello and tidy-downloads for every machine
+        run: |
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+            ext=""; case "$t" in *windows*) ext=".exe" ;; esac
+            target/release/cigcompile build cigscript-src/examples/hello.cig --target "$t" -o "out/$t/hello$ext"
+            target/release/cigcompile build cigscript-src/examples/tidy-downloads.cig --target "$t" -o "out/$t/tidy$ext"
+          done
+          file out/*/* || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: programs
+          path: out
+
+  cross-run:
+    name: runs on its own machine (${{ matrix.target }})
+    needs: cross
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-15-intel, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: windows-11-arm, target: aarch64-pc-windows-msvc }
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: programs
+          path: out
+      - name: run them
+        shell: bash
+        run: |
+          d="$PWD/out/${{ matrix.target }}"
+          ext=""; case "${{ matrix.target }}" in *windows*) ext=".exe" ;; esac
+          chmod +x "$d"/* 2>/dev/null || true
+          export CIGSCRIPT_HOME="$RUNNER_TEMP/cig" NO_COLOR=1 CIG_SEAL_KEY=file CIG_REPORTS=never CIG_DOCTOR=0
+          got=$("$d/hello$ext" Ada | tr -d '\r')
+          [ "$got" = "hello, Ada" ] || { echo "hello said: $got"; exit 1; }
+          mkdir -p w/downloads && cd w
+          echo 1 > downloads/a.jpg; echo 2 > downloads/b.pdf; echo 3 > downloads/c.weird
+          "$d/tidy$ext" downloads
+          test -f downloads/image/a.jpg && test -f downloads/doc/b.pdf && test -f downloads/other/c.weird
+          echo "the programs ran on ${{ matrix.target }}"
+
