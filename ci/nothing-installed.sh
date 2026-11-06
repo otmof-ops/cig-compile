@@ -34,12 +34,15 @@ lay_out() {
     report) printf 'category,amount\nfood,12.50\nrent,800\nfood,7.25\n' > "$1/expenses.csv" ;;
     measure) printf 'series,value\ntemperature,21.4\ntemperature,22.0\npressure,101.2\n' > "$1/readings.csv" ;;
     manifest) mkdir -p "$1/data/sub"; echo alpha > "$1/data/a.txt"; printf 'x,y\n1,2\n' > "$1/data/sub/b.csv" ;;
+    audit) mkdir -p "$1/build/deep"; echo a > "$1/build/a.tmp"; echo b > "$1/build/deep/b.tmp"; echo k > "$1/build/keep.txt" ;;
   esac
 }
 
 failed=0
-check() { # check <name> <script> <case> <steps separated by |, args space-separated>
-  local name=$1 script=$2 case=$3 steps=$4
+check() { # check <name> <script> <case> <steps separated by |, args space-separated> [chain]
+  local name=$1 script=$2 case=$3 steps=$4 chain=${5:-}
+  local how=(run "$src/$script") light=()
+  if [ -n "$chain" ]; then how=(light "$src/$script" "$chain"); light=(--light "$chain"); fi
   "$cc" build "$src/$script" -o "$progs/$name" --runtime "$rt" >/dev/null
   local ref="$tmp/ref-$name" box="$tmp/box-$name"
   lay_out "$ref" "$case"; lay_out "$box" "$case"
@@ -48,11 +51,11 @@ check() { # check <name> <script> <case> <steps separated by |, args space-separ
     i=$((i+1))
     IFS=' ' read -r -a args <<< "$step"
     (cd "$ref" && env -i PATH=/usr/bin:/bin CIGSCRIPT_HOME="$ref/.home" NO_COLOR=1 CIG_DOCTOR=0 CIG_SEAL_KEY=file CIG_REPORTS=never \
-      "$rt" run "$src/$script" -- "${args[@]}" >"$tmp/r.out" 2>"$tmp/r.err"; echo $? >"$tmp/r.code") || true
+      "$rt" "${how[@]}" -- "${args[@]}" >"$tmp/r.out" 2>"$tmp/r.err"; echo $? >"$tmp/r.code") || true
     docker run --rm --network none --user "$(id -u):$(id -g)" --tmpfs /tmp \
       -v "$progs:/p:ro" -v "$box:/work" -w /work \
       -e CIGSCRIPT_HOME=/work/.home -e NO_COLOR=1 -e CIG_DOCTOR=0 -e CIG_SEAL_KEY=file -e CIG_REPORTS=never \
-      cigcompile-empty "/p/$name" -- "${args[@]}" >"$tmp/b.out" 2>"$tmp/b.err" && echo 0 >"$tmp/b.code" || echo $? >"$tmp/b.code"
+      cigcompile-empty "/p/$name" "${light[@]}" -- "${args[@]}" >"$tmp/b.out" 2>"$tmp/b.err" && echo 0 >"$tmp/b.code" || echo $? >"$tmp/b.code"
     # The interpreter's errors name the script by the path it was given;
     # the program by the path it was compiled from: the same here.
     for s in out err code; do
@@ -69,5 +72,10 @@ check tidy examples/tidy-downloads.cig tidy "downloads"
 check report examples/report.cig report "expenses.csv report.json"
 check measure examples/lab-measurements.cig measure "readings.csv report.json"
 check manifest examples/lab-manifest.cig manifest "data|data verify"
+check audit examples/audit.cig audit " "
+check pipeline examples/lab-pipeline.cig none " " analysis
 check usage examples/tidy-downloads.cig none " "
+# shell-out.cig and tasks.cig hop to git and cargo, which an empty
+# container cannot hold by design; the differential suite runs them on
+# the runners.
 exit "$failed"
