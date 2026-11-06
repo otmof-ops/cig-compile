@@ -59,7 +59,20 @@ struct Step {
 }
 
 fn both_modes() -> Vec<String> {
-    vec!["run".to_string(), "dry-run".to_string()]
+    words(&["run", "dry-run", "json", "plain"])
+}
+
+fn words(w: &[&str]) -> Vec<String> {
+    w.iter().map(|s| s.to_string()).collect()
+}
+
+/// A mode's flags, given the same to `cig run` and to the program: `run`
+/// is a real run, `dry-run json` is `--dry-run --json`.
+fn mode_flags(mode: &str) -> Vec<String> {
+    mode.split_whitespace()
+        .filter(|w| *w != "run")
+        .map(|w| format!("--{w}"))
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -157,11 +170,17 @@ fn all_cases(src: &Path) -> Vec<Case> {
     for c in cig_files(&src.join("tests/corpus")) {
         let text = std::fs::read_to_string(&c).unwrap();
         let first = text.lines().next().unwrap_or("");
-        let modes = if first.contains("--dry-run") {
-            vec!["dry-run".to_string()]
+        // Each error said three ways: as it is, --json and --plain.
+        let base = if first.contains("--dry-run") {
+            "dry-run"
         } else {
-            vec!["run".to_string()]
+            "run"
         };
+        let modes = vec![
+            base.to_string(),
+            format!("{base} json"),
+            format!("{base} plain"),
+        ];
         let mut env = BTreeMap::new();
         env.insert("CIG_MAX_STEPS".to_string(), "100000".to_string());
         cases.push(Case {
@@ -181,7 +200,7 @@ fn all_cases(src: &Path) -> Vec<Case> {
             expect_stdout: std::fs::read_to_string(&out).ok(),
             runs: vec![Run {
                 steps: vec![Step::default()],
-                modes: vec!["run".to_string()],
+                modes: words(&["run", "json", "plain"]),
             }],
             ..Case::default()
         });
@@ -210,7 +229,7 @@ fn all_cases(src: &Path) -> Vec<Case> {
                 // A fence is shown, not run for real: its plan is compared.
                 runs: vec![Run {
                     steps: vec![Step::default()],
-                    modes: vec!["dry-run".to_string()],
+                    modes: words(&["dry-run", "dry-run json", "dry-run plain"]),
                 }],
                 ..Case::default()
             });
@@ -373,17 +392,13 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
                     };
                     env(&mut c);
                     if program {
-                        if mode == "dry-run" {
-                            c.arg("--dry-run");
-                        }
+                        c.args(mode_flags(mode));
                         if let Some(ch) = &step.light {
                             c.args(["--light", ch]);
                         }
                     } else {
                         c.arg(if step.light.is_some() { "light" } else { "run" });
-                        if mode == "dry-run" {
-                            c.arg("--dry-run");
-                        }
+                        c.args(mode_flags(mode));
                         c.arg(&script_name);
                         if let Some(ch) = &step.light {
                             c.arg(ch);
@@ -415,7 +430,11 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
             let mut same = ca == cb && ta == tb;
             // The .out files are written with Unix paths (CigScript's own
             // tests skip the path-printing ones on Windows too).
-            if let Some(want) = case.expect_stdout.as_ref().filter(|_| cfg!(unix)) {
+            if let Some(want) = case
+                .expect_stdout
+                .as_ref()
+                .filter(|_| cfg!(unix) && mode == "run")
+            {
                 same &= b.first().is_some_and(|o| &o.stdout == want);
             }
             report(tally, &name, same, || {
@@ -501,14 +520,60 @@ fn canon(outs: &[Outcome], interpreter: bool) -> Vec<Outcome> {
     outs.iter()
         .map(|o| Outcome {
             code: o.code,
-            stdout: normal(&o.stdout),
-            stderr: if interpreter {
+            stdout: json_normal(&normal(&o.stdout)),
+            stderr: json_normal(&if interpreter {
                 without_warnings(&normal(&o.stderr))
             } else {
                 normal(&o.stderr)
-            },
+            }),
         })
         .collect()
+}
+
+/// `--json` output, line by line. The fields each process has its own of
+/// are dropped: `pid`, `pid_started`, and `journal_head` (a hash chain over
+/// times). A program's run record names the program and carries `program`;
+/// it is read as the interpreter's when its sha256 and cig are the run's,
+/// with `program.file` as the script, so that name is compared too.
+fn json_normal(s: &str) -> String {
+    s.lines()
+        .map(|l| match serde_json::from_str::<serde_json::Value>(l) {
+            Ok(mut v) if v.is_object() => {
+                strip(&mut v);
+                if let Some(run) = v.get_mut("run").and_then(|r| r.as_object_mut()) {
+                    let file = run.get("program").and_then(|p| {
+                        let same = p.get("sha256") == run.get("script_sha256")
+                            && p.get("cig") == run.get("version");
+                        if same {
+                            p.get("file").cloned()
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(f) = file {
+                        run.remove("program");
+                        run.insert("script".to_string(), f);
+                    }
+                }
+                v.to_string()
+            }
+            _ => l.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn strip(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::Object(m) => {
+            for k in ["pid", "pid_started", "journal_head"] {
+                m.remove(k);
+            }
+            m.values_mut().for_each(strip);
+        }
+        serde_json::Value::Array(a) => a.iter_mut().for_each(strip),
+        _ => {}
+    }
 }
 
 fn normal(s: &str) -> String {
