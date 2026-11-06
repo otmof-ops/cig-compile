@@ -291,7 +291,7 @@ fn clean(ctx: &Ctx, a: &CleanArgs) -> i32 {
         let ours = std::fs::File::open(&job.out)
             .ok()
             .and_then(|mut f| cigscript::program::read(&mut f).ok().flatten())
-            .is_some_and(|p| p.file == job.file);
+            .is_some_and(|p| p.file == build::recorded_file(job));
         if ours {
             if let Err(e) = std::fs::remove_file(&job.out) {
                 return fail(

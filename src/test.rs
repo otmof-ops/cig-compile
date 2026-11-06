@@ -14,7 +14,11 @@ use std::process::{Command, Output};
 pub fn compare(ctx: &Ctx, built: &[Built], runtime: &Runtime) -> i32 {
     let mut differ = 0;
     for b in built {
-        let script = run(Command::new(&runtime.path).args(["run", "--dry-run", &b.job.file]));
+        let mut script = run(Command::new(&runtime.path).args(["run", "--dry-run", &b.job.file]));
+        if let Some(o) = script.as_mut() {
+            o.stdout = as_named(&o.stdout, &b.job);
+            o.stderr = as_named(&o.stderr, &b.job);
+        }
         let program = run(Command::new(absolute(&b.job.out)).arg("--dry-run"));
         let found = differences(&script, &program);
         if ctx.json {
@@ -42,6 +46,23 @@ pub fn compare(ctx: &Ctx, built: &[Built], runtime: &Runtime) -> i32 {
     } else {
         exit::DIFFERS
     }
+}
+
+/// The interpreter names the script by the path it was given, and a
+/// program by its file name (#9): `tools/x.cig:4:8` is said `x.cig:4:8`.
+fn as_named(text: &[u8], job: &crate::project::Job) -> Vec<u8> {
+    let name = crate::build::recorded_file(job);
+    if job.file == name {
+        return text.to_vec();
+    }
+    // The path as a whole word: `mytools/x.cig:4` is not `tools/x.cig:4`.
+    let re = regex::Regex::new(&format!(r"(^|[^\w./\\-]){}:(\d)", regex::escape(&job.file)))
+        .expect("an escaped path");
+    re.replace_all(&String::from_utf8_lossy(text), |c: &regex::Captures| {
+        format!("{}{name}:{}", &c[1], &c[2])
+    })
+    .into_owned()
+    .into_bytes()
 }
 
 fn absolute(p: &Path) -> std::path::PathBuf {
@@ -150,5 +171,21 @@ mod tests {
     #[test]
     fn run_ids_are_normalised() {
         assert_eq!(normal(b"run 20261107T010203-abcdef ok"), "run <run> ok");
+    }
+
+    #[test]
+    fn the_typed_path_is_said_as_the_name_and_only_as_a_whole_word() {
+        let job = crate::project::Job {
+            script: std::path::PathBuf::from("tools/x.cig"),
+            file: "tools/x.cig".to_string(),
+            name: "x".to_string(),
+            out: std::path::PathBuf::from("x"),
+        };
+        let text =
+            "  --> tools/x.cig:4:8\nsee mytools/x.cig:4:8 and tools/x.cig:9:1\ntools/x.cig:1:1\n";
+        assert_eq!(
+            String::from_utf8(as_named(text.as_bytes(), &job)).unwrap(),
+            "  --> x.cig:4:8\nsee mytools/x.cig:4:8 and x.cig:9:1\nx.cig:1:1\n"
+        );
     }
 }

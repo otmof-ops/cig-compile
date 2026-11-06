@@ -106,11 +106,21 @@ pub fn pin_holds(job: &Job, source: &str, runtime_version: &str) -> Result<(), D
     )))
 }
 
+/// What a program records as its script: the file's name, never the path
+/// it was built from. No folder of the build machine is in a program, and
+/// a script gives the same bytes however it was named (#9).
+pub fn recorded_file(job: &Job) -> String {
+    job.script
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| job.file.clone())
+}
+
 /// The program's bytes: the runtime with the checked script appended.
 pub fn program_bytes(job: &Job, source: &str, runtime: &Runtime) -> std::io::Result<Vec<u8>> {
     let p = Program::new(
         &job.name,
-        &job.file,
+        &recorded_file(job),
         source,
         &format!("cigcompile {}", env!("CARGO_PKG_VERSION")),
     );
@@ -149,6 +159,7 @@ pub fn build(
             &runtime.path.to_string_lossy(),
             &format!("{:?}", runtime.id),
             &job.file,
+            &recorded_file(job),
             &job.name,
             &hex::encode(Sha256::digest(source.as_bytes())),
         ]);

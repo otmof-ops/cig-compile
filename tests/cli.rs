@@ -220,15 +220,10 @@ fn a_folder_builds_every_script_into_bin_and_clean_takes_only_those_out() {
     );
     let a = format!("proj/bin/{}", exe_name("a"));
     assert_eq!(text(&s.prog(&a, &[]).stdout), "a\n");
-    // The program says where it came from, as compiled.
+    // The program says which script it came from: its name, not the path
+    // it was built from (#9).
     let info = text(&s.prog(&a, &["--cig-program", "--json"]).stdout);
-    assert!(
-        info.contains(&format!(
-            "\"file\":{}",
-            serde_json::to_string(&format!("proj{sep}a.cig")).unwrap()
-        )),
-        "{info}"
-    );
+    assert!(info.contains("\"file\":\"a.cig\""), "{info}");
     ok(&s.cc(&["clean", "proj"]));
     assert!(!s.path().join(&a).exists());
     assert!(
@@ -336,4 +331,42 @@ fn a_deeply_nested_script_is_refused_not_a_crash() {
     let o = s.cc(&["build", "--check", "deep.cig"]);
     assert_eq!(o.status.code(), Some(2), "{}", text(&o.stderr));
     assert!(text(&o.stderr).contains("E208"), "{}", text(&o.stderr));
+}
+
+/// #9: a program records its script's name, never the path it was built
+/// from, so no folder of the build machine is in it, and one script gives
+/// the same bytes however it was named.
+#[test]
+fn one_script_gives_the_same_bytes_however_it_is_named() {
+    let sb = Sandbox::new();
+    sb.write("tools/hello.cig", "exhale \"hello\"\n");
+    let abs = sb.path().join("tools").join("hello.cig");
+    let (by_path, by_name) = (exe_name("by-path"), exe_name("by-name"));
+    ok(&sb.cc(&["build", abs.to_str().unwrap(), "-o", &by_path]));
+    ok(&sb.cc(&["build", "tools/hello.cig", "-o", &by_name]));
+    let a = fs::read(sb.path().join(&by_path)).unwrap();
+    let b = fs::read(sb.path().join(&by_name)).unwrap();
+    assert!(a == b, "the same script built to different bytes");
+    let folder = sb.path().to_string_lossy().to_string();
+    assert!(
+        !a.windows(folder.len()).any(|w| w == folder.as_bytes()),
+        "the build machine's folder is in the program"
+    );
+    assert_eq!(ok(&sb.prog(&by_path, &[])).trim(), "hello");
+}
+
+/// A script named by a path says `tools/x.cig:1:8` when it fails, its
+/// program `x.cig:1:8` (#9): `cigcompile test` hears the two as the same.
+#[test]
+fn test_hears_a_script_named_by_a_path_as_its_program() {
+    let s = Sandbox::new();
+    s.write("tools/x.cig", "exhale args[5]\n");
+    let o = s.cc(&["test", "tools/x.cig"]);
+    assert!(
+        o.status.success() && text(&o.stdout).contains("same"),
+        "exit {:?}\n{}{}",
+        o.status.code(),
+        text(&o.stdout),
+        text(&o.stderr)
+    );
 }
