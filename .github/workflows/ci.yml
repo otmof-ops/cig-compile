@@ -44,12 +44,28 @@ jobs:
       - name: the budgets stage A can meet (#14)
         shell: bash
         run: cargo run --release --bin cigcompile -- bench --runs 3 --budgets --orchestrate cigo-src/orchestrate.cig
-      # #9: the same inputs give the same bytes on every machine. Each runner
-      # builds one script for all six machines, by a path of its own, with
-      # cig's releases as the runtimes: the compiler is run alone, so no
-      # runtime built here is found. `reproducible` compares the five.
-      - name: one script for every machine (#9)
+  # #9: the same inputs give the same bytes on every machine. Each runner
+  # builds one script for all six machines, by a path of its own, with
+  # cig's releases as the runtimes: the compiler is run alone, so no
+  # runtime built here is found. `reproducible` compares the five, and runs
+  # even when one of them failed, so a missing machine fails it.
+  repro:
+    name: one script for every machine, on ${{ matrix.os }} (#9)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --bin cigcompile
+      - name: build and hash
         shell: bash
+        env:
+          # cig's fetcher asks GitHub for the release, and anonymous
+          # requests from a shared runner can be rate-limited.
+          GH_TOKEN: ${{ github.token }}
         run: |
           case "$RUNNER_OS" in Windows) exe=".exe" ;; *) exe="" ;; esac
           w="$RUNNER_TEMP/repro"
@@ -69,7 +85,8 @@ jobs:
 
   reproducible:
     name: the same bytes on five machines (#9)
-    needs: test
+    needs: repro
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -124,6 +141,8 @@ jobs:
           path: cigscript-src
       - run: cargo build --release --bin cigcompile
       - name: hello and tidy-downloads for every machine
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
             ext=""; case "$t" in *windows*) ext=".exe" ;; esac

@@ -60,8 +60,11 @@ check() { # check <name> <script> <case> <steps separated by |, args space-separ
       cigcompile-empty "/p/$name" "${light[@]}" -- "${args[@]}" >"$tmp/b.out" 2>"$tmp/b.err" && echo 0 >"$tmp/b.code" || echo $? >"$tmp/b.code"
     # The interpreter's errors name the script by the path it was given, a
     # program's by its file name (#9): the reference's folder is cut.
+    local dir esc
+    dir="$(dirname "$src/$script")/"
+    esc=$(printf '%s' "$dir" | sed 's/[][\.*^$#&/]/\\&/g')
     for s in out err code; do
-      if ! diff <(normal <"$tmp/r.$s" | sed "s#$src/$(dirname "$script")/##g") <(normal <"$tmp/b.$s") >"$tmp/d"; then
+      if ! diff <(normal <"$tmp/r.$s" | sed "s#$esc##g") <(normal <"$tmp/b.$s") >"$tmp/d"; then
         echo "DIFFERS  $name step $i ($s):"; cat "$tmp/d"; failed=1
       fi
     done

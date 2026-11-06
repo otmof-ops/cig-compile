@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 pub struct Job {
     /// The script on disk.
     pub script: PathBuf,
-    /// The script's path as the program records it: as it was given, so a
-    /// runtime error points where `cig run` with the same path would.
+    /// The script's path as it was given: what the compiler says, as `cig
+    /// run` with the same path would. A program records only the file's
+    /// name (`build::recorded_file`, #9).
     pub file: String,
     /// The program's name.
     pub name: String,

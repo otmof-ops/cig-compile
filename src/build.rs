@@ -159,6 +159,7 @@ pub fn build(
             &runtime.path.to_string_lossy(),
             &format!("{:?}", runtime.id),
             &job.file,
+            &recorded_file(job),
             &job.name,
             &hex::encode(Sha256::digest(source.as_bytes())),
         ]);

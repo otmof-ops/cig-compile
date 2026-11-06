@@ -39,6 +39,7 @@ A checksum fetched beside the asset would prove nothing against a tampered relea
 
 - **Where programs go.** One script builds to `./<name>`; a folder builds to `<folder>/bin/<name>`, and `<folder>/bin/<target>/` for another machine. `-o` says otherwise.
 - **The write.** A program is written beside its place and renamed over it, so a build that stops halfway leaves the old program or none.
+- **Clean.** It removes a file at one of a build's output paths only when that file is a program made from a script of the same name.
 - **No-op rebuilds.** A rebuild that changes nothing touches nothing, not even the time, and takes about a millisecond: the build index in `<cig home>/cache/compile` remembers what each program was built from.
 - **Reproducible.** The same script, compiler and runtime give the same bytes on any machine.
   - A program records its script's file name, never the path it was built from, and no time.
