@@ -11,7 +11,7 @@ Phase one compiles CigScript as it is. The interpreter is the reference: a compi
 
 ## How it works (stage A)
 
-A program is the `cig` binary of the version this compiler pins, with the checked script appended. At start-up, `cig` finds the script at its own end and runs it through the same run as `cig run`. The payload format and the program's command line are in CigScript's [docs/PROGRAMS.md](https://github.com/otmof-ops/CigScript/blob/main/docs/PROGRAMS.md). Why this is the first stage, and what comes after it (a bytecode VM, then Cranelift), is in [docs/decisions/0001-backend.md](docs/decisions/0001-backend.md).
+A program is the `cig` binary of the version this compiler pins, with the checked script appended. At start-up, `cig` finds the script at its own end and runs it through the same run as `cig run`. The payload format and the program's command line are in CigScript's [docs/PROGRAMS.md](https://github.com/otmof-ops/cig-script/blob/main/docs/PROGRAMS.md). Why this is the first stage, and what comes after it (a bytecode VM, then Cranelift), is in [docs/decisions/0001-backend.md](docs/decisions/0001-backend.md).
 
 The runtime is built here, with the compiler: `cig-runtime` is `cig` of the pinned CigScript version, installed beside `cigcompile`. A program built with no `--runtime` uses the first of these:
 1. `--runtime`, or `CIGCOMPILE_RUNTIME`;
