@@ -210,15 +210,23 @@ fn a_folder_builds_every_script_into_bin_and_clean_takes_only_those_out() {
     s.write("proj/b.cig", "exhale \"b\"\n");
     s.write("proj/bin/keep.txt", "not ours");
     let out = ok(&s.cc(&["build", "proj"]));
+    // The path as the platform writes it: proj\a.cig on Windows.
+    let sep = std::path::MAIN_SEPARATOR;
     assert!(
-        out.contains("proj/a.cig") && out.contains("proj/b.cig"),
+        out.contains(&format!("proj{sep}a.cig")) && out.contains(&format!("proj{sep}b.cig")),
         "{out}"
     );
     let a = format!("proj/bin/{}", exe_name("a"));
     assert_eq!(text(&s.prog(&a, &[]).stdout), "a\n");
     // The program says where it came from, as compiled.
     let info = text(&s.prog(&a, &["--cig-program", "--json"]).stdout);
-    assert!(info.contains("\"file\":\"proj/a.cig\""), "{info}");
+    assert!(
+        info.contains(&format!(
+            "\"file\":{}",
+            serde_json::to_string(&format!("proj{sep}a.cig")).unwrap()
+        )),
+        "{info}"
+    );
     ok(&s.cc(&["clean", "proj"]));
     assert!(!s.path().join(&a).exists());
     assert!(
