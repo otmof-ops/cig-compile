@@ -59,7 +59,7 @@ cargo test                     # unit and end-to-end tests
 CIGSCRIPT_SRC=../CigScript cargo test --release --test differential   # the differential suite
 ```
 
-The differential suite reads its scripts from a CigScript checkout of the pinned version: the examples, the error corpus, `tests/scripts`, and the `cig` fences in the docs. It runs each under `cig run` and as a program, in a real run, a dry run, and with `--json` and `--plain`. It fails on any difference in output, exit code, the files left behind, or a real run's journal.
+The differential suite reads its scripts from a CigScript checkout of the pinned version: the examples, the error corpus, `tests/scripts`, and the `cig` fences in the docs. It runs each under `cig run` and as a program, in a real run, a dry run, and with `--json` and `--plain`. It fails on any difference in output, exit code, the files left behind, or a real run's journal. It also holds every explain page a program shows to `cig explain`'s, in each output mode, and CI runs CigScript's portability probe twice, through cig and with every script built into a program (`ci/cig-compiled.sh`), and fails if any scenario differs.
 
 ## Fuzzing
 

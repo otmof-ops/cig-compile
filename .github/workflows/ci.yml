@@ -105,6 +105,47 @@ jobs:
           echo "five machines built the same six programs, byte for byte:"
           cat "$first"
 
+  # #7: CigScript's portability probe (the kernel's promises, one scenario
+  # each), run twice: through cig, then with every script built into a
+  # program (ci/cig-compiled.sh). Every scenario must say the same.
+  probe:
+    name: the portability probe, compiled (${{ matrix.os }}) (#7)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: the pinned CigScript
+        shell: bash
+        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: otmof-ops/cig-script
+          ref: ${{ env.CIGSCRIPT_REF }}
+          path: cigscript-src
+      - run: cargo build --release
+      - name: interpreted, then compiled
+        shell: bash
+        run: |
+          rt="$PWD/target/release/cig-runtime"
+          cc="$PWD/target/release/cigcompile"
+          probe=cigscript-src/tests/portability/probe.sh
+          CIG="$rt" bash "$probe" > interpreted.txt 2>&1 || true
+          CIG="$PWD/ci/cig-compiled.sh" CIG_REAL="$rt" CIGCOMPILE="$cc" CIG_PROGRAMS="$RUNNER_TEMP/progs" \
+            bash "$probe" > compiled.txt 2>&1 || true
+          cat compiled.txt
+          # Each scenario's verdict and name; the detail after them is the
+          # last output, which may name a program where cig names a script.
+          grep -E '^(PASS|FAIL|SKIP) ' interpreted.txt | cut -c1-51 > a.txt
+          grep -E '^(PASS|FAIL|SKIP) ' compiled.txt | cut -c1-51 > b.txt
+          n=$(wc -l < a.txt)
+          [ "$n" -ge 30 ] || { echo "the probe ran $n scenarios"; cat interpreted.txt; exit 1; }
+          diff -u a.txt b.txt
+          echo "all $n scenarios say the same compiled as interpreted"
+
   nothing-installed:
     name: nothing installed (#5)
     runs-on: ubuntu-latest
