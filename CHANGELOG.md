@@ -36,6 +36,11 @@ byte, through the same kernel, journal, plan and rollback.
   only the programs a build of this path wrote (#28). **`cigcompile
   targets`**, **`fetch`** and **`bench`** list the machines, keep their
   runtimes, and measure the stage A budgets (#14).
+- **The benchmark programme** (#30). `cigcompile bench` runs 19 benchmarks
+  interpreted and compiled. Each output is checked first, then medians,
+  spreads, the CV and peak memory are reported; `--ref` adds Python, Node
+  and Rust references with the ratios, and `--markdown` and `--json` are
+  the other formats. docs/BENCHMARKS.md has the set and the stage A numbers.
 - **CIR** (#3): an IR where every effect is a structural `burn.op`, with a
   verifier (rules V1 to V10) and a transition check after every pass.
 - **The differential suite** (#7). It runs every script CigScript carries
