@@ -33,6 +33,20 @@ pub struct Built {
 }
 
 fn read_script(ctx: &Ctx, job: &Job) -> Result<String, i32> {
+    // A program records its script's name and prints it; cig refuses to run
+    // one whose name holds a control or invisible character (E1050), so
+    // none is made (otmof-ops/cig-script#137).
+    let recorded = recorded_file(job);
+    if !cigscript::program::printable(&recorded) {
+        let d = usage(format!(
+            "{}: the script's name holds a control or invisible character, and a program prints the name it was compiled from",
+            recorded.escape_debug()
+        ))
+        .code("E1009")
+        .with_hint("rename the script to a name that shows as it is, then build again");
+        cigscript::cli::report(ctx, &d, None, None);
+        return Err(exit::USAGE);
+    }
     std::fs::read_to_string(&job.script).map_err(|e| {
         let d = usage(format!("cannot read {}: {e}", job.file))
             .code("E1000")

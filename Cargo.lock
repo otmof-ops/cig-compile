@@ -405,7 +405,7 @@ dependencies = [
 
 [[package]]
 name = "cigcompile"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cigscript",
  "clap",
@@ -421,8 +421,8 @@ dependencies = [
 
 [[package]]
 name = "cigscript"
-version = "1.15.1"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.15.1#6d96b06052540ef294484ca890ed7258bb16f24e"
+version = "1.16.0"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.16.0#3691e6f345301bf043021121c506191d1a91e97c"
 dependencies = [
  "argon2",
  "chacha20poly1305",
