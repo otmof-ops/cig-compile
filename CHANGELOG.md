@@ -3,6 +3,14 @@
 All notable changes to CigCompile. The format follows Keep a Changelog; the
 project follows semantic versioning.
 
+## 0.1.2 — 2026-11-07
+
+- **Programs for cig 1.16.1.** Its box makes the forwarder's listener
+  before the hop starts, so a program's hop in the registry network that
+  connects at once reaches the forwarder instead of being refused (a
+  compiled program's forwarder is the program itself, and slower to start
+  than `cig`).
+
 ## 0.1.1 — 2026-11-07
 
 - **Programs for cig 1.16.0.** Its box records a refused connection before
