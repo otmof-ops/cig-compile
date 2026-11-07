@@ -38,9 +38,11 @@ jobs:
         with:
           repository: otmof-ops/cig-orchestrator
           path: cigo-src
+      # 100 generated programs ride along, from a fixed seed so a pull
+      # request's run repeats; differential-random.yml takes a new seed nightly.
       - name: the differential suite (#7)
         shell: bash
-        run: CIGSCRIPT_SRC="$PWD/cigscript-src" cargo test --release --test differential
+        run: DIFF_RANDOM=1:100 CIGSCRIPT_SRC="$PWD/cigscript-src" cargo test --release --test differential
       - name: the budgets stage A can meet (#14)
         shell: bash
         run: cargo run --release --bin cigcompile -- bench --runs 3 --budgets --orchestrate cigo-src/orchestrate.cig

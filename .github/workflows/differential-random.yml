@@ -1,0 +1,98 @@
+name: differential-random
+
+# #7: every night a thousand programs nobody wrote run under cig and as
+# programs, from a new seed each night, on three systems that share it. A
+# program that differs is shrunk to its smallest form and printed with its
+# seed: DIFF_RANDOM=<seed>:1 DIFF_FILTER=random/ replays it.
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+    inputs:
+      count:
+        description: programs to run
+        default: "1000"
+
+permissions:
+  contents: read
+
+jobs:
+  random:
+    name: random programs, on ${{ matrix.os }} (#7)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: the pinned CigScript
+        shell: bash
+        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: otmof-ops/cig-script
+          ref: ${{ env.CIGSCRIPT_REF }}
+          path: cigscript-src
+      - name: tonight's programs
+        shell: bash
+        env:
+          DIFF_FILTER: random/
+          DIFF_RANDOM: ${{ github.run_id }}:${{ inputs.count || '1000' }}
+        run: |
+          set -o pipefail
+          CIGSCRIPT_SRC="$PWD/cigscript-src" cargo test --release --test differential 2>&1 | tee "differential-${{ matrix.os }}.log"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: differential-${{ matrix.os }}
+          path: differential-${{ matrix.os }}.log
+  # A difference is filed with its smallest program: one issue, and each
+  # later night that still finds one comments on it instead of opening more.
+  file:
+    name: file what differed (#7)
+    needs: random
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: logs
+          merge-multiple: true
+      - name: one issue, or a comment on the open one
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          shopt -s nullglob
+          found=0
+          {
+            echo "Tonight's generated programs (#7) found a difference: $RUN"
+            echo
+            # shellcheck disable=SC2016 # the backticks are Markdown
+            echo 'Replay one with `DIFF_RANDOM=<seed>:1 DIFF_FILTER=random/ CIGSCRIPT_SRC=<checkout> cargo test --release --test differential`.'
+            for log in logs/*.log; do
+              grep -q 'the smallest program that differs' "$log" || continue
+              found=1
+              os=${log#logs/differential-}
+              echo
+              echo "### ${os%.log}"
+              echo
+              echo '```'
+              sed -n '/the smallest program that differs/,/^$/p' "$log" | head -150
+              sed -n '/^differential:/,$p' "$log" | grep -v '^  skipped' | head -60
+              echo '```'
+            done
+          } > body.md
+          if [ "$found" != 1 ]; then echo "the run failed without a difference: $RUN"; exit 1; fi
+          open=$(gh issue list --state open --search 'in:title "A generated program differs"' --json number -q '.[0].number')
+          if [ -n "$open" ]; then gh issue comment "$open" --body-file body.md
+          else gh issue create --title "A generated program differs from cig run" --body-file body.md
+          fi
