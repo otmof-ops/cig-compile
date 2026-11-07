@@ -11,7 +11,7 @@ SPDX-FileCopyrightText = "2026 Jay Taylor (https://github.com/otmof-ops/cig-comp
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = ["docs/**", "README.md", "CONTRIBUTING.md", "SECURITY.md", "TRADEMARKS.md", "THIRD-PARTY-NOTICES.md", "NOTICE"]
+path = ["docs/**", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "TRADEMARKS.md", "THIRD-PARTY-NOTICES.md", "NOTICE"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)"
 SPDX-License-Identifier = "CC-BY-4.0"

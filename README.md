@@ -9,6 +9,21 @@ cigcompile build tools/tidy-downloads.cig      # -> ./tidy-downloads
 
 Phase one compiles CigScript as it is. The interpreter is the reference: a compiled program must do exactly what `cig run` does, byte for byte, with the same burns, plan, journal, rollback and errors. The differential suite proves it on every script CigScript carries.
 
+## Install
+
+Each release has an asset for every machine cig is released for, with its sha256 and a build provenance attestation:
+
+```sh
+v=v0.1.0 asset=linux-x86_64     # or linux-aarch64, linux-arm, macos-aarch64, macos-x86_64, freebsd-x86_64
+base=https://github.com/otmof-ops/cig-compile/releases/download/$v
+curl -LO "$base/cigcompile-$v-$asset" -LO "$base/cigcompile-$v-$asset.sha256"
+sha256sum -c "cigcompile-$v-$asset.sha256"                       # shasum -a 256 -c on macOS
+gh attestation verify "cigcompile-$v-$asset" -R otmof-ops/cig-compile
+install -m 755 "cigcompile-$v-$asset" ~/.local/bin/cigcompile
+```
+
+On Windows the assets are `cigcompile-v0.1.0-windows-x86_64.exe` and `-windows-aarch64.exe`. The compiler needs nothing else: the first build for a machine fetches cig's release for it, once, and holds it to the sha256 this compiler was built knowing. `cigcompile fetch --all` does that ahead of time, for a machine that builds offline. The `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES.md` and the SBOM (`cigcompile-v0.1.0.cdx.json`) are beside the assets.
+
 ## How it works (stage A)
 
 A program is the `cig` binary of the version this compiler pins, with the checked script appended. At start-up, `cig` finds the script at its own end and runs it through the same run as `cig run`. The payload format and the program's command line are in CigScript's [docs/PROGRAMS.md](https://github.com/otmof-ops/cig-script/blob/main/docs/PROGRAMS.md). Why this is the first stage, and what comes after it (a bytecode VM, then Cranelift), is in [docs/decisions/0001-backend.md](docs/decisions/0001-backend.md).
