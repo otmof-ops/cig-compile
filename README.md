@@ -14,7 +14,7 @@ Phase one compiles CigScript as it is. The interpreter is the reference: a compi
 Each release has an asset for every machine cig is released for, with its sha256 and a build provenance attestation:
 
 ```sh
-v=v0.1.1 asset=linux-x86_64     # or linux-aarch64, linux-arm, macos-aarch64, macos-x86_64, freebsd-x86_64
+v=v0.1.2 asset=linux-x86_64     # or linux-aarch64, linux-arm, macos-aarch64, macos-x86_64, freebsd-x86_64
 base=https://github.com/otmof-ops/cig-compile/releases/download/$v
 curl -LO "$base/cigcompile-$v-$asset" -LO "$base/cigcompile-$v-$asset.sha256"
 sha256sum -c "cigcompile-$v-$asset.sha256"                       # shasum -a 256 -c on macOS
@@ -22,7 +22,7 @@ gh attestation verify "cigcompile-$v-$asset" -R otmof-ops/cig-compile
 install -m 755 "cigcompile-$v-$asset" ~/.local/bin/cigcompile
 ```
 
-On Windows the assets are `cigcompile-v0.1.1-windows-x86_64.exe` and `-windows-aarch64.exe`. The compiler needs nothing else: the first build for a machine fetches cig's release for it, once, and holds it to the sha256 this compiler was built knowing. `cigcompile fetch --all` does that ahead of time, for a machine that builds offline. The `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES.md` and the SBOM (`cigcompile-v0.1.1.cdx.json`) are beside the assets.
+On Windows the assets are `cigcompile-v0.1.2-windows-x86_64.exe` and `-windows-aarch64.exe`. The compiler needs nothing else: the first build for a machine fetches cig's release for it, once, and holds it to the sha256 this compiler was built knowing. `cigcompile fetch --all` does that ahead of time, for a machine that builds offline. The `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES.md` and the SBOM (`cigcompile-v0.1.2.cdx.json`) are beside the assets.
 
 ## How it works (stage A)
 
