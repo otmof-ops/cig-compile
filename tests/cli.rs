@@ -498,3 +498,60 @@ fn the_markdown_bench_report_renders() {
         "{v}"
     );
 }
+
+/// The machine a glibc build of these tests is on, as the build says it.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn gnu_triple() -> String {
+    format!("{}-unknown-linux-gnu", std::env::consts::ARCH)
+}
+
+/// A runtime given by hand that links glibc still builds, and the build
+/// says what its programs need (#27). A glibc build's cig-runtime is one.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_dynamic_runtime_given_by_hand_warns_and_says_gnu() {
+    let s = Sandbox::new();
+    s.write("x.cig", "exhale 1\n");
+    let o = s.cc(&["build", "x.cig"]);
+    let (out, err) = (text(&o.stdout), text(&o.stderr));
+    assert!(o.status.success(), "{err}");
+    assert!(
+        out.contains(&format!("for {} (glibc ", gnu_triple())),
+        "{out}"
+    );
+    assert!(
+        err.contains("warning: ") && err.contains("dynamically linked"),
+        "{err}"
+    );
+    let o = s.cc(&["build", "--json", "x.cig"]);
+    let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
+    assert_eq!(v["target"], gnu_triple());
+    assert!(v["needs"].as_str().unwrap().starts_with("glibc "), "{v}");
+    assert!(text(&o.stderr).is_empty(), "json says it in the record");
+}
+
+/// A dynamically linked cig found here is passed over for a static Linux
+/// target; with nothing else here and no fetching, the build is refused
+/// with E1008 and writes nothing (#27).
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_dynamic_runtime_found_here_is_passed_over_and_offline_refuses() {
+    let s = Sandbox::new();
+    s.write("x.cig", "exhale 1\n");
+    let mut c = Command::new(env!("CARGO_BIN_EXE_cigcompile"));
+    s.env(&mut c);
+    let o = c
+        .env_remove("CIGCOMPILE_RUNTIME")
+        .env("PATH", s.path())
+        .args(["build", "x.cig"])
+        .output()
+        .unwrap();
+    let err = text(&o.stderr);
+    assert_eq!(o.status.code(), Some(3), "{err}");
+    assert!(
+        err.contains("E1008") && err.contains("needs glibc"),
+        "{err}"
+    );
+    assert!(err.contains("cigcompile fetch"), "{err}");
+    assert!(!s.exe("x").exists(), "a program was written");
+}

@@ -45,6 +45,10 @@ jobs:
         run: DIFF_RANDOM=1:100 CIGSCRIPT_SRC="$PWD/cigscript-src" cargo test --release --test differential
       - name: the budgets stage A can meet (#14)
         shell: bash
+        # On Linux the runtime built here links glibc, so cig's static
+        # release is fetched and measured (#27).
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: cargo run --release --bin cigcompile -- bench --runs 3 --budgets --orchestrate cigo-src/orchestrate.cig
   # #9: the same inputs give the same bytes on every machine. Each runner
   # builds one script for all six machines, by a path of its own, with
@@ -128,12 +132,23 @@ jobs:
           repository: otmof-ops/cig-script
           ref: ${{ env.CIGSCRIPT_REF }}
           path: cigscript-src
-      - run: cargo build --release
+      # A static runtime on Linux, as cig's release is (#27).
+      - name: build
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            rustup target add x86_64-unknown-linux-musl
+            cargo build --release --target x86_64-unknown-linux-musl
+            echo "BIN=$PWD/target/x86_64-unknown-linux-musl/release" >> "$GITHUB_ENV"
+          else
+            cargo build --release
+            echo "BIN=$PWD/target/release" >> "$GITHUB_ENV"
+          fi
       - name: interpreted, then compiled
         shell: bash
         run: |
-          rt="$PWD/target/release/cig-runtime"
-          cc="$PWD/target/release/cigcompile"
+          rt="$BIN/cig-runtime"
+          cc="$BIN/cigcompile"
           probe=cigscript-src/tests/portability/probe.sh
           CIG="$rt" bash "$probe" > interpreted.txt 2>&1 || true
           CIG="$PWD/ci/cig-compiled.sh" CIG_REAL="$rt" CIGCOMPILE="$cc" CIG_PROGRAMS="$RUNNER_TEMP/progs" \
@@ -147,6 +162,33 @@ jobs:
           [ "$n" -ge 30 ] || { echo "the probe ran $n scenarios"; cat interpreted.txt; exit 1; }
           diff -u a.txt b.txt
           echo "all $n scenarios say the same compiled as interpreted"
+
+  # #27: a plain cargo build links this machine's glibc, and its programs
+  # must not. Built here with no runtime given, a program is static and runs
+  # in Debian 12 and Alpine, whose glibc is older or absent.
+  portable:
+    name: a source build's programs run on any Linux (#27)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: build with no runtime given, then run in debian:12 and alpine
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf 'exhale "hello from a program"\n' > hello.cig
+          ./target/release/cigcompile build hello.cig -o hello | tee build.txt
+          grep -q 'for x86_64-unknown-linux-musl)' build.txt
+          file hello
+          if file hello | grep -q 'dynamically linked'; then echo "the program is dynamically linked"; exit 1; fi
+          for image in debian:12 alpine:3.20; do
+            out=$(docker run --rm -e CIG_SEAL_KEY=file -v "$PWD:/w" -w /w "$image" ./hello)
+            echo "$image: $out"
+            [ "$out" = "hello from a program" ]
+          done
 
   nothing-installed:
     name: nothing installed (#5)

@@ -42,6 +42,16 @@ fn no(why: String, hint: String) -> Diagnostic {
     usage(why).code("E1001").with_hint(hint)
 }
 
+/// The kept copy of `t`'s runtime, when its sha256 is the pinned one.
+pub fn kept(t: &Target) -> Option<PathBuf> {
+    if !t.parts.is_empty() {
+        return None;
+    }
+    let want = crate::digests::of(&asset_file(t))?;
+    let dest = cache_path(t);
+    (sha256_file(&dest).as_deref() == Some(want)).then_some(dest)
+}
+
 /// The runtime for `t`: the kept copy when its sha256 is the pinned one,
 /// else fetched, checked against the pin, and kept.
 pub fn fetch(t: &Target, say: bool) -> Result<PathBuf, Diagnostic> {

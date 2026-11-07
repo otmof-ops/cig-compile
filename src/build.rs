@@ -224,7 +224,8 @@ fn say(ctx: &Ctx, b: &Built, target: &Target, runtime: &Runtime) {
                 "script": b.job.file,
                 "program": b.job.out.to_string_lossy(),
                 "name": b.job.name,
-                "target": target.triple,
+                "target": crate::runtime::triple_of(target, runtime),
+                "needs": runtime.needs.as_ref().filter(|_| crate::runtime::wants_static(target)),
                 "runtime": {"path": runtime.path.to_string_lossy(), "cig": runtime.version},
                 "bytes": b.bytes,
                 "sha256": b.sha256,
@@ -240,7 +241,7 @@ fn say(ctx: &Ctx, b: &Built, target: &Target, runtime: &Runtime) {
             b.job.file,
             b.job.out.display(),
             runtime.version,
-            target.triple
+            crate::runtime::label(target, runtime)
         );
     } else {
         println!("up to date: {} ({size})", b.job.out.display());
