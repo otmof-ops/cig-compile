@@ -1,0 +1,179 @@
+name: release
+
+# A tag `vX.Y.Z` publishes cigcompile for every machine cig is released for:
+# each asset with its sha256 and a build attestation, beside the licence
+# files, the third-party notices and a CycloneDX SBOM (#10). The notes are
+# CHANGELOG.md's section for the version. The compiler ships alone: a build
+# with no runtime here uses cig's own release for the machine, held to the
+# sha256 pinned in src/digests.rs, so builds of one script agree everywhere
+# (#9). A pull request that changes this file, or a run by hand, builds the
+# whole matrix and publishes nothing.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # First, and once: the release with its notes, the licence files, the
+  # notices and the SBOM. The builds then add their assets to it, so no two
+  # jobs ever write one asset at once.
+  notices:
+    name: release (notes, licence files and SBOM)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: the notes (CHANGELOG.md's section for this version)
+        shell: bash
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v h="## $v " 'index($0 " ", h) == 1 {on = 1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] && ! grep -q . notes.md; then
+            echo "CHANGELOG.md has no section for $v"
+            exit 1
+          fi
+          cat notes.md
+      - name: the SBOM (CycloneDX, every crate compiled in, with its hash and licence)
+        shell: bash
+        run: |
+          cargo install cargo-cyclonedx --locked
+          cargo cyclonedx --format json --spec-version 1.5 --target all --override-filename cigcompile.cdx
+          name="cigcompile-${GITHUB_REF_NAME//\//-}.cdx.json"
+          mv cigcompile.cdx.json "$name"
+          python3 -c "import json, sys; d = json.load(open(sys.argv[1])); print(len(d['components']), 'components')" "$name"
+      - name: keep them (a dry run)
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: cigcompile-notices
+          path: |
+            notes.md
+            cigcompile-*.cdx.json
+      - name: attest the SBOM
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: cigcompile-${{ github.ref_name }}.cdx.json
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          body_path: notes.md
+          files: |
+            LICENSE
+            NOTICE
+            THIRD-PARTY-NOTICES.md
+            cigcompile-*.cdx.json
+
+  build:
+    name: release (${{ matrix.target }})
+    needs: notices
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # The asset names follow cig's own (otmof-ops/cig-script).
+        include:
+          - { os: ubuntu-latest,    target: x86_64-unknown-linux-musl,      asset: linux-x86_64,    ext: "",     tool: cargo }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl,     asset: linux-aarch64,   ext: "",     tool: cargo }
+          - { os: ubuntu-latest,    target: armv7-unknown-linux-musleabihf, asset: linux-arm,       ext: "",     tool: cross }
+          - { os: macos-latest,     target: aarch64-apple-darwin,           asset: macos-aarch64,   ext: "",     tool: cargo }
+          - { os: macos-15-intel,   target: x86_64-apple-darwin,            asset: macos-x86_64,    ext: "",     tool: cargo }
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc,         asset: windows-x86_64,  ext: ".exe", tool: cargo }
+          - { os: windows-11-arm,   target: aarch64-pc-windows-msvc,        asset: windows-aarch64, ext: ".exe", tool: cargo }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: cross, for a target this runner cannot link itself
+        if: matrix.tool == 'cross'
+        run: cargo install cross --locked
+      - run: ${{ matrix.tool }} build --release --bin cigcompile --target ${{ matrix.target }}
+      - name: name and checksum the asset
+        shell: bash
+        run: |
+          ref="${GITHUB_REF_NAME//\//-}"
+          name="cigcompile-${ref}-${{ matrix.asset }}${{ matrix.ext }}"
+          cp "target/${{ matrix.target }}/release/cigcompile${{ matrix.ext }}" "$name"
+          if command -v sha256sum >/dev/null; then sha256sum "$name" > "$name.sha256"; else shasum -a 256 "$name" > "$name.sha256"; fi
+          cat "$name.sha256"
+          file "$name" 2>/dev/null || true
+      - name: it runs, and says the cig it makes programs for
+        if: matrix.tool == 'cargo'
+        shell: bash
+        run: ./cigcompile-*-${{ matrix.asset }}${{ matrix.ext }} --version
+      - name: keep the build (a dry run)
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: cigcompile-${{ matrix.asset }}
+          path: cigcompile-*-${{ matrix.asset }}${{ matrix.ext }}*
+      - name: attest the build
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: cigcompile-${{ github.ref_name }}-${{ matrix.asset }}${{ matrix.ext }}
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: |
+            cigcompile-*-${{ matrix.asset }}${{ matrix.ext }}
+            cigcompile-*-${{ matrix.asset }}${{ matrix.ext }}.sha256
+
+  # FreeBSD has no hosted runner: a VM builds the asset natively. It must not
+  # hold the other assets back, so a failure here is reported, not fatal.
+  freebsd:
+    name: release (x86_64-unknown-freebsd)
+    needs: notices
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: build in a FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.3"
+          usesh: true
+          prepare: pkg install -y rust git
+          run: |
+            cargo build --release --bin cigcompile
+            ref="$(echo "${GITHUB_REF_NAME:-dispatch}" | tr / -)"
+            name="cigcompile-${ref}-freebsd-x86_64"
+            cp target/release/cigcompile "$name"
+            ./"$name" --version
+            sha256 -q "$name" | awk -v n="$name" '{print $1 "  " n}' > "$name.sha256"
+            cat "$name.sha256"
+      - name: keep the build (a dry run)
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: cigcompile-freebsd-x86_64
+          path: cigcompile-*-freebsd-x86_64*
+      - name: attest the build
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: cigcompile-${{ github.ref_name }}-freebsd-x86_64
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: |
+            cigcompile-*-freebsd-x86_64
+            cigcompile-*-freebsd-x86_64.sha256
