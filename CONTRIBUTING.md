@@ -17,6 +17,10 @@ differential suite and the budgets on five machines. A program that says or
 leaves anything other than what its script does under `cig run` fails the
 build.
 
+A generated program that differs (`DIFF_RANDOM`, see the README) prints its
+seed and its smallest form: `DIFF_RANDOM=<seed>:1 DIFF_FILTER=random/` replays
+it, and the smallest form belongs in the pull request that fixes it.
+
 ## Pull requests
 
 One subject per pull request, naming its issue (`Closes #9`), with the test

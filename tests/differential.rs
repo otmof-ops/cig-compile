@@ -11,6 +11,8 @@
 //! `DIFF_FILTER=<text>` runs only the cases whose name holds it.
 //! Without `CIGSCRIPT_SRC` the suite says so and passes: CI always sets it.
 
+#[path = "differential/gen.rs"]
+mod gen;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -130,6 +132,30 @@ fn main() {
     }
     if "explain pages".contains(filter.as_str()) {
         explain_pages(&tools, &mut tally);
+    }
+    // Random programs (#7): DIFF_RANDOM=<seed>:<count>. A program that
+    // differs is shrunk to the fewest statements that still differ.
+    if let Some((seed, count)) = std::env::var("DIFF_RANDOM").ok().and_then(|v| {
+        let (a, b) = v.split_once(':')?;
+        Some((a.parse::<u64>().ok()?, b.parse::<u64>().ok()?))
+    }) {
+        for k in 0..count {
+            let seed = seed.wrapping_add(k);
+            let stmts = gen::program(seed);
+            let case = random_case(seed, &stmts);
+            if !case.script.contains(&filter) {
+                continue;
+            }
+            let before = tally.failed.len();
+            run_case(&tools, &src, &case, &mut tally);
+            if tally.failed.len() > before {
+                let smallest = shrink(&tools, &src, seed, stmts);
+                println!(
+                    "the smallest program that differs, from seed {seed}:\n{}\n",
+                    smallest.join("\n")
+                );
+            }
+        }
     }
     println!(
         "\ndifferential: {} same, {} skipped, {} differ, in {:.0} s",
@@ -474,6 +500,38 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
     }
 }
 
+/// A generated program as a case: one real run, from a tree with `out/`.
+fn random_case(seed: u64, stmts: &[String]) -> Case {
+    let mut files = BTreeMap::new();
+    files.insert("out/.keep".to_string(), String::new());
+    Case {
+        script: format!("random/{seed}"),
+        inline: Some(format!("{}\n", stmts.join("\n"))),
+        files,
+        runs: vec![Run {
+            steps: vec![Step::default()],
+            modes: words(&["run"]),
+        }],
+        ..Case::default()
+    }
+}
+
+/// Drop statements, newest first, while the program still differs.
+fn shrink(tools: &Tools, src: &Path, seed: u64, mut stmts: Vec<String>) -> Vec<String> {
+    let mut k = stmts.len();
+    while k > 0 {
+        k -= 1;
+        let mut candidate = stmts.clone();
+        candidate.remove(k);
+        let mut t = Tally::default();
+        run_case(tools, src, &random_case(seed, &candidate), &mut t);
+        if !t.failed.is_empty() {
+            stmts = candidate;
+        }
+    }
+    stmts
+}
+
 /// Every explain page a program shows (`--explain E…`) is cig's, as text,
 /// `--plain` and `--json`: the pages CigScript pins in tests/golden come from
 /// the one registry, and a program carries it whole. The codes are the ones
@@ -714,6 +772,10 @@ fn journals(home: &Path, order: &[String]) -> String {
         // tree and the snapshots, where such times are normalized.
         mask_everywhere(&mut v, "fingerprint");
         mask_everywhere(&mut v, "sha256");
+        // A before-state's time is when a file the run wrote moments
+        // earlier was written: a process's own, like the run's (found by
+        // the random programs).
+        mask_everywhere(&mut v, "mtime_ns");
         normal(&v.to_string())
     };
     let mut out = Vec::new();
