@@ -128,6 +128,9 @@ fn main() {
     for case in &cases {
         run_case(&tools, &src, case, &mut tally);
     }
+    if "explain pages".contains(filter.as_str()) {
+        explain_pages(&tools, &mut tally);
+    }
     println!(
         "\ndifferential: {} same, {} skipped, {} differ, in {:.0} s",
         tally.passed,
@@ -468,6 +471,86 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
                 s
             });
         }
+    }
+}
+
+/// Every explain page a program shows (`--explain E…`) is cig's, as text,
+/// `--plain` and `--json`: the pages CigScript pins in tests/golden come from
+/// the one registry, and a program carries it whole. The codes are the ones
+/// `cig explain` lists.
+fn explain_pages(tools: &Tools, tally: &mut Tally) {
+    let sb = tempfile::tempdir().expect("tempdir");
+    let home = sb.path().join("home");
+    let script = sb.path().join("x.cig");
+    std::fs::write(&script, "exhale 1\n").expect("the script");
+    let prog = sb.path().join(format!("x{}", std::env::consts::EXE_SUFFIX));
+    let built = Command::new(&tools.cc)
+        .arg("build")
+        .arg(&script)
+        .arg("-o")
+        .arg(&prog)
+        .env("CIGCOMPILE_RUNTIME", &tools.cig)
+        .env("CIGCOMPILE_OFFLINE", "1")
+        .env("CIGSCRIPT_HOME", &home)
+        .output()
+        .expect("cigcompile");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let quiet = |c: &mut Command| {
+        c.env("NO_COLOR", "1")
+            .env("CIG_DOCTOR", "0")
+            .env("CIG_REPORTS", "never")
+            .env("CIG_SEAL_KEY", "file")
+            .env("CIGSCRIPT_HOME", &home)
+            .env_remove("CI")
+            .stdin(Stdio::null());
+    };
+    let mut index = Command::new(&tools.cig);
+    quiet(&mut index);
+    let index = index.arg("explain").output().expect("cig explain");
+    let code_re = regex::Regex::new(r"(?m)^\s+(E\d{3,4})\s").expect("a literal pattern");
+    let codes: Vec<String> = code_re
+        .captures_iter(&String::from_utf8_lossy(&index.stdout))
+        .map(|c| c[1].to_string())
+        .collect();
+    assert!(
+        codes.len() >= 100,
+        "cig explain listed {} codes",
+        codes.len()
+    );
+    for mode in [&[][..], &["--plain"][..], &["--json"][..]] {
+        let mut differ = Vec::new();
+        for code in &codes {
+            let mut a = Command::new(&tools.cig);
+            quiet(&mut a);
+            let a = a
+                .arg("explain")
+                .args(mode)
+                .arg(code)
+                .output()
+                .expect("cig explain");
+            let mut b = Command::new(&prog);
+            quiet(&mut b);
+            let b = b
+                .args(mode)
+                .args(["--explain", code])
+                .output()
+                .expect("the program");
+            if a.status.code() != b.status.code() || a.stdout != b.stdout || a.stderr != b.stderr {
+                differ.push(code.clone());
+            }
+        }
+        let name = format!(
+            "explain pages ({} codes{})",
+            codes.len(),
+            mode.first().map(|m| format!(", {m}")).unwrap_or_default()
+        );
+        report(tally, &name, differ.is_empty(), || {
+            format!("a program's --explain differs from cig explain for {differ:?}")
+        });
     }
 }
 
