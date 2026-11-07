@@ -269,7 +269,7 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 
 | crate | version | holder | source |
 |---|---|---|---|
-| cigscript | 1.15.0 | unrecorded | https://github.com/otmof-ops/CigScript |
+| cigscript | 1.15.1 | unrecorded | https://github.com/otmof-ops/cig-script |
 
 ## Apache-2.0 OR LGPL-2.1-or-later OR MIT
 
