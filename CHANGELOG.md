@@ -3,6 +3,17 @@
 All notable changes to CigCompile. The format follows Keep a Changelog; the
 project follows semantic versioning.
 
+## 0.1.1 — 2026-11-07
+
+- **Programs for cig 1.16.0.** Its box records a refused connection before
+  it answers it, so a program's hop that is refused is always said; run
+  records can be pruned after every run (`keep_runs`, `keep_days`); and
+  `verify_sample` checks objects from the whole tin after every burn.
+- **A script whose name is not printable is refused** (E1009), before
+  anything is written. cig refuses to run a program whose record holds a
+  control or invisible character (otmof-ops/cig-script#137), and such a
+  name can show on a terminal as another.
+
 ## 0.1.0 — 2026-11-07
 
 Stage A: CigScript compiled into programs that run with nothing installed.

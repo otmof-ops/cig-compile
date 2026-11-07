@@ -555,3 +555,23 @@ fn a_dynamic_runtime_found_here_is_passed_over_and_offline_refuses() {
     assert!(err.contains("cigcompile fetch"), "{err}");
     assert!(!s.exe("x").exists(), "a program was written");
 }
+
+/// A script whose name holds an invisible character is refused before
+/// anything is written (E1009): cig would refuse to run the program
+/// (otmof-ops/cig-script#137), and the name shows as another.
+#[cfg(unix)]
+#[test]
+fn a_script_whose_name_is_not_printable_is_refused() {
+    let s = Sandbox::new();
+    let name = "tidy\u{202e}gpj.cig";
+    s.write(name, "exhale 1\n");
+    let o = s.cc(&["build", name, "-o", "tidy"]);
+    let err = text(&o.stderr);
+    assert_eq!(o.status.code(), Some(3), "{err}");
+    assert!(err.contains("E1009"), "{err}");
+    assert!(
+        err.contains("\\u{202e}"),
+        "the name is shown escaped: {err}"
+    );
+    assert!(!s.path().join("tidy").exists(), "a program was written");
+}
