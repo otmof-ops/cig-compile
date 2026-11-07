@@ -126,6 +126,23 @@ impl Index {
         self.changed = true;
     }
 
+    /// The sha256 of the program this cigcompile last wrote at `out`.
+    pub fn written(&self, out: &Path) -> Option<String> {
+        self.doc["programs"][absolute(out).to_string_lossy().as_ref()]["sha256"]
+            .as_str()
+            .map(str::to_string)
+    }
+
+    /// `out` was taken out: nothing is recorded there any more.
+    pub fn forget_program(&mut self, out: &Path) {
+        let key = absolute(out).to_string_lossy().to_string();
+        if let Some(m) = self.doc["programs"].as_object_mut() {
+            if m.remove(&key).is_some() {
+                self.changed = true;
+            }
+        }
+    }
+
     /// Written whole, beside itself, then renamed: never half an index.
     pub fn save(&self) {
         if !self.changed {

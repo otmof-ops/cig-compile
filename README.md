@@ -34,7 +34,7 @@ A checksum fetched beside the asset would prove nothing against a tampered relea
 |---|---|
 | `cigcompile build [path] [-o out] [--target T] [--runtime cig] [--check]` | checks a script (or every `.cig` at the top of a folder) the way `cig check` does, then writes each as a program |
 | `cigcompile test [path]` | builds, then runs each program and its script with `--dry-run` and compares them: the plan, the output and the exit |
-| `cigcompile clean [path]` | removes the programs a build of this path wrote, and nothing else |
+| `cigcompile clean [path]` | removes the programs a build of this path wrote, and nothing else: a program there whose bytes are the ones the build index recorded. One of the same name from somewhere else is kept and named; `--force` removes it anyway |
 | `cigcompile targets` | the machines cig is released for, and the runtime found for this one |
 | `cigcompile fetch [--target T] [--all]` | fetches the runtime for other machines ahead of a build |
 | `cigcompile bench [--runs N] [--budgets]` | the benchmark set, interpreted and compiled, and the budgets from #14 |

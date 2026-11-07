@@ -116,6 +116,10 @@ struct CleanArgs {
     /// The target the build was for.
     #[arg(long)]
     target: Option<String>,
+    /// Remove a program compiled from a script of this name even when this
+    /// cigcompile did not write it there (a build index that was cleared).
+    #[arg(long)]
+    force: bool,
 }
 
 fn main() {
@@ -288,12 +292,39 @@ fn clean(ctx: &Ctx, a: &CleanArgs) -> i32 {
         Ok(j) => j,
         Err(d) => return fail(d),
     };
+    // Only what a build of this path wrote is taken out (#28): a program at
+    // the path whose bytes are the ones the build index recorded there. A
+    // program of the same name from somewhere else is kept, and named.
+    let mut index = cache::Index::load();
     for job in &jobs {
-        let ours = std::fs::File::open(&job.out)
+        let Some(program) = std::fs::File::open(&job.out)
             .ok()
             .and_then(|mut f| cigscript::program::read(&mut f).ok().flatten())
-            .is_some_and(|p| p.file == build::recorded_file(job));
-        if ours {
+            .filter(|p| p.file == build::recorded_file(job))
+        else {
+            continue;
+        };
+        let sha256 = std::fs::read(&job.out)
+            .map(|b| hex::encode(<sha2::Sha256 as sha2::Digest>::digest(b)))
+            .unwrap_or_default();
+        let ours = index.written(&job.out).as_deref() == Some(sha256.as_str());
+        if !ours && !a.force {
+            let why = format!(
+                "a program, but not one this cigcompile wrote there (compiled from {}, sha256 {}...)",
+                program.file,
+                &sha256[..sha256.len().min(12)]
+            );
+            if ctx.json {
+                println!(
+                    "{}",
+                    serde_json::json!({"kept": job.out.to_string_lossy(), "why": why})
+                );
+            } else {
+                println!("kept {}: {why}; --force removes it", job.out.display());
+            }
+            continue;
+        }
+        {
             if let Err(e) = std::fs::remove_file(&job.out) {
                 return fail(
                     cigscript::diagnostics::usage(format!(
@@ -304,6 +335,7 @@ fn clean(ctx: &Ctx, a: &CleanArgs) -> i32 {
                     .with_hint("check the folder's permissions"),
                 );
             }
+            index.forget_program(&job.out);
             if ctx.json {
                 println!(
                     "{}",
@@ -314,6 +346,7 @@ fn clean(ctx: &Ctx, a: &CleanArgs) -> i32 {
             }
         }
     }
+    index.save();
     exit::OK
 }
 
