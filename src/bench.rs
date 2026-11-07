@@ -373,12 +373,19 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
     }
 }
 
+/// Output as it is compared: line endings as Unix writes them, so a
+/// `.expect` file checked out with CRLF on Windows still says the same.
+fn lines(s: &str) -> String {
+    s.replace("\r\n", "\n")
+}
+
 /// A warm-up run whose output must be `expect`, then samples until `runs`
 /// or [`PER_SIDE`] (at least three, when there is time for them).
 fn sample(runs: usize, expect: &str, mut make: impl FnMut(usize) -> Command) -> Side {
+    let expect = &lines(expect);
     match measure(&mut make(0)) {
         Err(e) => return Side::Wrong(e),
-        Ok(m) if m.stdout != expect => {
+        Ok(m) if lines(&m.stdout) != *expect => {
             return Side::Wrong(format!(
                 "printed {:?}, not {:?}",
                 clip(&m.stdout),
@@ -395,7 +402,7 @@ fn sample(runs: usize, expect: &str, mut make: impl FnMut(usize) -> Command) -> 
             break;
         }
         match measure(&mut make(i)) {
-            Ok(m) if m.stdout == expect => {
+            Ok(m) if lines(&m.stdout) == *expect => {
                 ms.push(m.ms);
                 rss = rss.max(m.rss);
             }
