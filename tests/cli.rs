@@ -411,3 +411,52 @@ fn a_runtime_known_here_is_still_refused_for_another_machine() {
         assert!(!s.path().join("y").exists(), "{t}: a program was written");
     }
 }
+
+/// What clean takes out is what a build of this path wrote there (#28). A
+/// program of the same name, built in another folder and copied here, is
+/// kept and named, unless --force.
+#[test]
+fn clean_keeps_a_program_built_elsewhere_unless_forced() {
+    let s = Sandbox::new();
+    s.write("other/tidy.cig", "exhale \"a different tidy\"\n");
+    s.write("cl/tidy.cig", "exhale \"this tidy\"\n");
+    let run = |dir: &str, args: &[&str]| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_cigcompile"));
+        s.env(&mut c);
+        c.current_dir(s.path().join(dir))
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    ok(&run("other", &["build", "tidy.cig"]));
+    let from = s.path().join("other").join(exe_name("tidy"));
+    let here = s.path().join("cl").join(exe_name("tidy"));
+    fs::copy(&from, &here).unwrap();
+    let out = ok(&run("cl", &["clean", "tidy.cig"]));
+    assert!(out.contains("kept") && out.contains("--force"), "{out}");
+    assert!(here.exists(), "clean took a program it did not write");
+    let out = ok(&run("cl", &["clean", "--force", "tidy.cig"]));
+    assert!(out.contains("removed"), "{out}");
+    assert!(!here.exists());
+    // What this build wrote goes, and the copy it was made from stays.
+    ok(&run("cl", &["build", "tidy.cig"]));
+    let out = ok(&run("cl", &["clean", "tidy.cig"]));
+    assert!(out.contains("removed"), "{out}");
+    assert!(!here.exists());
+    assert!(from.exists());
+}
+
+/// With the build index gone, clean cannot tell what it wrote: it keeps the
+/// program and says --force (#28).
+#[test]
+fn clean_with_no_build_index_keeps_and_says_force() {
+    let s = Sandbox::new();
+    s.write("t.cig", "exhale 1\n");
+    ok(&s.cc(&["build", "t.cig"]));
+    fs::remove_file(s.path().join("home/cache/compile/index.json")).unwrap();
+    let out = ok(&s.cc(&["clean", "t.cig"]));
+    assert!(out.contains("kept") && out.contains("--force"), "{out}");
+    assert!(s.exe("t").exists());
+    let v = text(&s.cc(&["clean", "--json", "t.cig"]).stdout);
+    assert!(v.contains("\"kept\""), "{v}");
+}
