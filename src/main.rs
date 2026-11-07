@@ -243,7 +243,27 @@ fn build_cmd(
     let rt = found.map_err(fail)?;
     let built = build::build(ctx, &jobs, target, Some(&rt), &mut index);
     index.save();
-    Ok(Some((built?, rt)))
+    let built = built?;
+    warn_linkage(ctx, target, &rt);
+    Ok(Some((built, rt)))
+}
+
+/// A runtime given by hand that links this machine's glibc makes programs
+/// that start only where that glibc is: built, and said so (#27).
+fn warn_linkage(ctx: &Ctx, target: &runtime::Target, rt: &runtime::Runtime) {
+    let Some(needs) = rt.needs.as_ref().filter(|_| runtime::wants_static(target)) else {
+        return;
+    };
+    if !ctx.json {
+        eprint!(
+            "{}",
+            ctx.yellow(&format!(
+                "warning: {} is dynamically linked, so its programs need {needs} to start and will not run on most Linux machines; cig's release for {} needs nothing (build without --runtime, or cigcompile fetch first)\n",
+                rt.path.display(),
+                target.triple
+            ))
+        );
+    }
 }
 
 /// `--emit=cir`: each script's IR, lowered, through the default passes
@@ -408,7 +428,8 @@ fn fetch_cmd(ctx: &Ctx, a: &FetchArgs) -> i32 {
 fn targets(ctx: &Ctx) -> i32 {
     let host = runtime::host();
     let mut index = cache::Index::load();
-    let here = runtime::find(host, None, &mut index).ok();
+    // What a build here would use, without fetching anything to say so.
+    let here = runtime::find_with(host, None, &mut index, false);
     index.save();
     for t in runtime::TARGETS {
         let this = t.triple == host.triple;
@@ -419,14 +440,18 @@ fn targets(ctx: &Ctx) -> i32 {
                     "triple": t.triple,
                     "asset": t.asset,
                     "this_machine": this,
-                    "runtime": if this { here.as_ref().map(|r| r.path.to_string_lossy().to_string()) } else { None },
+                    "runtime": if this { here.as_ref().ok().map(|r| r.path.to_string_lossy().to_string()) } else { None },
                 })
             );
         } else {
             let note = match (this, &here) {
-                (true, Some(r)) => format!("  this machine; runtime {}", r.path.display()),
-                (true, None) => {
-                    "  this machine; no runtime found (cigcompile build says why)".to_string()
+                (true, Ok(r)) => format!("  this machine; runtime {}", r.path.display()),
+                (true, Err(d)) if d.code == "E1008" => format!(
+                    "  this machine; {}: a build fetches cig's static release (cigcompile fetch)",
+                    d.message
+                ),
+                (true, Err(_)) => {
+                    "  this machine; no runtime kept here (cigcompile build fetches cig's release, or says why)".to_string()
                 }
                 _ => String::new(),
             };

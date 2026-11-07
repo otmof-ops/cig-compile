@@ -79,20 +79,35 @@ impl Index {
         }
     }
 
-    /// The version a runtime was found to be, when it is unchanged since.
-    /// The version of the runtime at `path`, when it is unchanged and was
-    /// checked as the runtime for `triple`: a check for one machine says
-    /// nothing about another's.
-    pub fn runtime_version(&self, path: &Path, id: &FileId, triple: &str) -> Option<String> {
+    /// The version of the runtime at `path`, and what its programs need
+    /// from a machine ([`crate::runtime::needs_of`]), when it is unchanged
+    /// and was checked as the runtime for `triple`: a check for one machine
+    /// says nothing about another's. A record from before linkage was
+    /// noted (#27) is checked again.
+    pub fn runtime_version(
+        &self,
+        path: &Path,
+        id: &FileId,
+        triple: &str,
+    ) -> Option<(String, Option<String>)> {
         let e = &self.doc["runtimes"][path.to_string_lossy().as_ref()];
-        (FileId::from_json(&e["id"]).as_ref() == Some(id) && e["for"].as_str() == Some(triple))
-            .then(|| e["version"].as_str().map(str::to_string))
-            .flatten()
+        if FileId::from_json(&e["id"]).as_ref() != Some(id) || e["for"].as_str() != Some(triple) {
+            return None;
+        }
+        let needs = e.get("needs")?.as_str().map(str::to_string);
+        Some((e["version"].as_str()?.to_string(), needs))
     }
 
-    pub fn note_runtime(&mut self, path: &Path, id: &FileId, version: &str, triple: &str) {
+    pub fn note_runtime(
+        &mut self,
+        path: &Path,
+        id: &FileId,
+        version: &str,
+        triple: &str,
+        needs: Option<&str>,
+    ) {
         self.doc["runtimes"][path.to_string_lossy().as_ref()] =
-            json!({"id": id.to_json(), "version": version, "for": triple});
+            json!({"id": id.to_json(), "version": version, "for": triple, "needs": needs});
         self.changed = true;
     }
 

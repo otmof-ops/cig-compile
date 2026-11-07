@@ -31,7 +31,10 @@ A program is the `cig` binary of the version this compiler pins, with the checke
 The runtime is built here, with the compiler: `cig-runtime` is `cig` of the pinned CigScript version, installed beside `cigcompile`. A program built with no `--runtime` uses the first of these:
 1. `--runtime`, or `CIGCOMPILE_RUNTIME`;
 2. `cig-runtime` beside `cigcompile`;
-3. a `cig` of the same version on `PATH`, or in the humidor.
+3. a `cig` of the same version on `PATH`, or in the humidor;
+4. cig's own release for this machine, fetched once and held to the sha256 this compiler pins.
+
+A Linux program runs anywhere because its runtime is static, as cig's Linux releases are. A runtime found in steps 2 and 3 that is dynamically linked would tie its programs to this machine's glibc, so it is passed over for step 4. With step 4 out of reach (offline, `CIGCOMPILE_OFFLINE=1`) the build is refused with `E1008`. A dynamically linked runtime given in step 1 is used: the build warns, and says what the program needs (`for x86_64-unknown-linux-gnu (glibc 2.39)`).
 
 ## Other machines
 
@@ -73,6 +76,8 @@ cargo build --release          # target/release/cigcompile and target/release/ci
 cargo test                     # unit and end-to-end tests
 CIGSCRIPT_SRC=../CigScript cargo test --release --test differential   # the differential suite
 ```
+
+On Linux a plain `cargo build` links `cigcompile` and `cig-runtime` to this machine's glibc. That is fine for the compiler; its programs fetch cig's static release instead (`cigcompile fetch` does it ahead of time). For a `cig-runtime` that is static itself, build for this machine's musl target: `cargo build --release --target x86_64-unknown-linux-musl`.
 
 The differential suite reads its scripts from a CigScript checkout of the pinned version: the examples, the error corpus, `tests/scripts`, and the `cig` fences in the docs. It runs each under `cig run` and as a program, in a real run, a dry run, and with `--json` and `--plain`. It fails on any difference in output, exit code, the files left behind, or a real run's journal. It also holds every explain page a program shows to `cig explain`'s, in each output mode, and CI runs CigScript's portability probe twice, through cig and with every script built into a program (`ci/cig-compiled.sh`), and fails if any scenario differs.
 
