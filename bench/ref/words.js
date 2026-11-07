@@ -1,0 +1,1 @@
+const parts=[];for(let i=0;i<40000;i++)parts.push("w"+((i*7919)%997));const c=new Map();for(const w of parts.join(" ").split(" "))c.set(w,(c.get(w)||0)+1);let best="",bn=0;for(const [w,n] of c)if(n>bn||(n==bn&&w<best)){best=w;bn=n}console.log(c.size,best,bn);

@@ -1,0 +1,1 @@
+fn main(){let (w,h)=(160i64,160i64);let mut inside=0;for y in 0..h{for x in 0..w{let cr=2.0*x as f64/w as f64-1.5;let ci=2.0*y as f64/h as f64-1.0;let(mut zr,mut zi)=(0.0f64,0.0f64);let mut k=0;let mut esc=false;while k<50&&!esc{let t=zr*zr-zi*zi+cr;zi=2.0*zr*zi+ci;zr=t;if zr*zr+zi*zi>4.0{esc=true}k+=1}if !esc{inside+=1}}}println!("{}",inside)}

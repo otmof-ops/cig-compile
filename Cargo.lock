@@ -410,6 +410,7 @@ dependencies = [
  "cigscript",
  "clap",
  "hex",
+ "libc",
  "regex",
  "serde",
  "serde_json",

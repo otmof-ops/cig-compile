@@ -71,9 +71,20 @@ struct FetchArgs {
 
 #[derive(Args)]
 struct BenchArgs {
-    /// Runs per program and side; the median counts.
-    #[arg(long, default_value_t = 5)]
+    /// The most samples per program and side, after a warm-up run (a side
+    /// stops sooner once it has three and has run three seconds).
+    #[arg(long, default_value_t = 10)]
     runs: usize,
+    /// Run the Python, Node and Rust references too, where they are installed.
+    #[arg(long = "ref")]
+    refs: bool,
+    /// A Markdown table, for a pull request comment.
+    #[arg(long)]
+    markdown: bool,
+    /// Benchmarks from this folder (`<name>.cig` beside `<name>.expect`)
+    /// instead of the set.
+    #[arg(long, value_name = "DIR")]
+    set: Option<PathBuf>,
     /// The cig to build and run with (default: as build finds it).
     #[arg(long)]
     runtime: Option<PathBuf>,
@@ -189,9 +200,14 @@ fn run() -> i32 {
                 Ok(rt) => bench::bench(
                     &ctx,
                     &rt,
-                    a.runs.max(1),
-                    a.budgets,
-                    bench::path(&a.orchestrate),
+                    &bench::Opts {
+                        runs: a.runs.max(1),
+                        budgets: a.budgets,
+                        orchestrate: bench::path(&a.orchestrate),
+                        refs: a.refs,
+                        markdown: a.markdown,
+                        set: a.set.as_deref(),
+                    },
                 ),
                 Err(d) => {
                     cigscript::cli::report(&ctx, &d, None, None);

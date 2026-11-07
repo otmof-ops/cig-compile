@@ -1,0 +1,34 @@
+name: bench
+
+# #30: every night the whole set runs interpreted, compiled, and as its
+# Python, Node and Rust references, and the table goes to the run's summary.
+# A benchmark whose output is wrong fails the run before it is timed.
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: the set against its references
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: cargo build --release
+      - name: bench --ref
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          ./target/release/cigcompile bench --ref --markdown | tee -a "$GITHUB_STEP_SUMMARY"

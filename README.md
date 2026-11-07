@@ -52,7 +52,7 @@ A checksum fetched beside the asset would prove nothing against a tampered relea
 | `cigcompile clean [path]` | removes the programs a build of this path wrote, and nothing else: a program there whose bytes are the ones the build index recorded. One of the same name from somewhere else is kept and named; `--force` removes it anyway |
 | `cigcompile targets` | the machines cig is released for, and the runtime found for this one |
 | `cigcompile fetch [--target T] [--all]` | fetches the runtime for other machines ahead of a build |
-| `cigcompile bench [--runs N] [--budgets]` | the benchmark set, interpreted and compiled, and the budgets from #14 |
+| `cigcompile bench [--runs N] [--budgets] [--ref] [--markdown]` | the benchmark set ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)), interpreted and compiled: each output checked first, then medians, spreads and peak memory; `--ref` adds the Python, Node and Rust references, and the budgets are #14's |
 
 - **Where programs go.** One script builds to `./<name>`; a folder builds to `<folder>/bin/<name>`, and `<folder>/bin/<target>/` for another machine. `-o` says otherwise.
 - **The write.** A program is written beside its place and renamed over it, so a build that stops halfway leaves the old program or none.

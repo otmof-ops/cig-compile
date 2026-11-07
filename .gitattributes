@@ -2,3 +2,5 @@
 # golden files in tests/cir): LF in every checkout, Windows included.
 *.cig text eol=lf
 *.cir text eol=lf
+*.expect text eol=lf
+bench/ref/* text eol=lf
