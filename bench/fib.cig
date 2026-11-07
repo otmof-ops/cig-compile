@@ -5,4 +5,4 @@ pull fib(n) {
   }
   snuff fib(n - 1) + fib(n - 2)
 }
-exhale fib(21)
+exhale fib(25)

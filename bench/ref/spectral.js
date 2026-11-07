@@ -1,0 +1,2 @@
+const a=(i,j)=>1/((i+j)*(i+j+1)/2+i+1);const mav=(v,n)=>{const o=[];for(let i=0;i<n;i++){let s=0;for(let j=0;j<n;j++)s+=a(i,j)*v[j];o.push(s)}return o};const matv=(v,n)=>{const o=[];for(let i=0;i<n;i++){let s=0;for(let j=0;j<n;j++)s+=a(j,i)*v[j];o.push(s)}return o};
+const n=100;let u=Array(n).fill(1),v;for(let k=0;k<10;k++){v=matv(mav(u,n),n);u=matv(mav(v,n),n)}let a1=0,b1=0;for(let i=0;i<n;i++){a1+=u[i]*v[i];b1+=v[i]*v[i]}console.log(Math.round(Math.sqrt(a1/b1)*1e9)/1e9);

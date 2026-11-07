@@ -1,0 +1,1 @@
+const w=160,h=160;let inside=0;for(let y=0;y<h;y++)for(let x=0;x<w;x++){const cr=2*x/w-1.5,ci=2*y/h-1;let zr=0,zi=0,k=0,esc=false;while(k<50&&!esc){const t=zr*zr-zi*zi+cr;zi=2*zr*zi+ci;zr=t;if(zr*zr+zi*zi>4)esc=true;k++}if(!esc)inside++}console.log(inside);

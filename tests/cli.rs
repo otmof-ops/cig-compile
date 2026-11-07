@@ -460,3 +460,41 @@ fn clean_with_no_build_index_keeps_and_says_force() {
     let v = text(&s.cc(&["clean", "--json", "t.cig"]).stdout);
     assert!(v.contains("\"kept\""), "{v}");
 }
+
+/// A benchmark whose output is not its `.expect` file is WRONG and gets no
+/// time: a fast wrong answer is a bug, not a result (#30).
+#[test]
+fn a_wrong_benchmark_output_fails_before_it_is_timed() {
+    let s = Sandbox::new();
+    s.write("set/x.cig", "exhale 0\n");
+    s.write("set/x.expect", "1\n");
+    let o = s.cc(&["bench", "--set", "set", "--runs", "2"]);
+    let (out, err) = (text(&o.stdout), text(&o.stderr));
+    assert_eq!(o.status.code(), Some(1), "{out}{err}");
+    let row = out
+        .lines()
+        .find(|l| l.starts_with("x "))
+        .unwrap_or_default();
+    assert!(row.contains("WRONG"), "{out}");
+    assert!(err.contains("x (interpreted) is WRONG"), "{err}");
+}
+
+/// The report for a pull request comment is a Markdown table (#30).
+#[test]
+fn the_markdown_bench_report_renders() {
+    let s = Sandbox::new();
+    s.write("set/one.cig", "exhale 1\n");
+    s.write("set/one.expect", "1\n");
+    let out = ok(&s.cc(&["bench", "--set", "set", "--runs", "2", "--markdown"]));
+    assert!(out.contains("| benchmark | stresses |"), "{out}");
+    assert!(out.contains("| `one` |"), "{out}");
+    assert!(out.contains("| budget (#14) |"), "{out}");
+    let v: serde_json::Value =
+        serde_json::from_str(ok(&s.cc(&["bench", "--set", "set", "--runs", "2", "--json"])).trim())
+            .unwrap();
+    assert_eq!(v["programs"][0]["name"], "one");
+    assert!(
+        v["programs"][0]["interpreted"]["median_ms"].is_number(),
+        "{v}"
+    );
+}
