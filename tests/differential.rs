@@ -133,6 +133,14 @@ fn main() {
     if "explain pages".contains(filter.as_str()) {
         explain_pages(&tools, &mut tally);
     }
+    // The edges a seed rarely reaches (#39), by hand: float bits, i64's
+    // edges and their overflows, text past ASCII.
+    for (name, text) in gen::edges() {
+        let case = edge_case(name, &text);
+        if case.script.contains(&filter) {
+            run_case(&tools, &src, &case, &mut tally);
+        }
+    }
     // Random programs (#7): DIFF_RANDOM=<seed>:<count>. A program that
     // differs is shrunk to the fewest statements that still differ.
     if let Some((seed, count)) = std::env::var("DIFF_RANDOM").ok().and_then(|v| {
@@ -511,6 +519,19 @@ fn random_case(seed: u64, stmts: &[String]) -> Case {
         runs: vec![Run {
             steps: vec![Step::default()],
             modes: words(&["run"]),
+        }],
+        ..Case::default()
+    }
+}
+
+/// A hand-written edge program as a case: a real run, and its `--json`.
+fn edge_case(name: &str, text: &str) -> Case {
+    Case {
+        script: format!("edge/{name}"),
+        inline: Some(text.to_string()),
+        runs: vec![Run {
+            steps: vec![Step::default()],
+            modes: words(&["run", "json"]),
         }],
         ..Case::default()
     }
