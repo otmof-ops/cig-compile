@@ -3,8 +3,73 @@
 All notable changes to CigCompile. The format follows Keep a Changelog; the
 project follows semantic versioning.
 
-## Unreleased
+## 0.2.0 — 2026-11-08
 
+Programs for cig 1.18.0, checked, signed and read back for their
+hardening; images and packages of them; two more passes; and the tools
+the rest of the roadmap builds on.
+
+- **Programs for cig 1.18.0.** The pinned runtime is cig 1.18.0's release:
+  a faster interpreter (scopes and range loops, 10% to 40% on the
+  benchmark set), `--seal-key-fd` and the rest of its tin, and a program
+  puts back a stretch of its own runs with `--unburn-last N`,
+  `--unburn-since AGE` and `--unburn-to <run>` (cig-script's notes for
+  1.17.0 and 1.18.0 say it all).
+- **CigScript's burn tests, run on compiled programs** (#6). A `burns` job
+  on Linux and macOS runs cig-script's own pack, hop and wall suites, and
+  the tin, seal, ledger, box, unburn and journal tests of its CLI suite,
+  with every `cig run` building the script with this cigcompile and
+  running the program. Skipped are the tests whose subject is the
+  interpreter's own command line (a pinned script handed to another cig,
+  a crash report's argv, golden text naming `cig run`).
+- **`cigcompile verify <program>`** (#40) checks a program is what a build
+  makes, part by part, and runs nothing: the runtime against the sha256 of
+  cig's release assets this compiler pins (or a cig given with
+  `--runtime`), the payload against its trailer and record (and the
+  script, with `--script`), and the whole file against the bytes a build
+  of those parts writes. Each part is `ok`, `DIFFERS` or `unchecked`; the
+  exit is 1 when one differs.
+- **`cigcompile audit <program>`** (#40) reads the hardening a program
+  carries from its headers: ELF's PIE, RELRO, a stack that is not
+  executable, CET or BTI and PAC; Mach-O's PIE, stack and code signature,
+  each slice of a universal one; PE's ASLR, NX, Control Flow Guard and
+  Authenticode signature. It only reports: the exit is 0 whatever it
+  finds, and `--json` gives each part.
+- **`build --sbom`** (#40) writes a CycloneDX 1.5 file beside each program,
+  naming its runtime (cig's release asset, by version and sha256) and its
+  script, with no time and no build path in it.
+- **`build --timings[=trace.json]`** (#37) tables where a build's time went,
+  phase by phase, and writes a Chrome trace on request.
+- **`build --watch`** (#37) builds, then builds again each time a script
+  is saved, until it is stopped.
+- **`build --emit oci`** (#41) writes beside the program an OCI image of
+  it, `<program>.oci.tar`: a scratch image of one file, the program, as
+  its entrypoint, for Linux targets. `docker load -i` or `podman load -i`
+  it, then run `localhost/<name>:latest`. Every time in it is zero and
+  every owner root, so the same build writes the same bytes.
+- **`build --json-progress`** (#12) says each step as it happens, one JSON
+  object a line on stderr: the data the window will read.
+- **`--emit cir` takes `-O0`, `-O1` and `-O2`, `--passes a,b,c` and
+  `--passes-diff`** (#33): the passes by level or by name, in order, and a
+  unified diff of what each one changed.
+- **`cigcompile reduce <script>`** (#33, #39) cuts a script down to the
+  smallest one that is still interesting, for a bug report: by default,
+  that its program differs from it; with a command after `--`, that the
+  command exits 0 on the candidate. Every candidate still passes `cig
+  check`.
+- **`cigcompile targets`** (#41) says each machine's stage, how CI proves
+  its programs (run on its own runner, or built and not run), and what a
+  program there lacks (the box is Linux's).
+- **The differential suite reaches further** (#39): floats, the edges of
+  i64 and their overflows, text past ASCII, closures made in loops, and
+  values leaving through `finally`; three edge programs written by hand run
+  in every suite, and 3,000 seeds are checked to make only programs `cig
+  check` accepts.
+- **Metamorphic tests** (#39): a generated program and variants of it that
+  must mean the same (its variables renamed, its integer constants split
+  into sums, dead declarations between its statements) must print the same
+  and exit the same. At stage A that holds the interpreter to it; a later
+  stage's programs will be held to it too.
 - **`build --sign <key>` and `verify --signature <sig>`** (#10). A build
   with `--sign` writes a detached SSH signature of every program it made,
   `<program>.sig`, made with `ssh-keygen -Y sign` and the namespace
@@ -31,7 +96,25 @@ project follows semantic versioning.
   `sccp` leaves a dead branch alone when emptying it would delete an
   effect (T3 catches that shape). Golden and negative tests sit under
   `tests/cir/copy-prop/` and `tests/cir/sccp/`.
-
+- **`--emit cir-opt`, `--remarks` and `cigcompile bench <script>`** (#38).
+  `--emit cir-opt` names the IR after the passes (at stage A it reads as
+  `--emit cir`, so stage B can split them without a new flag). `--remarks`
+  says on stderr what each pass did or left alone, a summary a pass and a
+  line per change with its place, JSON lines with `--json`; a pass with no
+  remarks of its own is said as having changed the IR or not.
+  `cigcompile bench <script>` times one script, interpreted against
+  compiled, through the same statistics as the benchmark set.
+- **`build --emit deb`** (#41) writes beside a Linux program a `.deb` that
+  installs it to `/usr/bin/<name>`: ar, tar and gzip, every time zero and
+  every owner root, so the same build writes the same bytes; `--pkg-version`,
+  `--pkg-maintainer` and `--pkg-description` fill its control file, and the
+  architecture comes from the target. **`cigcompile package --brew` or
+  `--scoop`** writes a Homebrew formula or a Scoop manifest for a release's
+  assets, from flags or a JSON manifest.
+- **Determinism checks and a real-world corpus** (#39): 34 float cases whose
+  output IEEE-754 decides and 10 map insertion-order cases, each compared
+  byte for byte between `cig run` and the compiled program; cig-orchestrator's
+  scripts run in the differential suite at entry points that touch nothing.
 
 ## 0.1.2 — 2026-11-07
 
