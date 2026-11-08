@@ -44,6 +44,41 @@ pub fn emit(source: &str, file: &str) -> Result<(String, Vec<VerifyError>), Emit
     Ok((print::print(&m), warnings))
 }
 
+/// What `--emit=cir` printed, with what each pass changed when asked.
+pub struct Emitted {
+    pub text: String,
+    pub warnings: Vec<VerifyError>,
+    /// Each pass in the order it ran, with a unified diff of the printed
+    /// IR before and after it, or `None` where it changed nothing.
+    pub diffs: Vec<(&'static str, Option<String>)>,
+}
+
+/// Lower, run `passes` (each between the verifier's checks), print. With
+/// `diffs`, the printed IR is compared before and after every pass.
+pub fn emit_with(
+    source: &str,
+    file: &str,
+    passes: &[&dyn pass::Pass],
+    diffs: bool,
+) -> Result<Emitted, EmitError> {
+    let mut m = lower_source(source, file).map_err(EmitError::Lower)?;
+    let mut changed = Vec::new();
+    let mut warnings = pass::run_passes(&mut m, &[]).map_err(EmitError::Verify)?;
+    for p in passes {
+        let before = diffs.then(|| print::print(&m));
+        warnings = pass::run_passes(&mut m, &[*p]).map_err(EmitError::Verify)?;
+        if let Some(before) = before {
+            let after = print::print(&m);
+            changed.push((p.name(), crate::diff::unified(&before, &after, 2)));
+        }
+    }
+    Ok(Emitted {
+        text: print::print(&m),
+        warnings,
+        diffs: changed,
+    })
+}
+
 #[derive(Debug)]
 pub enum EmitError {
     Lower(LowerError),

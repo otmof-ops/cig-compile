@@ -50,9 +50,31 @@ pub fn run_passes(m: &mut Module, passes: &[&dyn Pass]) -> Result<Vec<VerifyErro
     Ok(warnings)
 }
 
-/// The passes `--emit=cir` runs.
+/// The passes `--emit=cir` runs: `-O1`.
 pub fn default_passes() -> Vec<&'static dyn Pass> {
-    vec![&FoldConsts, &DeadPure]
+    level(1)
+}
+
+/// Every pass `--passes` can name, in the order the levels run them.
+pub const NAMES: &[&str] = &["fold-consts", "dead-pure"];
+
+/// A pass by the name `--passes` gives it.
+pub fn by_name(name: &str) -> Option<&'static dyn Pass> {
+    match name {
+        "fold-consts" => Some(&FoldConsts),
+        "dead-pure" => Some(&DeadPure),
+        _ => None,
+    }
+}
+
+/// The passes an optimisation level runs. `-O0` is lowering only; `-O1`
+/// and `-O2` run every pass there is: stage B's passes (sccp, gvn, licm,
+/// inlining) are what will set `-O2` apart (#33).
+pub fn level(n: u8) -> Vec<&'static dyn Pass> {
+    match n {
+        0 => vec![],
+        _ => vec![&FoldConsts, &DeadPure],
+    }
 }
 
 /// Folds a unary or binary operator over constants, only where the
