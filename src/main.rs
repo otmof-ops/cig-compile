@@ -566,6 +566,9 @@ fn targets(ctx: &Ctx) -> i32 {
                 serde_json::json!({
                     "triple": t.triple,
                     "asset": t.asset,
+                    "stage": runtime::STAGE,
+                    "ci": t.ci(),
+                    "missing": t.missing(),
                     "this_machine": this,
                     "runtime": if this { here.as_ref().ok().map(|r| r.path.to_string_lossy().to_string()) } else { None },
                 })
@@ -582,7 +585,15 @@ fn targets(ctx: &Ctx) -> i32 {
                 }
                 _ => String::new(),
             };
-            println!("{:<32} {:<16}{note}", t.triple, t.asset);
+            let line = format!(
+                "{:<32} {:<16} stage {}  {:<22} {:<20}{note}",
+                t.triple,
+                t.asset,
+                runtime::STAGE,
+                t.ci(),
+                t.missing()
+            );
+            println!("{}", line.trim_end());
         }
     }
     exit::OK
