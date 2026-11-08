@@ -12,6 +12,7 @@ mod digests;
 mod fat;
 mod fetch;
 mod project;
+mod reduce;
 mod runtime;
 mod test;
 
@@ -57,6 +58,23 @@ enum Command {
     Bench(BenchArgs),
     /// Fetch the runtime (cig's own release asset) for other machines, checked against the sha256 this compiler pins.
     Fetch(FetchArgs),
+    /// Cut a script down to the smallest one that is still interesting, for a bug report: by default, that its program differs from it (as `cigcompile test` finds); with a command after `--`, that the command exits 0 on it (`{}` is the candidate's path).
+    Reduce(ReduceArgs),
+}
+
+#[derive(Args)]
+struct ReduceArgs {
+    /// The script to reduce.
+    script: PathBuf,
+    /// Where the reduced script goes (default <name>.reduced.cig beside it).
+    #[arg(short, long)]
+    out: Option<PathBuf>,
+    /// The cig to build each candidate onto, when comparing (as build's --runtime).
+    #[arg(long)]
+    runtime: Option<PathBuf>,
+    /// The test: a command and its arguments, with {} for the candidate's path (else it goes last); interesting when it exits 0.
+    #[arg(last = true, value_name = "COMMAND")]
+    predicate: Vec<String>,
 }
 
 #[derive(Args)]
@@ -115,6 +133,15 @@ struct BuildArgs {
     /// Print what a stage of the compiler makes instead of a program: `cir`, the verified IR (#3).
     #[arg(long, value_name = "WHAT", value_parser = ["cir"])]
     emit: Option<String>,
+    /// The optimisation level: 0 (lowering only), 1 or 2 (every pass there is). Stage A programs carry the script, so the level shapes `--emit` until stage B.
+    #[arg(short = 'O', value_name = "LEVEL", value_parser = ["0", "1", "2"], conflicts_with = "passes")]
+    opt: Option<String>,
+    /// Run exactly these passes, in this order, for bisecting: a comma list of fold-consts, dead-pure.
+    #[arg(long, value_name = "A,B", value_delimiter = ',')]
+    passes: Option<Vec<String>>,
+    /// With --emit: after the IR, what each pass changed, as a unified diff of the printed IR.
+    #[arg(long, requires = "emit")]
+    passes_diff: bool,
 }
 
 #[derive(Args)]
@@ -192,6 +219,15 @@ fn run() -> i32 {
         Some(Command::Clean(a)) => clean(&ctx, &a),
         Some(Command::Targets) => targets(&ctx),
         Some(Command::Fetch(a)) => fetch_cmd(&ctx, &a),
+        Some(Command::Reduce(a)) => reduce::reduce(
+            &ctx,
+            &reduce::Opts {
+                script: &a.script,
+                out: a.out.as_deref(),
+                runtime: a.runtime.as_deref(),
+                predicate: &a.predicate,
+            },
+        ),
         Some(Command::Bench(a)) => {
             let mut index = cache::Index::load();
             let found = runtime::find(runtime::host(), a.runtime.as_deref(), &mut index);
@@ -229,8 +265,9 @@ fn build_cmd(
     };
     let target = runtime::target(a.target.as_deref()).map_err(fail)?;
     let jobs = project::jobs(a.path.as_deref(), a.out.as_deref(), target).map_err(fail)?;
+    let passes = passes_of(a).map_err(fail)?;
     if a.emit.is_some() {
-        emit_cir(ctx, &jobs)?;
+        emit_cir(ctx, &jobs, &passes, a.passes_diff)?;
         return Ok(None);
     }
     let mut index = cache::Index::load();
@@ -266,11 +303,41 @@ fn warn_linkage(ctx: &Ctx, target: &runtime::Target, rt: &runtime::Runtime) {
     }
 }
 
-/// `--emit=cir`: each script's IR, lowered, through the default passes
-/// and verified after each, printed. A script that does not check is said
-/// as `cig check` says it; a verifier failure is the compiler's bug.
-fn emit_cir(ctx: &Ctx, jobs: &[project::Job]) -> Result<(), i32> {
-    use cigcompile::cir::{emit, EmitError, LowerError};
+/// The passes `-O` or `--passes` asks for; `-O1` when neither is given.
+fn passes_of(
+    a: &BuildArgs,
+) -> Result<Vec<&'static dyn cigcompile::cir::pass::Pass>, cigscript::diagnostics::Diagnostic> {
+    use cigcompile::cir::pass;
+    if let Some(names) = &a.passes {
+        let mut out = Vec::new();
+        for n in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
+            match pass::by_name(n) {
+                Some(p) => out.push(p),
+                None => {
+                    return Err(
+                        cigscript::diagnostics::usage(format!("there is no pass `{n}`"))
+                            .with_hint(format!("the passes are {}", pass::NAMES.join(", "))),
+                    )
+                }
+            }
+        }
+        return Ok(out);
+    }
+    let level = a.opt.as_deref().unwrap_or("1").parse::<u8>().unwrap_or(1);
+    Ok(pass::level(level))
+}
+
+/// `--emit=cir`: each script's IR, lowered, through the passes asked for
+/// and verified after each, printed; with `--passes-diff`, what each pass
+/// changed. A script that does not check is said as `cig check` says it;
+/// a verifier failure is the compiler's bug.
+fn emit_cir(
+    ctx: &Ctx,
+    jobs: &[project::Job],
+    passes: &[&'static dyn cigcompile::cir::pass::Pass],
+    diffs: bool,
+) -> Result<(), i32> {
+    use cigcompile::cir::{emit_with, EmitError, LowerError};
     for job in jobs {
         let source = std::fs::read_to_string(&job.script).map_err(|e| {
             let d = cigscript::diagnostics::usage(format!("cannot read {}: {e}", job.file))
@@ -279,14 +346,23 @@ fn emit_cir(ctx: &Ctx, jobs: &[project::Job]) -> Result<(), i32> {
             cigscript::cli::report(ctx, &d, None, None);
             exit::USAGE
         })?;
-        match emit(&source, &job.file) {
-            Ok((text, warnings)) => {
+        match emit_with(&source, &job.file, passes, diffs) {
+            Ok(e) => {
                 // V6: an effectful pull called outside every burn, which
                 // the run refuses with E701.
-                for w in &warnings {
+                for w in &e.warnings {
                     eprintln!("{}: {w}", job.file);
                 }
-                print!("{text}")
+                print!("{}", e.text);
+                for (name, diff) in &e.diffs {
+                    match diff {
+                        Some(d) => print!(
+                            "--- {} before {name}\n+++ {} after {name}\n{d}",
+                            job.file, job.file
+                        ),
+                        None => println!("=== {name}: no change in {}", job.file),
+                    }
+                }
             }
             Err(EmitError::Lower(LowerError::Diagnostic(d))) => {
                 cigscript::cli::report(ctx, &d, Some(&job.file), Some(&source));

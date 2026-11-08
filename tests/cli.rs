@@ -575,3 +575,144 @@ fn a_script_whose_name_is_not_printable_is_refused() {
     );
     assert!(!s.path().join("tidy").exists(), "a program was written");
 }
+
+/// #33, #39: `reduce` cuts a script down to what its test needs, and every
+/// line it keeps still passes `cig check`. The test here is a CigScript
+/// script (it runs on every machine): interesting while the candidate
+/// still says "boom".
+#[test]
+fn reduction_keeps_the_interest_and_is_small() {
+    let s = Sandbox::new();
+    let noise: String = (0..12)
+        .map(|n| format!("roll v{n} = {n}\nexhale \"line {n}\"\n"))
+        .collect();
+    s.write(
+        "big.cig",
+        &format!(
+            "{noise}pull twice(x) {{\n  snuff x * 2\n}}\nif v3 < v7 {{\n  exhale \"boom\", twice(v3)\n}}\nexhale twice(v11)\n"
+        ),
+    );
+    s.write(
+        "boom.cig",
+        "if fs.read_text(args[0]).contains(\"boom\") {\n  exit(0)\n}\nexit(1)\n",
+    );
+    let before = fs::read_to_string(s.path().join("big.cig")).unwrap();
+    let out = ok(&s.cc(&["reduce", "big.cig", "--", RT, "run", "boom.cig", "--", "{}"]));
+    assert!(out.contains("reduced big.cig from 31 lines to"), "{out}");
+    let reduced = fs::read_to_string(s.path().join("big.reduced.cig")).unwrap();
+    assert!(reduced.contains("boom"), "{reduced}");
+    assert!(
+        reduced.lines().count() <= 8,
+        "not reduced far enough:\n{reduced}"
+    );
+    // What reduce promises: the result still passes cig check, and the
+    // test still holds on it (here, that it says "boom" somewhere).
+    ok(&s.cig(&["check", "big.reduced.cig"]));
+    // The original is untouched; a script that is not interesting to begin
+    // with is refused; one that does not check is said as cig check says.
+    assert_eq!(
+        fs::read_to_string(s.path().join("big.cig")).unwrap(),
+        before
+    );
+    s.write("calm.cig", "exhale \"calm\"\n");
+    let no = s.cc(&[
+        "reduce", "calm.cig", "--", RT, "run", "boom.cig", "--", "{}",
+    ]);
+    assert_eq!(no.status.code(), Some(3), "{}", text(&no.stderr));
+    assert!(
+        text(&no.stderr).contains("not interesting to begin with"),
+        "{}",
+        text(&no.stderr)
+    );
+    s.write("broken.cig", "exhale (\n");
+    let bad = s.cc(&[
+        "reduce",
+        "broken.cig",
+        "--",
+        RT,
+        "run",
+        "boom.cig",
+        "--",
+        "{}",
+    ]);
+    assert_eq!(bad.status.code(), Some(2), "{}", text(&bad.stderr));
+    // At stage A a program never differs from its script, so the default
+    // test finds nothing to reduce, and says so.
+    let same = s.cc(&["reduce", "calm.cig"]);
+    assert_eq!(same.status.code(), Some(3), "{}", text(&same.stderr));
+    assert!(
+        text(&same.stderr).contains("finds no difference"),
+        "{}",
+        text(&same.stderr)
+    );
+}
+
+/// #33: `-O0` is lowering only, `-O1` (the default) folds and prunes,
+/// `--passes` runs exactly the passes named, in order, and
+/// `--passes-diff` says what each one changed, and which changed nothing.
+#[test]
+fn levels_and_pass_lists_shape_the_emitted_ir() {
+    let s = Sandbox::new();
+    s.write("f.cig", "stick a = 2 + 3\nstick b = 7\nexhale a, b\n");
+    let o0 = ok(&s.cc(&["build", "f.cig", "--emit", "cir", "-O0"]));
+    assert!(o0.contains("bin +") && !o0.contains("const 5"), "{o0}");
+    let o1 = ok(&s.cc(&["build", "f.cig", "--emit", "cir"]));
+    assert!(!o1.contains("bin +") && o1.contains("const 5"), "{o1}");
+    assert!(
+        !o1.contains("const 2 "),
+        "dead-pure kept the folded operands: {o1}"
+    );
+    assert_eq!(ok(&s.cc(&["build", "f.cig", "--emit", "cir", "-O2"])), o1);
+    let fold_only = ok(&s.cc(&["build", "f.cig", "--emit", "cir", "--passes", "fold-consts"]));
+    assert!(
+        fold_only.contains("const 5") && fold_only.contains("const 2 "),
+        "{fold_only}"
+    );
+    let diffed = ok(&s.cc(&[
+        "build",
+        "f.cig",
+        "--emit",
+        "cir",
+        "--passes",
+        "dead-pure,fold-consts,dead-pure",
+        "--passes-diff",
+    ]));
+    assert!(
+        diffed.contains("=== dead-pure: no change in f.cig"),
+        "the first dead-pure has nothing to prune: {diffed}"
+    );
+    assert!(
+        diffed.contains("--- f.cig before fold-consts")
+            && diffed.contains("-  %2 = bin + %0, %1")
+            && diffed.contains("+  %2 = const 5"),
+        "{diffed}"
+    );
+    assert!(
+        diffed.contains("--- f.cig before dead-pure"),
+        "the second dead-pure prunes the folded operands: {diffed}"
+    );
+    let bad = s.cc(&["build", "f.cig", "--emit", "cir", "--passes", "inline"]);
+    assert_eq!(bad.status.code(), Some(3));
+    assert!(
+        text(&bad.stderr).contains("there is no pass `inline`")
+            && text(&bad.stderr).contains("fold-consts, dead-pure"),
+        "{}",
+        text(&bad.stderr)
+    );
+    let both = s.cc(&[
+        "build",
+        "f.cig",
+        "--emit",
+        "cir",
+        "-O1",
+        "--passes",
+        "dead-pure",
+    ]);
+    assert_eq!(both.status.code(), Some(3), "-O and --passes together");
+    let no_emit = s.cc(&["build", "f.cig", "--passes-diff"]);
+    assert_eq!(
+        no_emit.status.code(),
+        Some(3),
+        "--passes-diff without --emit"
+    );
+}
