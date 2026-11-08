@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-orchestrator)
+# SPDX-License-Identifier: Apache-2.0
+# Touches a marker outside the project, undone by its own compensation.
+pack { "./out" }
+stick flag = "../nested-cig-marker/flag"
+burn (s) {
+  s.flag = flag
+  proc.run("touch", [flag], {check: true})
+} unburn {
+  proc.run("rm", ["-f", s.flag], {check: true})
+}
+exhale "touched ${flag}"

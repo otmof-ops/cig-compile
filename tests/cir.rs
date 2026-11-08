@@ -380,7 +380,7 @@ fn golden_for_pass(sub: &str, name: &str, passes: &[&'static dyn Pass]) {
     let src =
         lf(std::fs::read_to_string(&cig).unwrap_or_else(|e| panic!("{}: {e}", cig.display())));
     let file = format!("{name}.cig");
-    let e = emit_with(&src, &file, passes, false).unwrap();
+    let e = emit_with(&src, &file, passes, false, false).unwrap();
     let golden = dir.join(format!("{name}.cir"));
     if std::env::var_os("CIR_UPDATE_GOLDEN").is_some() {
         std::fs::write(&golden, &e.text).unwrap();
