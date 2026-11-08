@@ -910,3 +910,93 @@ fn targets_say_the_stage_how_ci_proves_them_and_what_is_missing() {
     assert_eq!(freebsd["ci"], "built, not run");
     assert_eq!(freebsd["missing"], "no box (E777, E763)");
 }
+
+/// The files in a tar, by name: enough of ustar for an image's layout.
+fn untar(t: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut at = 0;
+    while at + 512 <= t.len() && t[at] != 0 {
+        let h = &t[at..at + 512];
+        let name = String::from_utf8_lossy(&h[..100])
+            .trim_end_matches('\0')
+            .to_string();
+        let size = usize::from_str_radix(
+            std::str::from_utf8(&h[124..135])
+                .unwrap()
+                .trim_matches(char::from(0)),
+            8,
+        )
+        .unwrap();
+        out.insert(name, t[at + 512..at + 512 + size].to_vec());
+        at += 512 + size.div_ceil(512) * 512;
+    }
+    out
+}
+
+/// #41: `--emit oci` writes, beside a Linux program, an OCI image layout
+/// whose one layer is the program itself: every digest names its blob, the
+/// entrypoint is the program, and a rebuild writes the same bytes. Off
+/// Linux it is refused, since the image is of a Linux program.
+#[test]
+fn emit_oci_writes_an_image_of_the_program() {
+    use sha2::Digest;
+    let s = Sandbox::new();
+    s.write("hi.cig", "exhale \"hi\"\n");
+    if !cfg!(target_os = "linux") {
+        let r = s.cc(&["build", "hi.cig", "--emit", "oci"]);
+        assert_eq!(r.status.code(), Some(3));
+        assert!(
+            text(&r.stderr).contains("an OCI image is of a Linux program"),
+            "{}",
+            text(&r.stderr)
+        );
+        return;
+    }
+    let out = ok(&s.cc(&["build", "hi.cig", "--emit", "oci"]));
+    assert!(out.contains("hi.oci.tar"), "{out}");
+    let image = fs::read(s.path().join("hi.oci.tar")).unwrap();
+    let files = untar(&image);
+    assert!(
+        files.contains_key("oci-layout") && files.contains_key("index.json"),
+        "{:?}",
+        files.keys()
+    );
+    let blob =
+        |d: &str| files[&format!("blobs/sha256/{}", d.trim_start_matches("sha256:"))].clone();
+    let check = |d: &str| {
+        let b = blob(d);
+        assert_eq!(
+            format!("sha256:{}", hex::encode(sha2::Sha256::digest(&b))),
+            d
+        );
+        b
+    };
+    let index: serde_json::Value = serde_json::from_slice(&files["index.json"]).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&check(index["manifests"][0]["digest"].as_str().unwrap())).unwrap();
+    let config: serde_json::Value =
+        serde_json::from_slice(&check(manifest["config"]["digest"].as_str().unwrap())).unwrap();
+    assert_eq!(config["os"], "linux");
+    assert_eq!(config["config"]["Entrypoint"][0], "/hi");
+    let layer = untar(&check(manifest["layers"][0]["digest"].as_str().unwrap()));
+    assert_eq!(
+        layer["hi"],
+        fs::read(s.path().join("hi")).unwrap(),
+        "the layer is the program"
+    );
+    // Docker's manifest names the same config and layer, and the tag.
+    let docker: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    assert_eq!(docker[0]["RepoTags"][0], "localhost/hi:latest");
+    for path in [
+        docker[0]["Config"].as_str().unwrap(),
+        docker[0]["Layers"][0].as_str().unwrap(),
+    ] {
+        assert!(files.contains_key(path), "{path} is not in the archive");
+    }
+    ok(&s.cc(&["build", "hi.cig", "--emit", "oci"]));
+    assert_eq!(
+        fs::read(s.path().join("hi.oci.tar")).unwrap(),
+        image,
+        "a rebuild wrote other bytes"
+    );
+}
