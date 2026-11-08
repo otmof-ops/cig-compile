@@ -943,6 +943,51 @@ fn audit_reads_a_programs_hardening() {
     assert_eq!(s.cc(&["audit", "plain.txt"]).status.code(), Some(3));
 }
 
+/// #37: `build --watch` builds, then builds again when the script is saved,
+/// until it is stopped.
+#[test]
+fn watch_rebuilds_on_save() {
+    let s = Sandbox::new();
+    s.write("w.cig", "exhale \"one\"\n");
+    let mut c = Command::new(env!("CARGO_BIN_EXE_cigcompile"));
+    s.env(&mut c);
+    let mut child = c
+        .args(["build", "w.cig", "--watch"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("start the watch");
+    let name = exe_name("w");
+    // The program is run only when its file has changed: Windows will not
+    // replace a program that is running, so a test that ran it in a loop
+    // would hold the rebuild off.
+    let last = std::cell::RefCell::new(None::<Vec<u8>>);
+    let says = |want: &str| -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while std::time::Instant::now() < deadline {
+            let now = fs::read(s.path().join(&name)).ok();
+            if now.is_some() && now != *last.borrow() {
+                *last.borrow_mut() = now;
+                let o = s.prog(&name, &[]);
+                if text(&o.stdout).trim() == want {
+                    return true;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        false
+    };
+    let first = says("one");
+    // A later time on a filesystem with coarse clocks, then the save.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    s.write("w.cig", "exhale \"two\"\n");
+    let second = first && says("two");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first, "the first build never ran");
+    assert!(second, "the save was not rebuilt");
+}
+
 /// The files in a tar, by name: enough of ustar for an image's layout.
 fn untar(t: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>> {
     let mut out = std::collections::BTreeMap::new();

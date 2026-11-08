@@ -178,6 +178,9 @@ struct BuildArgs {
     /// A CycloneDX 1.5 SBOM beside each program, <program>.cdx.json: its runtime and its script, by sha256.
     #[arg(long)]
     sbom: bool,
+    /// Build, then build again whenever a script changes (a script added to the folder too), until Ctrl-C.
+    #[arg(long, conflicts_with_all = ["emit", "check"])]
+    watch: bool,
 }
 
 #[derive(Args)]
@@ -246,6 +249,7 @@ fn run() -> i32 {
             let _ = Cli::command().print_help();
             exit::OK
         }
+        Some(Command::Build(a)) if a.watch => watch(&ctx, &a),
         Some(Command::Build(a)) => build_cmd(&ctx, &a).map(|_| exit::OK).unwrap_or_else(|c| c),
         Some(Command::Test(a)) => match build_cmd(&ctx, &a) {
             Ok(Some((built, rt))) => test::compare(&ctx, &built, &rt),
@@ -294,6 +298,66 @@ fn run() -> i32 {
                     cigscript::cli::report(&ctx, &d, None, None);
                     exit::USAGE
                 }
+            }
+        }
+    }
+}
+
+/// What a watched build looks at: each script it would build, and what
+/// the file is (size, time, inode). A script added, removed or saved
+/// changes it.
+fn watched(
+    a: &BuildArgs,
+    target: &'static runtime::Target,
+) -> Vec<(PathBuf, Option<cache::FileId>)> {
+    project::jobs(a.path.as_deref(), a.out.as_deref(), target)
+        .map(|jobs| {
+            jobs.into_iter()
+                .map(|j| {
+                    let id = cache::FileId::of(&j.script);
+                    (j.script, id)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `build --watch` (#37): build, then again whenever what it builds changes,
+/// polled every tenth of a second. A failed build is said and waited out;
+/// the next save tries again. The build index makes a script that did not
+/// change cost about a millisecond, so every build is the whole one.
+fn watch(ctx: &Ctx, a: &BuildArgs) -> i32 {
+    let target = match runtime::target(a.target.as_deref()) {
+        Ok(t) => t,
+        Err(d) => {
+            cigscript::cli::report(ctx, &d, None, None);
+            return exit::USAGE;
+        }
+    };
+    let mut seen = watched(a, target);
+    loop {
+        let built = build_cmd(ctx, a).is_ok();
+        if !ctx.json {
+            eprintln!(
+                "watching {} script{}; Ctrl-C stops",
+                seen.len(),
+                if seen.len() == 1 { "" } else { "s" }
+            );
+        }
+        let mut waited = 0u32;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let now = watched(a, target);
+            if now != seen {
+                seen = now;
+                break;
+            }
+            // Windows will not replace a program that is running: a build
+            // that failed there is tried again every two seconds, so it goes
+            // in once the program exits, without another save.
+            waited += 1;
+            if !built && cfg!(windows) && waited % 20 == 0 {
+                break;
             }
         }
     }
