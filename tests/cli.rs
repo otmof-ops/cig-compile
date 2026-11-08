@@ -1045,3 +1045,131 @@ fn emit_oci_writes_an_image_of_the_program() {
         "a rebuild wrote other bytes"
     );
 }
+
+/// #38, item 1: `--emit cir-opt` is the explicit, after-the-passes name
+/// for the verified IR. At stage A it reads as `--emit cir` does (both
+/// are shaped by `-O`/`--passes`); the reserved name lets stage B split
+/// them later without a flag change. The value `cir` keeps its current
+/// output, byte for byte, because the existing tests depend on it.
+#[test]
+fn emit_cir_opt_is_the_explicit_after_passes_name_and_reads_as_cir() {
+    let s = Sandbox::new();
+    s.write("f.cig", "stick a = 2 + 3\nstick b = 7\nexhale a, b\n");
+    let cir = ok(&s.cc(&["build", "f.cig", "--emit", "cir"]));
+    let cir_opt = ok(&s.cc(&["build", "f.cig", "--emit", "cir-opt"]));
+    assert_eq!(cir, cir_opt, "cir-opt reads as cir");
+    assert!(
+        cir.contains("const 5") && !cir.contains("bin +"),
+        "after-passes IR: {cir}"
+    );
+    // `-O` and `--passes` apply to both names.
+    let o0 = ok(&s.cc(&["build", "f.cig", "--emit", "cir-opt", "-O0"]));
+    assert!(o0.contains("bin +") && !o0.contains("const 5"), "{o0}");
+    // The parser refuses a name it does not know, and names the ones it does.
+    let bad = s.cc(&["build", "f.cig", "--emit", "mips"]);
+    assert_eq!(bad.status.code(), Some(3));
+    let err = text(&bad.stderr);
+    assert!(err.contains("cir") && err.contains("cir-opt"), "{err}");
+}
+
+/// #38, item 2: `--remarks` says what each pass did or left alone, with
+/// `file:line:col` on every detail and a summary a pass; `--json` makes
+/// each remark one JSON object a line on stderr. Works with `--emit
+/// cir`/`cir-opt` and with a plain build, and leaves the IR unchanged.
+#[test]
+fn remarks_say_what_each_pass_did_or_left_alone() {
+    let s = Sandbox::new();
+    s.write("f.cig", "stick a = 2 + 3\nstick b = 7\nexhale a, b\n");
+    // --emit cir --remarks: stderr carries the remarks, stdout the IR.
+    let o = s.cc(&["build", "f.cig", "--emit", "cir", "--remarks"]);
+    ok(&o);
+    let err = text(&o.stderr);
+    assert!(
+        err.contains("fold-consts: folded 1 constant"),
+        "a summary a pass: {err}"
+    );
+    assert!(
+        err.contains("fold-consts: folded bin in @0 main to const 5"),
+        "the folded op: {err}"
+    );
+    assert!(
+        err.lines()
+            .any(|l| l.starts_with("f.cig:1:11:") && l.contains("fold-consts:")),
+        "every detail carries file:line:col: {err}"
+    );
+    assert!(
+        err.contains("dead-pure: pruned 2 pure values"),
+        "dead-pure summary: {err}"
+    );
+    let stdout = text(&o.stdout);
+    assert!(stdout.contains("const 5"), "the IR is unchanged: {stdout}");
+    // A pass that left the IR alone says so.
+    s.write("calm.cig", "exhale args.get(0)\n");
+    let o = s.cc(&["build", "calm.cig", "--emit", "cir", "--remarks"]);
+    ok(&o);
+    let err = text(&o.stderr);
+    assert!(err.contains("fold-consts: nothing to fold"), "{err}");
+    // --json writes one JSON object a line on stderr.
+    let o = s.cc(&["--json", "build", "f.cig", "--emit", "cir", "--remarks"]);
+    ok(&o);
+    let lines: Vec<serde_json::Value> = text(&o.stderr)
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("a remark line is JSON"))
+        .collect();
+    assert!(lines
+        .iter()
+        .any(|v| v["remark"] == "fold-consts" && v["message"] == "fold-consts: folded 1 constant"));
+    assert!(lines
+        .iter()
+        .any(|v| v["remark"] == "fold-consts" && v["line"] == 1 && v["col"] == 11));
+    // A plain build with --remarks says the same remarks and then builds.
+    let out = ok(&s.cc(&["build", "f.cig", "--remarks"]));
+    assert!(out.contains("compiled f.cig"), "{out}");
+    assert!(s.exe("f").is_file());
+    // Off: no remarks on stderr for the same script.
+    let clean = s.cc(&["build", "f.cig", "--emit", "cir"]);
+    ok(&clean);
+    assert!(
+        !text(&clean.stderr).contains("fold-consts:"),
+        "stderr carries no remarks when the flag is off: {}",
+        text(&clean.stderr)
+    );
+}
+
+/// #38, item 3 (#30): `cigcompile bench <script>` runs one user script
+/// through the same harness as the set, compiled against interpreted,
+/// with the same statistics and output shape. The expected output is
+/// what `cig run <script>` prints with no arguments: a sample that
+/// drifts from it is `WRONG` and gets no time.
+#[test]
+fn bench_script_runs_one_user_script_through_the_set_harness() {
+    let s = Sandbox::new();
+    s.write("mine.cig", "exhale 1 + 2\n");
+    let out = ok(&s.cc(&["bench", "mine.cig", "--runs", "2"]));
+    // The table has the stage-A header and a row named after the script.
+    assert!(out.contains("stage A (bundle):"), "{out}");
+    let row = out
+        .lines()
+        .find(|l| l.starts_with("mine "))
+        .unwrap_or_else(|| panic!("no mine row:\n{out}"));
+    assert!(
+        row.split_whitespace().count() >= 4,
+        "the row has the shape of a set row: {row}"
+    );
+    assert!(
+        !row.contains("WRONG"),
+        "the script is its own expected output: {row}"
+    );
+    // --json carries the one program and its interpreted/compiled times.
+    let v: serde_json::Value =
+        serde_json::from_str(ok(&s.cc(&["bench", "mine.cig", "--runs", "2", "--json"])).trim())
+            .unwrap();
+    let programs = v["programs"].as_array().unwrap();
+    assert_eq!(programs.len(), 1, "one script -> one program: {v}");
+    assert_eq!(programs[0]["name"], "mine");
+    assert!(programs[0]["interpreted"]["median_ms"].is_number(), "{v}");
+    assert!(programs[0]["compiled"]["median_ms"].is_number(), "{v}");
+    // A script and --set together is a usage error (one or the other).
+    let both = s.cc(&["bench", "mine.cig", "--set", "there", "--runs", "2"]);
+    assert_eq!(both.status.code(), Some(3), "{}", text(&both.stderr));
+}
