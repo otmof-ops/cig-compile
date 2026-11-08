@@ -40,6 +40,7 @@ impl Rng {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Ty {
     Int,
+    Float,
     Str,
     Bool,
     List,
@@ -116,8 +117,10 @@ impl Gen {
     }
 
     fn word(&mut self) -> String {
+        // Two of them past ASCII: upper-casing, lengths and slices of
+        // multi-byte text must agree too.
         let words = [
-            "ash", "ember", "smoke", "leaf", "pipe", "tin", "burn", "puff",
+            "ash", "ember", "smoke", "leaf", "pipe", "tin", "burn", "puff", "ásh", "煙",
         ];
         words[self.rng.below(words.len() as u64) as usize].to_string()
     }
@@ -131,6 +134,15 @@ impl Gen {
                         if let Some(v) = self.var_of(Ty::Int, false) {
                             return v;
                         }
+                    }
+                    // Now and then an edge of i64, so `+`, `-` and `*` meet
+                    // E503 on both sides.
+                    if self.rng.chance(2) {
+                        return if self.rng.chance(50) {
+                            "9223372036854775807".to_string()
+                        } else {
+                            "(-9223372036854775807 - 1)".to_string()
+                        };
                     }
                     return self.rng.small().to_string();
                 }
@@ -151,6 +163,35 @@ impl Gen {
                             format!("{f}({}, {})", self.expr(Ty::Int, d), self.expr(Ty::Int, d))
                         }
                     }
+                }
+            }
+            Ty::Float => {
+                if leaf {
+                    if self.rng.chance(45) {
+                        if let Some(v) = self.var_of(Ty::Float, false) {
+                            return v;
+                        }
+                    }
+                    let lits = ["0.1", "0.2", "1.5", "-2.75", "1e3", "2.5e-3", "-0.0", "3.0"];
+                    return lits[self.rng.below(lits.len() as u64) as usize].to_string();
+                }
+                let d = depth - 1;
+                match self.rng.below(6) {
+                    0 => format!(
+                        "({} + {})",
+                        self.expr(Ty::Float, d),
+                        self.expr(Ty::Float, d)
+                    ),
+                    1 => format!("({} - {})", self.expr(Ty::Float, d), self.expr(Ty::Int, d)),
+                    2 => format!(
+                        "({} * {})",
+                        self.expr(Ty::Float, d),
+                        self.expr(Ty::Float, d)
+                    ),
+                    // Division by a constant that is never zero.
+                    3 => format!("({} / 2.5)", self.expr(Ty::Float, d)),
+                    4 => format!("({} / {})", self.expr(Ty::Int, d), 1 + self.rng.below(7)),
+                    _ => format!("({} + 0.5)", self.expr(Ty::Int, d)),
                 }
             }
             Ty::Str => {
@@ -178,6 +219,7 @@ impl Gen {
                         let w = self.word();
                         format!("{}.replace(\"{w}\", \"-\")", self.expr(Ty::Str, d))
                     }
+                    _ if self.rng.chance(50) => format!("str({})", self.expr(Ty::Float, d)),
                     _ => format!("str({})", self.expr(Ty::List, d)),
                 }
             }
@@ -186,8 +228,9 @@ impl Gen {
                     return if self.rng.chance(50) { "true" } else { "false" }.to_string();
                 }
                 let d = depth - 1;
-                match self.rng.below(6) {
+                match self.rng.below(7) {
                     0 => format!("{} < {}", self.expr(Ty::Int, d), self.expr(Ty::Int, d)),
+                    6 => format!("{} < {}", self.expr(Ty::Float, d), self.expr(Ty::Float, d)),
                     1 => format!("{} == {}", self.expr(Ty::Int, d), self.expr(Ty::Int, d)),
                     2 => {
                         let w = self.word();
@@ -251,12 +294,13 @@ impl Gen {
         [
             Ty::Int,
             Ty::Int,
+            Ty::Float,
             Ty::Str,
             Ty::Str,
             Ty::Bool,
             Ty::List,
             Ty::Map,
-        ][self.rng.below(7) as usize]
+        ][self.rng.below(8) as usize]
     }
 
     fn block(&mut self, depth: u32, ctx: Ctx, extra: &[(String, Ty)]) -> String {
@@ -287,8 +331,14 @@ impl Gen {
         let ret = self.expr(Ty::Int, 3);
         self.scopes.pop();
         self.funcs.push(name.clone());
+        // Now and then the value leaves through a `finally`.
+        let tail = if self.rng.chance(25) {
+            format!("try {{\nsnuff {ret}\n}} finally {{\nexhale \"{name} done\"\n}}")
+        } else {
+            format!("snuff {ret}")
+        };
         format!(
-            "pull {name}(a, b) {{\n{}{}snuff {ret}\n}}",
+            "pull {name}(a, b) {{\n{}{}{tail}\n}}",
             body.join("\n"),
             if body.is_empty() { "" } else { "\n" }
         )
@@ -296,7 +346,7 @@ impl Gen {
 
     fn stmt(&mut self, depth: u32, ctx: Ctx) -> String {
         let nested = depth < 3;
-        let pick = self.rng.below(if nested { 16 } else { 8 });
+        let pick = self.rng.below(if nested { 18 } else { 8 });
         match pick {
             0 | 1 => {
                 let ty = self.any_ty();
@@ -406,6 +456,32 @@ impl Gen {
                     self.expr(Ty::Int, 2)
                 )
             }
+            // Closures made in a loop: each keeps its own turn's value.
+            16 => {
+                let cl = self.fresh("cl");
+                let i = self.fresh("i");
+                let k = 1 + self.rng.below(4);
+                let m = self.rng.small();
+                format!(
+                    "roll {cl} = []\nfor {i} in 0..{k} {{\n{cl}.push(pack() => {i} * {m})\n}}\nexhale {cl}.map(pack(f) => f())"
+                )
+            }
+            // A loop whose body leaves through a `finally`: break and
+            // continue run it on the way out.
+            17 => {
+                let i = self.fresh("i");
+                let k = 1 + self.rng.below(4);
+                let body = self.block(
+                    depth,
+                    Ctx {
+                        in_loop: true,
+                        in_try: true,
+                        ..ctx
+                    },
+                    &[(i.clone(), Ty::Int)],
+                );
+                format!("for {i} in 0..{k} {{\ntry {{\n{body}\n}} ashtray {{\nexhale \"caught\"\n}} finally {{\nexhale \"turn\", {i}\n}}\n}}")
+            }
             _ => format!("exhale {}", self.expr(Ty::Str, 3)),
         }
     }
@@ -428,4 +504,45 @@ impl Gen {
         }
         lines.join("\n")
     }
+}
+
+/// Programs written by hand for the edges a seed rarely reaches: float
+/// bits as they print (`0.1 + 0.2`, `-0.0`, infinities, NaN, subnormals),
+/// i64's edges and the overflows each operator meets (E503), and text past
+/// ASCII. Both sides run each one, as the random programs are run.
+pub fn edges() -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "floats",
+            "exhale 0.1 + 0.2, 1.0 / 3.0, 2.5 * 4\nexhale -0.0, 0.0 == -0.0, 1e308 * 10, -(1e308 * 10)\nexhale (1e308 * 10) - (1e308 * 10), 1e-320, 2.5e-5\nexhale 7 / 2, 7.0 / 2, 7 % 3, -7 % 3, -7 / 2\nexhale str(1.0), str(0.1 + 0.2), [0.5, -0.0, 3.0]\n".to_string(),
+        ),
+        (
+            "int-edges",
+            [
+                "stick big = 9223372036854775807",
+                "stick small = -big - 1",
+                "exhale big, small",
+                "for case in [\"add\", \"sub\", \"mul\", \"div\", \"mod\", \"neg\", \"zero\", \"zmod\"] {",
+                "  try {",
+                "    if case == \"add\" { exhale big + 1 }",
+                "    if case == \"sub\" { exhale small - 1 }",
+                "    if case == \"mul\" { exhale big * 2 }",
+                "    if case == \"div\" { exhale small / -1 }",
+                "    if case == \"mod\" { exhale small % -1 }",
+                "    if case == \"neg\" { exhale -small }",
+                "    if case == \"zero\" { exhale 1 / 0 }",
+                "    if case == \"zmod\" { exhale 5 % 0 }",
+                "  } ashtray e {",
+                "    exhale case, e.message",
+                "  }",
+                "}",
+            ]
+            .join("\n")
+                + "\n",
+        ),
+        (
+            "text",
+            "stick s = \"ásh 煙 🚬 Straße\"\nexhale s.len(), s.upper(), s.lower(), s.chars().len()\nexhale s.replace(\"煙\", \"smoke\"), s.contains(\"🚬\"), s.split(\" \")\n".to_string(),
+        ),
+    ]
 }
