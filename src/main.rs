@@ -17,6 +17,7 @@ mod project;
 mod reduce;
 mod runtime;
 mod sbom;
+mod sign;
 mod test;
 mod timings;
 mod verify;
@@ -87,6 +88,15 @@ struct VerifyArgs {
     /// The cig it was built on, when that is not cig's own release (a cig built from source).
     #[arg(long)]
     runtime: Option<PathBuf>,
+    /// A detached SSH signature of the program (as `build --sign` writes), to check against.
+    #[arg(long, value_name = "FILE")]
+    signature: Option<PathBuf>,
+    /// An ssh allowed-signers file naming who may have signed the program; without it, only the signature's integrity is checked (`-Y check-novalidate`).
+    #[arg(long, value_name = "FILE")]
+    allowed_signers: Option<PathBuf>,
+    /// The signer's identity to require in the allowed-signers file (default `*`, any identity there).
+    #[arg(long, value_name = "ID")]
+    identity: Option<String>,
 }
 
 #[derive(Args)]
@@ -186,6 +196,9 @@ struct BuildArgs {
     /// A CycloneDX 1.5 SBOM beside each program, <program>.cdx.json: its runtime and its script, by sha256.
     #[arg(long)]
     sbom: bool,
+    /// A detached SSH signature beside each program, <program>.sig (and the SBOM's, with --sbom), made with `ssh-keygen -Y sign` and the namespace `cigcompile-program`. KEY is an ssh private-key file, or a public-key file with an agent holding the private one.
+    #[arg(long, value_name = "KEY")]
+    sign: Option<PathBuf>,
     /// Build, then build again whenever a script changes (a script added to the folder too), until Ctrl-C.
     #[arg(long, conflicts_with_all = ["emit", "check"])]
     watch: bool,
@@ -274,6 +287,9 @@ fn run() -> i32 {
                 program: &a.program,
                 script: a.script.as_deref(),
                 runtime: a.runtime.as_deref(),
+                signature: a.signature.as_deref(),
+                allowed_signers: a.allowed_signers.as_deref(),
+                identity: a.identity.as_deref(),
             },
         ),
         Some(Command::Reduce(a)) => reduce::reduce(
@@ -435,6 +451,9 @@ fn build_cmd(
     index.save();
     finish(&built.as_ref().map(|_| ()).map_err(|c| *c));
     let built = built?;
+    if let Some(key) = a.sign.as_deref() {
+        sign_built(ctx, &built, key, a.sbom)?;
+    }
     warn_linkage(ctx, target, &rt);
     if oci {
         for b in &built {
@@ -464,6 +483,76 @@ fn build_cmd(
         }
     }
     Ok(Some((built, rt)))
+}
+
+/// `--sign <key>` (#10): a detached SSH signature of every program a
+/// build wrote, and of its SBOM too when `--sbom` is on. The signature
+/// goes beside the file, `<file>.sig`, with the namespace
+/// `cigcompile-program`. ssh-keygen must be on this machine; a sign that
+/// fails exits with a usage error that names what it said.
+fn sign_built(
+    ctx: &Ctx,
+    built: &[build::Built],
+    key: &std::path::Path,
+    sbom: bool,
+) -> Result<(), i32> {
+    let fail = |message: String, hint: &str| {
+        let d = cigscript::diagnostics::usage(message)
+            .code("E1004")
+            .with_hint(hint.to_string());
+        cigscript::cli::report(ctx, &d, None, None);
+        build::exit::USAGE
+    };
+    if let Err(e) = sign::require_ssh_keygen() {
+        return Err(fail(
+            e,
+            "install OpenSSH (openssh-client on Debian and Ubuntu, openssh on macOS and Windows 10+)",
+        ));
+    }
+    for b in built {
+        if let Err(e) = sign::sign(&b.job.out, key) {
+            return Err(fail(
+                format!("cannot sign {}: {e}", b.job.out.display()),
+                "give --sign an ssh private-key file, or a public-key file with ssh-agent holding the private one",
+            ));
+        }
+        let sig = sign::path_for(&b.job.out);
+        if ctx.json {
+            println!(
+                "{}",
+                serde_json::json!({"signed": b.job.out.to_string_lossy(), "signature": sig.to_string_lossy(), "namespace": sign::NAMESPACE})
+            );
+        } else {
+            println!(
+                "  signed {} (ssh signature, namespace {})",
+                sig.display(),
+                sign::NAMESPACE
+            );
+        }
+        if sbom {
+            let sbom_path = sbom::path_for(&b.job.out);
+            if let Err(e) = sign::sign(&sbom_path, key) {
+                return Err(fail(
+                    format!("cannot sign {}: {e}", sbom_path.display()),
+                    "give --sign an ssh private-key file, or a public-key file with ssh-agent holding the private one",
+                ));
+            }
+            let sig = sign::path_for(&sbom_path);
+            if ctx.json {
+                println!(
+                    "{}",
+                    serde_json::json!({"signed": sbom_path.to_string_lossy(), "signature": sig.to_string_lossy(), "namespace": sign::NAMESPACE})
+                );
+            } else {
+                println!(
+                    "  signed {} (ssh signature, namespace {})",
+                    sig.display(),
+                    sign::NAMESPACE
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A runtime given by hand that links this machine's glibc makes programs
