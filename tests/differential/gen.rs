@@ -410,7 +410,9 @@ impl Gen {
             10 => {
                 let w = self.fresh("w");
                 let k = 1 + self.rng.below(4);
-                self.declare(&w, Ty::Int, true);
+                // Read in the body, never assigned there: a body that set
+                // its own counter back would never end.
+                self.declare(&w, Ty::Int, false);
                 let body = self.block(
                     depth,
                     Ctx {

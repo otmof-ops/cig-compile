@@ -41,6 +41,24 @@ fn the_edge_programs_check() {
     }
 }
 
+/// No loop's body assigns the loop's own counter but its own step: a
+/// `while` whose body set its counter back would never end (seed 75 did,
+/// and ran each side to the step budget).
+#[test]
+fn no_while_body_resets_its_own_counter() {
+    let assign = regex::Regex::new(r"(?m)^(w\d+) (=|\+=|-=) (.*)$").unwrap();
+    for seed in 0..3000u64 {
+        let text = gen::program(seed).join("\n");
+        for c in assign.captures_iter(&text) {
+            assert!(
+                &c[2] == "+=" && &c[3] == "1",
+                "seed {seed}: {}\n{text}",
+                c.get(0).unwrap().as_str()
+            );
+        }
+    }
+}
+
 /// The widened generator reaches what it was widened for, across the seeds.
 #[test]
 fn the_generator_reaches_floats_closures_finally_and_edges() {
