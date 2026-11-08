@@ -14,7 +14,10 @@ mod fetch;
 mod project;
 mod reduce;
 mod runtime;
+mod sbom;
 mod test;
+mod timings;
+mod verify;
 
 use build::exit;
 use cigscript::cli::Ctx;
@@ -58,8 +61,22 @@ enum Command {
     Bench(BenchArgs),
     /// Fetch the runtime (cig's own release asset) for other machines, checked against the sha256 this compiler pins.
     Fetch(FetchArgs),
+    /// Check a program is what a build makes: its runtime against cig's release (or --runtime), its payload against its sha256 and the script (--script), the whole file byte for byte. Nothing runs.
+    Verify(VerifyArgs),
     /// Cut a script down to the smallest one that is still interesting, for a bug report: by default, that its program differs from it (as `cigcompile test` finds); with a command after `--`, that the command exits 0 on it (`{}` is the candidate's path).
     Reduce(ReduceArgs),
+}
+
+#[derive(Args)]
+struct VerifyArgs {
+    /// The program.
+    program: PathBuf,
+    /// The script it was built from, to check the program carries it.
+    #[arg(long)]
+    script: Option<PathBuf>,
+    /// The cig it was built on, when that is not cig's own release (a cig built from source).
+    #[arg(long)]
+    runtime: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -142,6 +159,15 @@ struct BuildArgs {
     /// With --emit: after the IR, what each pass changed, as a unified diff of the printed IR.
     #[arg(long, requires = "emit")]
     passes_diff: bool,
+    /// Where the build's time went, phase by phase, on stderr; =FILE also writes a Chrome trace (chrome://tracing, Perfetto).
+    #[arg(long, value_name = "FILE", num_args = 0..=1, require_equals = true)]
+    timings: Option<Option<PathBuf>>,
+    /// What the build is doing as it goes, one JSON object a line on stderr (for a window or an editor).
+    #[arg(long)]
+    json_progress: bool,
+    /// A CycloneDX 1.5 SBOM beside each program, <program>.cdx.json: its runtime and its script, by sha256.
+    #[arg(long)]
+    sbom: bool,
 }
 
 #[derive(Args)]
@@ -219,6 +245,14 @@ fn run() -> i32 {
         Some(Command::Clean(a)) => clean(&ctx, &a),
         Some(Command::Targets) => targets(&ctx),
         Some(Command::Fetch(a)) => fetch_cmd(&ctx, &a),
+        Some(Command::Verify(a)) => verify::verify(
+            &ctx,
+            &verify::Opts {
+                program: &a.program,
+                script: a.script.as_deref(),
+                runtime: a.runtime.as_deref(),
+            },
+        ),
         Some(Command::Reduce(a)) => reduce::reduce(
             &ctx,
             &reduce::Opts {
@@ -270,16 +304,33 @@ fn build_cmd(
         emit_cir(ctx, &jobs, &passes, a.passes_diff)?;
         return Ok(None);
     }
+    timings::enable(a.timings.is_some(), a.json_progress);
+    let started = std::time::Instant::now();
+    let finish = |built: &Result<_, i32>| {
+        let total = started.elapsed().as_micros();
+        if a.timings.is_some() && built.is_ok() {
+            timings::report(total);
+            if let Some(Some(file)) = &a.timings {
+                let trace = serde_json::to_string(&timings::trace(total)).unwrap_or_default();
+                if let Err(e) = std::fs::write(file, trace) {
+                    eprintln!("cannot write {}: {e}", file.display());
+                }
+            }
+        }
+    };
     let mut index = cache::Index::load();
     if a.check {
-        build::build(ctx, &jobs, target, None, &mut index)?;
+        let checked = build::build(ctx, &jobs, target, None, &mut index, false).map(|_| ());
+        finish(&checked);
+        checked?;
         return Ok(None);
     }
     let found = runtime::find(target, a.runtime.as_deref(), &mut index);
     index.save();
     let rt = found.map_err(fail)?;
-    let built = build::build(ctx, &jobs, target, Some(&rt), &mut index);
+    let built = build::build(ctx, &jobs, target, Some(&rt), &mut index, a.sbom);
     index.save();
+    finish(&built.as_ref().map(|_| ()).map_err(|c| *c));
     let built = built?;
     warn_linkage(ctx, target, &rt);
     Ok(Some((built, rt)))
