@@ -984,6 +984,15 @@ fn emit_oci_writes_an_image_of_the_program() {
         fs::read(s.path().join("hi")).unwrap(),
         "the layer is the program"
     );
+    // Docker's manifest names the same config and layer, and the tag.
+    let docker: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    assert_eq!(docker[0]["RepoTags"][0], "localhost/hi:latest");
+    for path in [
+        docker[0]["Config"].as_str().unwrap(),
+        docker[0]["Layers"][0].as_str().unwrap(),
+    ] {
+        assert!(files.contains_key(path), "{path} is not in the archive");
+    }
     ok(&s.cc(&["build", "hi.cig", "--emit", "oci"]));
     assert_eq!(
         fs::read(s.path().join("hi.oci.tar")).unwrap(),
