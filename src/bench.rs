@@ -120,6 +120,9 @@ pub struct Opts<'a> {
     /// Benchmarks from this folder (`<name>.cig` and `<name>.expect`)
     /// instead of the set.
     pub set: Option<&'a Path>,
+    /// One user script to bench on its own: its expected output is what
+    /// `cig run <script>` prints with no arguments. Overrides the set.
+    pub script: Option<&'a Path>,
 }
 
 /// How long one side may take, unless it has not got three samples yet.
@@ -194,8 +197,29 @@ struct Row {
     refs: Vec<(&'static str, Side)>,
 }
 
-/// The benchmarks a run measures: the set, or a folder's.
-fn benchmarks(set: Option<&Path>) -> Result<Vec<(String, String, String)>, String> {
+/// The benchmarks a run measures: the set, a folder's, or one user
+/// script. A user script's expected output is what `cig run <script>`
+/// prints with no arguments: a single trip through the interpreter that
+/// pins what every later sample is compared to.
+fn benchmarks(
+    runtime: &Runtime,
+    set: Option<&Path>,
+    script: Option<&Path>,
+) -> Result<Vec<(String, String, String)>, String> {
+    if let Some(path) = script {
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if name.is_empty() {
+            return Err(format!("{} has no .cig stem", path.display()));
+        }
+        let source =
+            std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let expect = cig_run_output(runtime, path, &source)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        return Ok(vec![(name, source, expect)]);
+    }
     let Some(dir) = set else {
         return Ok(SET
             .iter()
@@ -228,8 +252,43 @@ fn benchmarks(set: Option<&Path>) -> Result<Vec<(String, String, String)>, Strin
     Ok(out)
 }
 
+/// Run `cig run <script>` once and keep its stdout: the output every
+/// later sample of this script is compared with. The script is placed
+/// in a scratch folder with the name the user passed, so relative file
+/// operations behave as if the script were run there.
+fn cig_run_output(runtime: &Runtime, path: &Path, source: &str) -> Result<String, String> {
+    let scratch = std::env::temp_dir().join(format!(
+        "cigcompile-bench-expect-{}-{}",
+        std::process::id(),
+        path.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default()
+    ));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).map_err(|e| format!("a scratch folder: {e}"))?;
+    let file_name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "script.cig".to_string());
+    let placed = scratch.join(&file_name);
+    std::fs::write(&placed, source).map_err(|e| format!("write {}: {e}", placed.display()))?;
+    let mut c = Command::new(&runtime.path);
+    c.current_dir(&scratch)
+        .env("CIGSCRIPT_HOME", scratch.join("home"))
+        .env("CIG_SEAL_KEY", "file")
+        .env("CIG_MAX_STEPS", "0")
+        .env("CIG_REPORTS", "never")
+        .env("CIG_DOCTOR", "0")
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::null())
+        .args(["run", &file_name]);
+    let m = measure(&mut c)?;
+    let _ = std::fs::remove_dir_all(&scratch);
+    Ok(m.stdout)
+}
+
 pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
-    let set = match benchmarks(o.set) {
+    let set = match benchmarks(runtime, o.set, o.script) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("bench: {e}");

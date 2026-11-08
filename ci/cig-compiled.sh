@@ -27,5 +27,11 @@ work=${CIG_PROGRAMS:-${TMPDIR:-/tmp}/cig-compiled}
 mkdir -p "$work"
 prog="$work/$(basename "$script" .cig)-$$-$RANDOM"
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) prog="$prog.exe" ;; esac
-CIGSCRIPT_HOME="$work/home" "$cc" build "$script" -o "$prog" --runtime "$real" >/dev/null || exit $?
+# The build says nothing unless it fails: a test reads the program's own
+# output, and cigcompile's notes (a runtime linked against glibc) are not it.
+built=$(CIGSCRIPT_HOME="$work/home" "$cc" build "$script" -o "$prog" --runtime "$real" 2>&1) || {
+  code=$?
+  printf '%s\n' "$built" >&2
+  exit "$code"
+}
 exec "$prog" ${flags[@]+"${flags[@]}"} "$@"

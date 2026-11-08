@@ -422,8 +422,8 @@ dependencies = [
 
 [[package]]
 name = "cigscript"
-version = "1.16.1"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.16.1#027a2fa38749e1af240b0bbbc60782ee58fb3399"
+version = "1.18.0"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.18.0#b67339f15374cd108671e6789745a75e77cbd533"
 dependencies = [
  "argon2",
  "chacha20poly1305",

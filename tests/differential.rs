@@ -13,6 +13,8 @@
 
 #[path = "differential/gen.rs"]
 mod gen;
+#[path = "differential/real_world.rs"]
+mod real_world;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -137,6 +139,15 @@ fn main() {
     // edges and their overflows, text past ASCII.
     for (name, text) in gen::edges() {
         let case = edge_case(name, &text);
+        if case.script.contains(&filter) {
+            run_case(&tools, &src, &case, &mut tally);
+        }
+    }
+    // A real-world corpus (#39): the cig-orchestrator scripts, run against
+    // their side-effect-free entry points. The compile holds the whole
+    // 13,000-line program to parity; `cig run` vs the program holds the
+    // live entry points (--version, help, toolchains --markdown).
+    for case in real_world::cases() {
         if case.script.contains(&filter) {
             run_case(&tools, &src, &case, &mut tally);
         }
