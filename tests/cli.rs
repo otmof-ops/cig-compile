@@ -926,10 +926,16 @@ fn watch_rebuilds_on_save() {
         .spawn()
         .expect("start the watch");
     let name = exe_name("w");
+    // The program is run only when its file has changed: Windows will not
+    // replace a program that is running, so a test that ran it in a loop
+    // would hold the rebuild off.
+    let last = std::cell::RefCell::new(None::<Vec<u8>>);
     let says = |want: &str| -> bool {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
         while std::time::Instant::now() < deadline {
-            if s.path().join(&name).exists() {
+            let now = fs::read(s.path().join(&name)).ok();
+            if now.is_some() && now != *last.borrow() {
+                *last.borrow_mut() = now;
                 let o = s.prog(&name, &[]);
                 if text(&o.stdout).trim() == want {
                     return true;

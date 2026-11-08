@@ -325,7 +325,7 @@ fn watch(ctx: &Ctx, a: &BuildArgs) -> i32 {
     };
     let mut seen = watched(a, target);
     loop {
-        let _ = build_cmd(ctx, a);
+        let built = build_cmd(ctx, a).is_ok();
         if !ctx.json {
             eprintln!(
                 "watching {} script{}; Ctrl-C stops",
@@ -333,11 +333,19 @@ fn watch(ctx: &Ctx, a: &BuildArgs) -> i32 {
                 if seen.len() == 1 { "" } else { "s" }
             );
         }
+        let mut waited = 0u32;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(100));
             let now = watched(a, target);
             if now != seen {
                 seen = now;
+                break;
+            }
+            // Windows will not replace a program that is running: a build
+            // that failed there is tried again every two seconds, so it goes
+            // in once the program exits, without another save.
+            waited += 1;
+            if !built && cfg!(windows) && waited % 20 == 0 {
                 break;
             }
         }
