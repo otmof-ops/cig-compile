@@ -5,7 +5,7 @@
 use cigcompile::cir::ir::{Kind, VarId};
 use cigcompile::cir::pass::{self, broken, run_passes, Pass};
 use cigcompile::cir::verify::{errors, verify, Severity};
-use cigcompile::cir::{lower_source, print, LowerError};
+use cigcompile::cir::{emit_with, lower_source, print, LowerError};
 
 const DEMO: &str = "pull greet(name) {
   fs.write_text(\"out.txt\", \"hi \" + name)
@@ -251,6 +251,145 @@ fn a_bare_name_piped_into_resolves_as_a_call_would() {
     );
     assert!(text.contains("call.user @1("), "{text}");
     assert!(!text.contains("call.value"), "{text}");
+}
+
+/// Golden: `copy-prop` alone over `stick a = 1; stick b = a; exhale b`
+/// turns both loads into direct uses of the first constant.
+#[test]
+fn copy_prop_matches_its_golden_text() {
+    golden_for_pass("copy-prop", "stick-chain", &[&pass::CopyProp as &dyn Pass]);
+}
+
+#[test]
+fn copy_prop_propagates_through_chains_and_leaves_mutables_alone() {
+    // A chain of immutable copies collapses to the first value.
+    let src = "stick a = 1\nstick b = a\nexhale b\n";
+    let mut m = lower_source(src, "cp.cig").unwrap();
+    run_passes(&mut m, &[&pass::CopyProp as &dyn Pass]).unwrap();
+    let text = print::print(&m);
+    assert!(!text.contains("load "), "copies removed: {text}");
+    assert_eq!(
+        text.matches("const 1").count(),
+        1,
+        "and only the one constant is the source: {text}"
+    );
+    // A mutable slot is never propagated through: between a declaration
+    // and a use another store may land, and the load would read it.
+    let src = "roll a = 1\na = 2\nexhale a\n";
+    let mut m = lower_source(src, "cp.cig").unwrap();
+    run_passes(&mut m, &[&pass::CopyProp as &dyn Pass]).unwrap();
+    let text = print::print(&m);
+    assert!(text.contains("load $0:a!"), "mutable load kept: {text}");
+}
+
+/// Negative: a value `copy-prop` propagates must be visible where it
+/// lands. A broken twin that lifts a value out of an `if.then` into the
+/// enclosing block is caught by V1 (`%r used where it is not defined`).
+#[test]
+fn a_copy_propagation_out_of_scope_is_caught_v1() {
+    let src = "stick a = 1\nif true {\n  stick b = 2\n  exhale b\n}\nexhale a\n";
+    let mut m = lower_source(src, "neg.cig").unwrap();
+    let found = verify(&m);
+    assert!(errors(&found).is_empty(), "the input itself verifies");
+    let e = run_passes(&mut m, &[&broken::PropOutOfNestedScope as &dyn Pass])
+        .expect_err("the propagation is caught");
+    assert_eq!(e.pass, "prop-out-of-nested-scope");
+    assert!(e.errors.iter().any(|x| x.code == "V1"), "{:#?}", e.errors);
+}
+
+/// Golden: `sccp` alone over `roll n; if true { n = 1 } else { n = 2 }`
+/// empties the dead `else` branch; the `if` and its cond stay.
+#[test]
+fn sccp_matches_its_golden_text() {
+    golden_for_pass("sccp", "if-true", &[&pass::Sccp as &dyn Pass]);
+}
+
+#[test]
+fn sccp_empties_only_the_dead_side_and_only_when_it_carries_no_effect() {
+    // `if true` with a dead `else` that has no effect: emptied.
+    let src = "roll n = 0\nif true {\n  n = 1\n} else {\n  n = 2\n}\nexhale n\n";
+    let mut m = lower_source(src, "s.cig").unwrap();
+    let before = print::print(&m);
+    run_passes(&mut m, &[&pass::Sccp as &dyn Pass]).unwrap();
+    let after = print::print(&m);
+    assert_ne!(before, after, "the pass ran");
+    assert!(
+        after.contains("const true") && after.contains("if %"),
+        "the cond and its branch stay: {after}"
+    );
+    // The `else` is now empty, so no `const 2` from `n = 2` survives.
+    assert!(
+        !after.contains("const 2"),
+        "the dead side is empty: {after}"
+    );
+    // `if false` with a dead `then` that has a `burn.op` is left alone:
+    // emptying it would drop an effect, and T3 would catch that.
+    let src = "burn {\n  if false {\n    fs.rm(\"x\")\n  }\n}\n";
+    let mut m = lower_source(src, "s.cig").unwrap();
+    run_passes(&mut m, &[&pass::Sccp as &dyn Pass]).unwrap();
+    let text = print::print(&m);
+    assert!(
+        text.contains("burn.op rm fs.rm("),
+        "the dead effect is kept: {text}"
+    );
+}
+
+/// Negative: `sccp` never drops a branch whose body has a `burn.op`. A
+/// broken twin that clears an `if.then` holding one is caught by T3.
+#[test]
+fn an_sccp_that_drops_a_branch_with_an_effect_is_caught_t3() {
+    let src = "burn {\n  if true {\n    fs.rm(\"gone\")\n  }\n}\n";
+    let mut m = lower_source(src, "neg.cig").unwrap();
+    let found = verify(&m);
+    assert!(errors(&found).is_empty(), "the input itself verifies");
+    let e = run_passes(&mut m, &[&broken::DropBranchWithEffect as &dyn Pass])
+        .expect_err("the drop is caught");
+    assert_eq!(e.pass, "drop-branch-with-effect");
+    assert!(e.errors.iter().any(|x| x.code == "T3"), "{:#?}", e.errors);
+}
+
+/// `-O1` runs `fold-consts, copy-prop, fold-consts, sccp, dead-pure`, so
+/// `stick a = 1; if a == 1 { exhale 1 } else { exhale 2 }` has its
+/// `else` emptied and its compare gone.
+#[test]
+fn default_passes_fold_copy_through_sccp() {
+    let src = "stick a = 1\nif a == 1 {\n  exhale 1\n} else {\n  exhale 2\n}\n";
+    let mut m = lower_source(src, "o1.cig").unwrap();
+    run_passes(&mut m, &pass::default_passes()).unwrap();
+    let text = print::print(&m);
+    assert!(
+        text.contains("const true"),
+        "fold-consts after copy-prop sees the compare: {text}"
+    );
+    assert!(!text.contains("bin == "), "the compare is gone: {text}");
+    assert!(!text.contains("const 2"), "the else is empty: {text}");
+    assert!(
+        text.contains("const 1"),
+        "the then's `exhale 1` stays: {text}"
+    );
+}
+
+/// The CIR text each pass prints matches its golden file; after a
+/// deliberate change, `CIR_UPDATE_GOLDEN=1` writes it again.
+fn golden_for_pass(sub: &str, name: &str, passes: &[&'static dyn Pass]) {
+    let lf = |t: String| t.replace("\r\n", "\n");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/cir")
+        .join(sub);
+    let cig = dir.join(format!("{name}.cig"));
+    let src =
+        lf(std::fs::read_to_string(&cig).unwrap_or_else(|e| panic!("{}: {e}", cig.display())));
+    let file = format!("{name}.cig");
+    let e = emit_with(&src, &file, passes, false, false).unwrap();
+    let golden = dir.join(format!("{name}.cir"));
+    if std::env::var_os("CIR_UPDATE_GOLDEN").is_some() {
+        std::fs::write(&golden, &e.text).unwrap();
+    }
+    assert_eq!(
+        e.text,
+        lf(std::fs::read_to_string(&golden).unwrap_or_default()),
+        "CIR_UPDATE_GOLDEN=1 writes it again"
+    );
 }
 
 /// Every script in a CigScript checkout of the pinned version lowers and

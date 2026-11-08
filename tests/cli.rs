@@ -695,7 +695,10 @@ fn levels_and_pass_lists_shape_the_emitted_ir() {
     assert_eq!(bad.status.code(), Some(3));
     assert!(
         text(&bad.stderr).contains("there is no pass `inline`")
-            && text(&bad.stderr).contains("fold-consts, dead-pure"),
+            && text(&bad.stderr).contains("fold-consts")
+            && text(&bad.stderr).contains("copy-prop")
+            && text(&bad.stderr).contains("sccp")
+            && text(&bad.stderr).contains("dead-pure"),
         "{}",
         text(&bad.stderr)
     );
@@ -1491,4 +1494,28 @@ fn bench_script_runs_one_user_script_through_the_set_harness() {
     // A script and --set together is a usage error (one or the other).
     let both = s.cc(&["bench", "mine.cig", "--set", "there", "--runs", "2"]);
     assert_eq!(both.status.code(), Some(3), "{}", text(&both.stderr));
+}
+
+/// #33 with #38: a pass with no remarks of its own (`copy-prop`, `sccp`)
+/// is still said, as having changed the IR or not, so `--remarks` tells the
+/// whole story of a fold that copy propagation made possible.
+#[test]
+fn remarks_say_a_pass_changed_the_ir_without_remarks_of_its_own() {
+    let s = Sandbox::new();
+    s.write(
+        "c.cig",
+        "stick a = 1\nstick b = a\nif b == 1 {\n  exhale \"one\"\n} else {\n  exhale \"other\"\n}\n",
+    );
+    let out = s.cc(&["build", "c.cig", "--emit", "cir", "--remarks"]);
+    let err = text(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(err.contains("copy-prop: changed the IR"), "{err}");
+    assert!(err.contains("folded bin in @0 main to const true"), "{err}");
+    assert!(err.contains("sccp: changed the IR"), "{err}");
+    s.write("plain.cig", "exhale \"hi\"\n");
+    let quiet = text(
+        &s.cc(&["build", "plain.cig", "--emit", "cir", "--remarks"])
+            .stderr,
+    );
+    assert!(quiet.contains("copy-prop: nothing to do"), "{quiet}");
 }

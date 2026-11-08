@@ -178,7 +178,7 @@ struct BuildArgs {
     /// The optimisation level: 0 (lowering only), 1 or 2 (every pass there is). Stage A programs carry the script, so the level shapes `--emit` until stage B.
     #[arg(short = 'O', value_name = "LEVEL", value_parser = ["0", "1", "2"], conflicts_with = "passes")]
     opt: Option<String>,
-    /// Run exactly these passes, in this order, for bisecting: a comma list of fold-consts, dead-pure.
+    /// Run exactly these passes, in this order, for bisecting: a comma list of fold-consts, copy-prop, sccp, dead-pure.
     #[arg(long, value_name = "A,B", value_delimiter = ',')]
     passes: Option<Vec<String>>,
     /// With --emit: after the IR, what each pass changed, as a unified diff of the printed IR.
