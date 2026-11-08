@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
 // SPDX-License-Identifier: Apache-2.0
 //! `build --emit oci` (#41): a static Linux program as an OCI image, a
-//! scratch image of one file. The image is an OCI image layout in a tar
-//! (`docker load`, `podman load`, `skopeo copy oci-archive:`): one
+//! scratch image of one file. The image is an OCI image layout in a tar,
+//! with Docker's `manifest.json` beside its index as `docker save` writes
+//! them (`docker load`, `podman load`, `skopeo copy oci-archive:`): one
 //! uncompressed layer holding the program at `/<name>`, its entrypoint,
 //! and nothing else, since the program needs nothing else. Every time in it
 //! is zero and every owner root, so the same build writes the same bytes.
@@ -103,6 +104,16 @@ pub fn image(name: &str, program: &[u8], triple: &str) -> Option<Vec<u8>> {
         }],
     }))
     .expect("an index serialises");
+    // Docker's own manifest beside the OCI index, as `docker save` writes
+    // both since Docker 25: its loader reads this one, podman and skopeo
+    // the index.
+    let blob = |b: &[u8]| format!("blobs/sha256/{}", digest(b).trim_start_matches("sha256:"));
+    let docker = serde_json::to_vec(&serde_json::json!([{
+        "Config": blob(&config),
+        "RepoTags": [format!("localhost/{name}:latest")],
+        "Layers": [blob(&layer)],
+    }]))
+    .expect("a manifest serialises");
     let mut out = Vec::new();
     entry(
         &mut out,
@@ -112,6 +123,7 @@ pub fn image(name: &str, program: &[u8], triple: &str) -> Option<Vec<u8>> {
         br#"{"imageLayoutVersion":"1.0.0"}"#,
     );
     entry(&mut out, "index.json", 0o644, b'0', &index);
+    entry(&mut out, "manifest.json", 0o644, b'0', &docker);
     entry(&mut out, "blobs/", 0o755, b'5', b"");
     entry(&mut out, "blobs/sha256/", 0o755, b'5', b"");
     for blob in [&config, &manifest, &layer] {
