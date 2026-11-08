@@ -5,6 +5,7 @@
 //! compiler pins, with the checked script appended; it runs through the
 //! same run as `cig run` (CigScript's docs/PROGRAMS.md).
 
+mod audit;
 mod bench;
 mod build;
 mod cache;
@@ -62,10 +63,18 @@ enum Command {
     Bench(BenchArgs),
     /// Fetch the runtime (cig's own release asset) for other machines, checked against the sha256 this compiler pins.
     Fetch(FetchArgs),
+    /// The hardening a program carries, read from its headers (cig's build's): PIE, RELRO, a closed stack, CET or BTI/PAC, a signature. Report only.
+    Audit(AuditArgs),
     /// Check a program is what a build makes: its runtime against cig's release (or --runtime), its payload against its sha256 and the script (--script), the whole file byte for byte. Nothing runs.
     Verify(VerifyArgs),
     /// Cut a script down to the smallest one that is still interesting, for a bug report: by default, that its program differs from it (as `cigcompile test` finds); with a command after `--`, that the command exits 0 on it (`{}` is the candidate's path).
     Reduce(ReduceArgs),
+}
+
+#[derive(Args)]
+struct AuditArgs {
+    /// The program (or any executable).
+    program: PathBuf,
 }
 
 #[derive(Args)]
@@ -250,6 +259,7 @@ fn run() -> i32 {
         Some(Command::Clean(a)) => clean(&ctx, &a),
         Some(Command::Targets) => targets(&ctx),
         Some(Command::Fetch(a)) => fetch_cmd(&ctx, &a),
+        Some(Command::Audit(a)) => audit::audit(&ctx, &a.program),
         Some(Command::Verify(a)) => verify::verify(
             &ctx,
             &verify::Opts {

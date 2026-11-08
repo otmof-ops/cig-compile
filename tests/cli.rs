@@ -911,6 +911,38 @@ fn targets_say_the_stage_how_ci_proves_them_and_what_is_missing() {
     assert_eq!(freebsd["missing"], "no box (E777, E763)");
 }
 
+/// #40: `audit` reads a program's hardening from its headers, the rows for
+/// its kind of executable, and exits 0 whatever it finds (report only).
+#[test]
+fn audit_reads_a_programs_hardening() {
+    let s = Sandbox::new();
+    s.write("hi.cig", "exhale \"hi\"\n");
+    ok(&s.cc(&["build", "hi.cig"]));
+    let prog = exe_name("hi");
+    let out = ok(&s.cc(&["audit", &prog]));
+    let (kind, rows): (&str, &[&str]) = if cfg!(target_os = "linux") {
+        ("ELF", &["PIE", "RELRO", "NX stack"])
+    } else if cfg!(target_os = "macos") {
+        ("Mach-O", &["PIE", "NX stack", "signed"])
+    } else if cfg!(windows) {
+        ("PE", &["ASLR", "NX", "CFG", "signed"])
+    } else {
+        ("ELF", &["PIE", "RELRO", "NX stack"])
+    };
+    assert!(out.lines().any(|l| l.trim() == kind), "{out}");
+    for r in rows {
+        assert!(
+            out.lines().any(|l| l.trim_start().starts_with(r)),
+            "{r}: {out}"
+        );
+    }
+    let json: serde_json::Value =
+        serde_json::from_str(ok(&s.cc(&["--json", "audit", &prog])).trim()).unwrap();
+    assert_eq!(json["parts"][0]["kind"], kind);
+    s.write("plain.txt", "not a program\n");
+    assert_eq!(s.cc(&["audit", "plain.txt"]).status.code(), Some(3));
+}
+
 /// #37: `build --watch` builds, then builds again when the script is saved,
 /// until it is stopped.
 #[test]
