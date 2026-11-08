@@ -5,6 +5,7 @@
 //! compiler pins, with the checked script appended; it runs through the
 //! same run as `cig run` (CigScript's docs/PROGRAMS.md).
 
+mod audit;
 mod bench;
 mod build;
 mod cache;
@@ -63,10 +64,18 @@ enum Command {
     Bench(BenchArgs),
     /// Fetch the runtime (cig's own release asset) for other machines, checked against the sha256 this compiler pins.
     Fetch(FetchArgs),
+    /// The hardening a program carries, read from its headers (cig's build's): PIE, RELRO, a closed stack, CET or BTI/PAC, a signature. Report only.
+    Audit(AuditArgs),
     /// Check a program is what a build makes: its runtime against cig's release (or --runtime), its payload against its sha256 and the script (--script), the whole file byte for byte. Nothing runs.
     Verify(VerifyArgs),
     /// Cut a script down to the smallest one that is still interesting, for a bug report: by default, that its program differs from it (as `cigcompile test` finds); with a command after `--`, that the command exits 0 on it (`{}` is the candidate's path).
     Reduce(ReduceArgs),
+}
+
+#[derive(Args)]
+struct AuditArgs {
+    /// The program (or any executable).
+    program: PathBuf,
 }
 
 #[derive(Args)]
@@ -117,6 +126,11 @@ struct FetchArgs {
 
 #[derive(Args)]
 struct BenchArgs {
+    /// One user script (its `.cig`) to bench on its own, built and
+    /// interpreted through the same harness as the set. The expected
+    /// output is what `cig run <script>` prints with no arguments.
+    #[arg(conflicts_with = "set")]
+    script: Option<PathBuf>,
     /// The most samples per program and side, after a warm-up run (a side
     /// stops sooner once it has three and has run three seconds).
     #[arg(long, default_value_t = 10)]
@@ -158,8 +172,8 @@ struct BuildArgs {
     /// Check only: write nothing, need no runtime.
     #[arg(long)]
     check: bool,
-    /// `cir`: print the verified IR (#3) instead of a program. `oci`: the program, and beside it an OCI image of it (`<program>.oci.tar`, a scratch image of one file; Linux targets).
-    #[arg(long, value_name = "WHAT", value_parser = ["cir", "oci"])]
+    /// `cir`: print the verified IR (#3) instead of a program, shaped by `-O`/`--passes`. `cir-opt`: the same IR, said in words: after the passes (at stage A, equivalent to `cir` at the chosen level; stage B may split them). `oci`: the program, and beside it an OCI image of it (`<program>.oci.tar`, a scratch image of one file; Linux targets).
+    #[arg(long, value_name = "WHAT", value_parser = ["cir", "cir-opt", "oci"])]
     emit: Option<String>,
     /// The optimisation level: 0 (lowering only), 1 or 2 (every pass there is). Stage A programs carry the script, so the level shapes `--emit` until stage B.
     #[arg(short = 'O', value_name = "LEVEL", value_parser = ["0", "1", "2"], conflicts_with = "passes")]
@@ -170,6 +184,9 @@ struct BuildArgs {
     /// With --emit: after the IR, what each pass changed, as a unified diff of the printed IR.
     #[arg(long, requires = "emit")]
     passes_diff: bool,
+    /// Say on stderr what each pass did or left alone and why: one line per remark, one summary a pass. `--json` writes the remarks as JSON lines. Cheap when off (no extra work is done).
+    #[arg(long)]
+    remarks: bool,
     /// Where the build's time went, phase by phase, on stderr; =FILE also writes a Chrome trace (chrome://tracing, Perfetto).
     #[arg(long, value_name = "FILE", num_args = 0..=1, require_equals = true)]
     timings: Option<Option<PathBuf>>,
@@ -263,6 +280,7 @@ fn run() -> i32 {
         Some(Command::Clean(a)) => clean(&ctx, &a),
         Some(Command::Targets) => targets(&ctx),
         Some(Command::Fetch(a)) => fetch_cmd(&ctx, &a),
+        Some(Command::Audit(a)) => audit::audit(&ctx, &a.program),
         Some(Command::Verify(a)) => verify::verify(
             &ctx,
             &verify::Opts {
@@ -298,6 +316,7 @@ fn run() -> i32 {
                         refs: a.refs,
                         markdown: a.markdown,
                         set: a.set.as_deref(),
+                        script: a.script.as_deref(),
                     },
                 ),
                 Err(d) => {
@@ -381,9 +400,18 @@ fn build_cmd(
     let target = runtime::target(a.target.as_deref()).map_err(fail)?;
     let jobs = project::jobs(a.path.as_deref(), a.out.as_deref(), target).map_err(fail)?;
     let passes = passes_of(a).map_err(fail)?;
-    if a.emit.as_deref() == Some("cir") {
-        emit_cir(ctx, &jobs, &passes, a.passes_diff)?;
+    // `cir` and `cir-opt` print the same IR at stage A: both are shaped by
+    // `-O`/`--passes`, and `cir-opt` is the explicit "after-passes" name
+    // reserved so that stage B can split the two without a flag change.
+    if matches!(a.emit.as_deref(), Some("cir") | Some("cir-opt")) {
+        emit_cir(ctx, &jobs, &passes, a.passes_diff, a.remarks)?;
         return Ok(None);
+    }
+    if a.remarks {
+        // `--remarks` on a plain build: run the pass pipeline once per
+        // script so each pass can say what it did or left, then let the
+        // build go on. The IR is not kept and nothing else changes.
+        remark_only(ctx, &jobs, &passes)?;
     }
     let oci = a.emit.as_deref() == Some("oci");
     if oci && oci::platform(target.triple).is_none() {
@@ -569,15 +597,17 @@ fn passes_of(
     Ok(pass::level(level))
 }
 
-/// `--emit=cir`: each script's IR, lowered, through the passes asked for
-/// and verified after each, printed; with `--passes-diff`, what each pass
-/// changed. A script that does not check is said as `cig check` says it;
-/// a verifier failure is the compiler's bug.
+/// `--emit=cir` (or `--emit=cir-opt`): each script's IR, lowered, through
+/// the passes asked for and verified after each, printed; with
+/// `--passes-diff`, what each pass changed; with `--remarks`, each pass
+/// also says what it did or left alone. A script that does not check is
+/// said as `cig check` says it; a verifier failure is the compiler's bug.
 fn emit_cir(
     ctx: &Ctx,
     jobs: &[project::Job],
     passes: &[&'static dyn cigcompile::cir::pass::Pass],
     diffs: bool,
+    remarks: bool,
 ) -> Result<(), i32> {
     use cigcompile::cir::{emit_with, EmitError, LowerError};
     for job in jobs {
@@ -588,12 +618,15 @@ fn emit_cir(
             cigscript::cli::report(ctx, &d, None, None);
             exit::USAGE
         })?;
-        match emit_with(&source, &job.file, passes, diffs) {
+        match emit_with(&source, &job.file, passes, diffs, remarks) {
             Ok(e) => {
                 // V6: an effectful pull called outside every burn, which
                 // the run refuses with E701.
                 for w in &e.warnings {
                     eprintln!("{}: {w}", job.file);
+                }
+                if remarks {
+                    print_remarks(ctx, &job.file, &e.remarks);
                 }
                 print!("{}", e.text);
                 for (name, diff) in &e.diffs {
@@ -629,6 +662,83 @@ fn emit_cir(
         }
     }
     Ok(())
+}
+
+/// `--remarks` on a plain build: lower each script and run the passes to
+/// collect remarks; nothing else is kept. The IR is thrown away: the
+/// build that follows is unchanged. A script that does not check or lower
+/// is said as `cig check` says it.
+fn remark_only(
+    ctx: &Ctx,
+    jobs: &[project::Job],
+    passes: &[&'static dyn cigcompile::cir::pass::Pass],
+) -> Result<(), i32> {
+    use cigcompile::cir::pass::run_passes_with_remarks;
+    use cigcompile::cir::{lower_source, LowerError};
+    for job in jobs {
+        let source = std::fs::read_to_string(&job.script).map_err(|e| {
+            let d = cigscript::diagnostics::usage(format!("cannot read {}: {e}", job.file))
+                .code("E1000")
+                .with_hint("name a .cig script you can read");
+            cigscript::cli::report(ctx, &d, None, None);
+            exit::USAGE
+        })?;
+        match lower_source(&source, &job.file) {
+            Ok(mut m) => match run_passes_with_remarks(&mut m, passes) {
+                Ok((_, remarks)) => print_remarks(ctx, &job.file, &remarks),
+                Err(e) => {
+                    let lines: Vec<String> = e.errors.iter().map(|x| x.to_string()).collect();
+                    let d = cigscript::diagnostics::internal(format!(
+                        "the IR of {} broke a rule after {}: {}",
+                        job.file,
+                        e.pass,
+                        lines.join("; ")
+                    ));
+                    cigscript::cli::report(ctx, &d, None, None);
+                    return Err(70);
+                }
+            },
+            Err(LowerError::Diagnostic(d)) => {
+                cigscript::cli::report(ctx, &d, Some(&job.file), Some(&source));
+                return Err(exit::CHECK);
+            }
+            Err(LowerError::Internal(e)) => {
+                let d = cigscript::diagnostics::internal(format!("lowering {}: {e}", job.file));
+                cigscript::cli::report(ctx, &d, None, None);
+                return Err(70);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Print the remarks a pass pipeline produced, prefixed with the file;
+/// `--json` writes them as one JSON object a line, plain text otherwise.
+fn print_remarks(ctx: &Ctx, file: &str, remarks: &[cigcompile::cir::pass::Remark]) {
+    for r in remarks {
+        if ctx.json {
+            let line = if r.span.line > 0 {
+                serde_json::json!({
+                    "remark": r.pass,
+                    "file": file,
+                    "message": r.message,
+                    "line": r.span.line,
+                    "col": r.span.col,
+                })
+            } else {
+                serde_json::json!({
+                    "remark": r.pass,
+                    "file": file,
+                    "message": r.message,
+                })
+            };
+            eprintln!("{line}");
+        } else if r.span.line > 0 {
+            eprintln!("{}:{}:{}: {}", file, r.span.line, r.span.col, r.message);
+        } else {
+            eprintln!("{}: {}", file, r.message);
+        }
+    }
 }
 
 /// Remove the programs a build of this path wrote: only files that are
