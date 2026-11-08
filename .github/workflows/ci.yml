@@ -163,6 +163,49 @@ jobs:
           diff -u a.txt b.txt
           echo "all $n scenarios say the same compiled as interpreted"
 
+  # #6: CigScript's own burn tests with every script compiled. Its test
+  # helpers start cig through CIG_TEST_BIN (cig-script 1.17.1), here a cig
+  # that builds each script with this cigcompile and runs the program
+  # (ci/cig-compiled.sh); every other command is the runtime's own cig.
+  # pack, hops and wall run whole; of the CLI suite, the tin, seal, ledger,
+  # box and unburn tests, but those whose subject is the interpreter's own
+  # command line (a pinned script handed to another cig, a crash report's
+  # argv, golden text that names `cig run`).
+  burns:
+    name: CigScript's burn tests, compiled (${{ matrix.os }}) (#6)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: the pinned CigScript
+        shell: bash
+        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: otmof-ops/cig-script
+          ref: ${{ env.CIGSCRIPT_REF }}
+          path: cigscript-src
+      - name: build
+        shell: bash
+        run: |
+          cargo build --release
+          echo "BIN=$PWD/target/release" >> "$GITHUB_ENV"
+      - name: pack, hops, wall, and the CLI's tin and box tests
+        shell: bash
+        working-directory: cigscript-src
+        run: |
+          export CIG_TEST_BIN="$GITHUB_WORKSPACE/ci/cig-compiled.sh"
+          export CIG_REAL="$BIN/cig-runtime" CIGCOMPILE="$BIN/cigcompile"
+          export CIG_PROGRAMS="$RUNNER_TEMP/progs"
+          cargo test --test pack --test hops --test wall
+          cargo test --test cli -- tin seal ledger box unburn journal \
+            --skip a_pinned_script --skip crash_report --skip repro --skip report_bundles \
+            --skip a_report_never --skip corpus_diagnoses --skip usage_layer --skip identical_plans
+
   # #27: a plain cargo build links this machine's glibc, and its programs
   # must not. Built here with no runtime given, a program is static and runs
   # in Debian 12 and Alpine, whose glibc is older or absent.
