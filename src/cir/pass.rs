@@ -8,7 +8,7 @@
 use super::ir::*;
 use super::verify::{errors, verify, verify_transition, Trace, VerifyError};
 use cigscript::syntax::ast::{BinOp, UnOp};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub trait Pass {
     fn name(&self) -> &'static str;
@@ -56,24 +56,29 @@ pub fn default_passes() -> Vec<&'static dyn Pass> {
 }
 
 /// Every pass `--passes` can name, in the order the levels run them.
-pub const NAMES: &[&str] = &["fold-consts", "dead-pure"];
+pub const NAMES: &[&str] = &["fold-consts", "copy-prop", "sccp", "dead-pure"];
 
 /// A pass by the name `--passes` gives it.
 pub fn by_name(name: &str) -> Option<&'static dyn Pass> {
     match name {
         "fold-consts" => Some(&FoldConsts),
+        "copy-prop" => Some(&CopyProp),
+        "sccp" => Some(&Sccp),
         "dead-pure" => Some(&DeadPure),
         _ => None,
     }
 }
 
 /// The passes an optimisation level runs. `-O0` is lowering only; `-O1`
-/// and `-O2` run every pass there is: stage B's passes (sccp, gvn, licm,
-/// inlining) are what will set `-O2` apart (#33).
+/// and `-O2` run every pass there is: stage B's passes (gvn, licm,
+/// inlining) are what will set `-O2` apart (#33). `fold-consts` runs
+/// twice because `copy-prop` makes new constant operands visible to it
+/// (`stick a = 1; if a == 1`: the second fold turns the compare into
+/// `const true` and `sccp` then empties the dead branch).
 pub fn level(n: u8) -> Vec<&'static dyn Pass> {
     match n {
         0 => vec![],
-        _ => vec![&FoldConsts, &DeadPure],
+        _ => vec![&FoldConsts, &CopyProp, &FoldConsts, &Sccp, &DeadPure],
     }
 }
 
@@ -90,18 +95,13 @@ impl Pass for FoldConsts {
 
     fn run(&self, m: &mut Module) {
         for f in &mut m.funcs {
-            let mut known: std::collections::HashMap<ValueId, Const> =
-                std::collections::HashMap::new();
+            let mut known: HashMap<ValueId, Const> = HashMap::new();
             fold_block(&mut f.body, &mut known, &mut f.vals);
         }
     }
 }
 
-fn fold_block(
-    b: &mut Block,
-    known: &mut std::collections::HashMap<ValueId, Const>,
-    vals: &mut [ValueInfo],
-) {
+fn fold_block(b: &mut Block, known: &mut HashMap<ValueId, Const>, vals: &mut [ValueInfo]) {
     for i in &mut b.instrs {
         for blk in i.kind.blocks_mut() {
             fold_block(blk, known, vals);
@@ -208,6 +208,307 @@ fn prune(b: &mut Block, used: &HashSet<ValueId>) -> bool {
         }
     }
     changed
+}
+
+/// Copy propagation: a use of a value that is a plain copy of another is
+/// replaced by the original. `stick a = b` uses `b`: a later load of `a`
+/// reads the same value the declaration stored, so the use becomes a use
+/// of that value directly and the load is dead.
+///
+/// Must not: rewrite across a store to the same slot, or across the
+/// boundary into a function that captures the slot. Both are side-stepped
+/// by considering only slots that are neither `roll` (mutable) nor shared
+/// with another function (`captured`): the declaration's source is the
+/// slot's only value in this function's lifetime, and nowhere else is a
+/// load of it visible.
+pub struct CopyProp;
+
+impl Pass for CopyProp {
+    fn name(&self) -> &'static str {
+        "copy-prop"
+    }
+
+    fn run(&self, m: &mut Module) {
+        let flag: Vec<bool> = m.vars.iter().map(|v| !v.mutable && !v.captured).collect();
+        for f in &mut m.funcs {
+            copy_prop_func(f, &flag);
+        }
+    }
+}
+
+fn copy_prop_func(f: &mut Func, flag: &[bool]) {
+    let mut src: HashMap<VarId, ValueId> = HashMap::new();
+    collect_decl_sources(&f.body, flag, &mut src);
+    if src.is_empty() {
+        return;
+    }
+    let mut rename: HashMap<ValueId, ValueId> = HashMap::new();
+    collect_load_renames(&f.body, &src, &mut rename);
+    if rename.is_empty() {
+        return;
+    }
+    // Resolve chains: a load of `a` replaced by a load of `b` which is
+    // itself a copy of `c` (`stick a = b; stick c = a`) walks to `c`'s
+    // source. Capped to guard against a cycle the lowering should not
+    // produce.
+    let keys: Vec<ValueId> = rename.keys().copied().collect();
+    for k in keys {
+        let mut cur = rename[&k];
+        let mut steps = 0;
+        while let Some(&nx) = rename.get(&cur) {
+            if nx == cur || steps > 1024 {
+                break;
+            }
+            cur = nx;
+            steps += 1;
+        }
+        rename.insert(k, cur);
+    }
+    rewrite_block_uses(&mut f.body, &rename);
+    let renamed: HashSet<ValueId> = rename.keys().copied().collect();
+    remove_renamed_loads(&mut f.body, &renamed);
+}
+
+fn collect_decl_sources(b: &Block, flag: &[bool], out: &mut HashMap<VarId, ValueId>) {
+    for i in &b.instrs {
+        if let Kind::Decl(v, x) = &i.kind {
+            if flag.get(v.0 as usize).copied().unwrap_or(false) {
+                out.insert(*v, *x);
+            }
+        }
+        for blk in i.kind.blocks() {
+            collect_decl_sources(blk, flag, out);
+        }
+    }
+}
+
+fn collect_load_renames(
+    b: &Block,
+    src: &HashMap<VarId, ValueId>,
+    rename: &mut HashMap<ValueId, ValueId>,
+) {
+    for i in &b.instrs {
+        if let (Kind::Load(v), Some(r)) = (&i.kind, i.result) {
+            if let Some(x) = src.get(v) {
+                rename.insert(r, *x);
+            }
+        }
+        for blk in i.kind.blocks() {
+            collect_load_renames(blk, src, rename);
+        }
+    }
+}
+
+fn rewrite_block_uses(b: &mut Block, rename: &HashMap<ValueId, ValueId>) {
+    for i in &mut b.instrs {
+        rewrite_kind_uses(&mut i.kind, rename);
+        for blk in i.kind.blocks_mut() {
+            rewrite_block_uses(blk, rename);
+        }
+    }
+}
+
+fn rewrite_kind_uses(k: &mut Kind, rename: &HashMap<ValueId, ValueId>) {
+    let rn = |v: ValueId| rename.get(&v).copied().unwrap_or(v);
+    match k {
+        Kind::Const(_)
+        | Kind::Prelude(_)
+        | Kind::Load(_)
+        | Kind::Closure(_)
+        | Kind::Break
+        | Kind::Continue
+        | Kind::Loop { .. }
+        | Kind::Try { .. } => {}
+        Kind::Decl(_, v) | Kind::Store(_, v) | Kind::Unary(_, v) => {
+            *v = rn(*v);
+        }
+        Kind::Binary(_, a, b) => {
+            *a = rn(*a);
+            *b = rn(*b);
+        }
+        Kind::Short { subject, .. } => {
+            *subject = rn(*subject);
+        }
+        Kind::MakeList(vs) | Kind::PackDecl(vs) | Kind::Exhale(vs) => {
+            for v in vs {
+                *v = rn(*v);
+            }
+        }
+        Kind::MakeMap(kvs) => {
+            for (k, v) in kvs {
+                if let MapKey::Dyn(d) = k {
+                    *d = rn(*d);
+                }
+                *v = rn(*v);
+            }
+        }
+        Kind::Interp(ps) => {
+            for p in ps {
+                if let Piece::Val(v) = p {
+                    *v = rn(*v);
+                }
+            }
+        }
+        Kind::Member { obj, .. } => {
+            *obj = rn(*obj);
+        }
+        Kind::Index { obj, idx } => {
+            *obj = rn(*obj);
+            *idx = rn(*idx);
+        }
+        Kind::SetIndex { obj, idx, val, .. } => {
+            *obj = rn(*obj);
+            *idx = rn(*idx);
+            *val = rn(*val);
+        }
+        Kind::SetMember { obj, val, .. } => {
+            *obj = rn(*obj);
+            *val = rn(*val);
+        }
+        Kind::BurnOp { args, .. }
+        | Kind::CallBuiltin { args, .. }
+        | Kind::CallUser { args, .. } => {
+            for a in args {
+                *a = rn(*a);
+            }
+        }
+        Kind::CallValue { f, args } => {
+            *f = rn(*f);
+            for a in args {
+                *a = rn(*a);
+            }
+        }
+        Kind::CallMethod { recv, args, .. } => {
+            *recv = rn(*recv);
+            for a in args {
+                *a = rn(*a);
+            }
+        }
+        Kind::MakeChain { steps, .. } => {
+            for s in steps {
+                s.1 = rn(s.1);
+            }
+        }
+        Kind::Burn(b) => {
+            if let Some(l) = &mut b.label {
+                *l = rn(*l);
+            }
+        }
+        Kind::If { cond, .. } => {
+            *cond = rn(*cond);
+        }
+        Kind::ForEach { iter, .. } => {
+            *iter = rn(*iter);
+        }
+        Kind::Yield(v) | Kind::Ret(v) | Kind::Throw(v) => {
+            *v = rn(*v);
+        }
+    }
+}
+
+fn remove_renamed_loads(b: &mut Block, renamed: &HashSet<ValueId>) {
+    b.instrs.retain(|i| match (&i.kind, i.result) {
+        (Kind::Load(_), Some(r)) => !renamed.contains(&r),
+        _ => true,
+    });
+    for i in &mut b.instrs {
+        for blk in i.kind.blocks_mut() {
+            remove_renamed_loads(blk, renamed);
+        }
+    }
+}
+
+/// Sparse conditional constant propagation, in the form CIR's structured
+/// control flow needs: `fold-consts`, run before it, carries the constants,
+/// and this pass empties the dead side of an `if` whose condition is a
+/// known boolean constant. The lattice through phis comes with stage B's
+/// SSA, if it has phis. The `if` itself
+/// stays, so the places of every surviving ordered instruction do too
+/// (T1); the cond's own instruction stays, so a condition that might have
+/// raised still raises at its own span.
+///
+/// Must not: remove a branch whose condition can raise (the branch
+/// instruction stays), drop a `burn.op` (T3 would catch it) or move one
+/// out of a region. The dead side is left alone when it carries a
+/// `burn.op`, a `burn`, a `closure`, a `pack` or a chain declaration: all
+/// visible in the module beyond this block, so their removal is a bigger
+/// change than this pass performs at stage A.
+pub struct Sccp;
+
+impl Pass for Sccp {
+    fn name(&self) -> &'static str {
+        "sccp"
+    }
+
+    fn run(&self, m: &mut Module) {
+        for f in &mut m.funcs {
+            let mut known: HashMap<ValueId, bool> = HashMap::new();
+            collect_bool_consts(&f.body, &mut known);
+            sccp_block(&mut f.body, &known);
+        }
+    }
+}
+
+fn collect_bool_consts(b: &Block, out: &mut HashMap<ValueId, bool>) {
+    for i in &b.instrs {
+        if let (Kind::Const(Const::Bool(v)), Some(r)) = (&i.kind, i.result) {
+            out.insert(r, *v);
+        }
+        for blk in i.kind.blocks() {
+            collect_bool_consts(blk, out);
+        }
+    }
+}
+
+fn sccp_block(b: &mut Block, known: &HashMap<ValueId, bool>) {
+    for i in &mut b.instrs {
+        for blk in i.kind.blocks_mut() {
+            sccp_block(blk, known);
+        }
+        if let Kind::If {
+            cond,
+            then,
+            otherwise,
+        } = &mut i.kind
+        {
+            if let Some(&taken) = known.get(cond) {
+                if taken {
+                    if let Some(o) = otherwise {
+                        if safe_to_clear(o) {
+                            o.instrs.clear();
+                        }
+                    }
+                } else if safe_to_clear(then) {
+                    then.instrs.clear();
+                }
+            }
+        }
+    }
+}
+
+fn safe_to_clear(b: &Block) -> bool {
+    for i in &b.instrs {
+        if !kind_safe_to_clear(&i.kind) {
+            return false;
+        }
+        for blk in i.kind.blocks() {
+            if !safe_to_clear(blk) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn kind_safe_to_clear(k: &Kind) -> bool {
+    !matches!(
+        k,
+        Kind::BurnOp { .. }
+            | Kind::Burn(_)
+            | Kind::Closure(_)
+            | Kind::MakeChain { .. }
+            | Kind::PackDecl(_)
+    )
 }
 
 /// Passes that break the rules on purpose, so the tests can show the
@@ -382,5 +683,153 @@ pub mod broken {
             }
         }
         false
+    }
+
+    /// Clears the first `if.then` that holds a `burn.op`, ignoring the
+    /// condition. The broken twin of `sccp`: a correct pass leaves a dead
+    /// branch alone when its removal would delete an effect, and the
+    /// transition check's T3 catches this shape where the pass itself
+    /// failed to.
+    pub struct DropBranchWithEffect;
+
+    impl Pass for DropBranchWithEffect {
+        fn name(&self) -> &'static str {
+            "drop-branch-with-effect"
+        }
+
+        fn run(&self, m: &mut Module) {
+            for f in &mut m.funcs {
+                if drop_effect_branch(&mut f.body) {
+                    return;
+                }
+            }
+        }
+    }
+
+    fn drop_effect_branch(b: &mut Block) -> bool {
+        for i in &mut b.instrs {
+            if let Kind::If { then, .. } = &mut i.kind {
+                if then
+                    .instrs
+                    .iter()
+                    .any(|ii| matches!(ii.kind, Kind::BurnOp { .. }))
+                {
+                    then.instrs.clear();
+                    return true;
+                }
+            }
+            for blk in i.kind.blocks_mut() {
+                if drop_effect_branch(blk) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Rewrites the first use after the first `if` with a non-empty
+    /// `then`, replacing it with a value defined inside that then-branch.
+    /// The broken twin of `copy-prop`: a correct pass never propagates a
+    /// value out of the scope it is defined in, and V1 catches the shape
+    /// where it slipped (`%r used where it is not defined`).
+    pub struct PropOutOfNestedScope;
+
+    impl Pass for PropOutOfNestedScope {
+        fn name(&self) -> &'static str {
+            "prop-out-of-nested-scope"
+        }
+
+        fn run(&self, m: &mut Module) {
+            for f in &mut m.funcs {
+                if prop_out_once(&mut f.body) {
+                    return;
+                }
+            }
+        }
+    }
+
+    fn first_result_in(b: &Block) -> Option<ValueId> {
+        for i in &b.instrs {
+            if let Some(r) = i.result {
+                return Some(r);
+            }
+            for blk in i.kind.blocks() {
+                if let Some(r) = first_result_in(blk) {
+                    return Some(r);
+                }
+            }
+        }
+        None
+    }
+
+    fn prop_out_once(b: &mut Block) -> bool {
+        // Find the first If with a non-empty then, remember a value it
+        // defines, and rewrite the first instruction AFTER that if whose
+        // first use we can reach.
+        let mut inner: Option<ValueId> = None;
+        let mut after: Option<usize> = None;
+        for (k, i) in b.instrs.iter().enumerate() {
+            if let Kind::If { then, .. } = &i.kind {
+                if let Some(r) = first_result_in(then) {
+                    inner = Some(r);
+                    after = Some(k);
+                    break;
+                }
+            }
+        }
+        if let (Some(r), Some(k)) = (inner, after) {
+            for later in b.instrs.iter_mut().skip(k + 1) {
+                if replace_first_use(&mut later.kind, r) {
+                    return true;
+                }
+            }
+        }
+        for i in &mut b.instrs {
+            for blk in i.kind.blocks_mut() {
+                if prop_out_once(blk) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn replace_first_use(k: &mut Kind, with: ValueId) -> bool {
+        match k {
+            Kind::Decl(_, v)
+            | Kind::Store(_, v)
+            | Kind::Unary(_, v)
+            | Kind::Yield(v)
+            | Kind::Ret(v)
+            | Kind::Throw(v) => {
+                *v = with;
+                true
+            }
+            Kind::Binary(_, a, _) => {
+                *a = with;
+                true
+            }
+            Kind::Short { subject, .. } => {
+                *subject = with;
+                true
+            }
+            Kind::MakeList(vs) | Kind::PackDecl(vs) | Kind::Exhale(vs) => {
+                if let Some(first) = vs.first_mut() {
+                    *first = with;
+                    true
+                } else {
+                    false
+                }
+            }
+            Kind::Member { obj, .. } | Kind::Index { obj, .. } => {
+                *obj = with;
+                true
+            }
+            Kind::If { cond, .. } => {
+                *cond = with;
+                true
+            }
+            _ => false,
+        }
     }
 }

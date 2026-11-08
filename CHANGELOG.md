@@ -3,6 +3,18 @@
 All notable changes to CigCompile. The format follows Keep a Changelog; the
 project follows semantic versioning.
 
+## Unreleased
+
+- **Two more CIR passes:** `copy-prop` folds chains of immutable copies
+  (`stick a = b` uses `b`), and `sccp` empties the dead side of an `if`
+  whose condition is a known boolean constant. Both run at `-O1` and
+  `-O2`, between `fold-consts` and `dead-pure`, and `--passes` names them
+  alongside the others. Neither changes behaviour: `copy-prop` only
+  propagates through slots that are neither mutable nor captured, and
+  `sccp` leaves a dead branch alone when emptying it would delete an
+  effect (T3 catches that shape). Golden and negative tests sit under
+  `tests/cir/copy-prop/` and `tests/cir/sccp/`.
+
 ## 0.1.2 — 2026-11-07
 
 - **Programs for cig 1.16.1.** Its box makes the forwarder's listener

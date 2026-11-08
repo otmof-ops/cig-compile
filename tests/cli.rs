@@ -695,7 +695,10 @@ fn levels_and_pass_lists_shape_the_emitted_ir() {
     assert_eq!(bad.status.code(), Some(3));
     assert!(
         text(&bad.stderr).contains("there is no pass `inline`")
-            && text(&bad.stderr).contains("fold-consts, dead-pure"),
+            && text(&bad.stderr).contains("fold-consts")
+            && text(&bad.stderr).contains("copy-prop")
+            && text(&bad.stderr).contains("sccp")
+            && text(&bad.stderr).contains("dead-pure"),
         "{}",
         text(&bad.stderr)
     );
