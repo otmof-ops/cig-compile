@@ -189,6 +189,19 @@ jobs:
             echo "$image: $out"
             [ "$out" = "hello from a program" ]
           done
+      # #41: the same program as an OCI image, a scratch image of one file.
+      - name: --emit oci, loaded and run with nothing else in the image
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf 'stick who = args.get(0, "nobody")\nexhale "hello from a scratch image, ${who}"\n' > img.cig
+          ./target/release/cigcompile build img.cig --emit oci
+          docker load -i img.oci.tar
+          out=$(docker run --rm -e CIG_SEAL_KEY=file localhost/img:latest Ada)
+          echo "$out"
+          [ "$out" = "hello from a scratch image, Ada" ]
 
   nothing-installed:
     name: nothing installed (#5)

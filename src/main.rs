@@ -12,6 +12,7 @@ mod cache;
 mod digests;
 mod fat;
 mod fetch;
+mod oci;
 mod project;
 mod reduce;
 mod runtime;
@@ -156,8 +157,8 @@ struct BuildArgs {
     /// Check only: write nothing, need no runtime.
     #[arg(long)]
     check: bool,
-    /// Print what a stage of the compiler makes instead of a program: `cir`, the verified IR (#3).
-    #[arg(long, value_name = "WHAT", value_parser = ["cir"])]
+    /// `cir`: print the verified IR (#3) instead of a program. `oci`: the program, and beside it an OCI image of it (`<program>.oci.tar`, a scratch image of one file; Linux targets).
+    #[arg(long, value_name = "WHAT", value_parser = ["cir", "oci"])]
     emit: Option<String>,
     /// The optimisation level: 0 (lowering only), 1 or 2 (every pass there is). Stage A programs carry the script, so the level shapes `--emit` until stage B.
     #[arg(short = 'O', value_name = "LEVEL", value_parser = ["0", "1", "2"], conflicts_with = "passes")]
@@ -310,9 +311,19 @@ fn build_cmd(
     let target = runtime::target(a.target.as_deref()).map_err(fail)?;
     let jobs = project::jobs(a.path.as_deref(), a.out.as_deref(), target).map_err(fail)?;
     let passes = passes_of(a).map_err(fail)?;
-    if a.emit.is_some() {
+    if a.emit.as_deref() == Some("cir") {
         emit_cir(ctx, &jobs, &passes, a.passes_diff)?;
         return Ok(None);
+    }
+    let oci = a.emit.as_deref() == Some("oci");
+    if oci && oci::platform(target.triple).is_none() {
+        return Err(fail(
+            cigscript::diagnostics::usage(format!(
+                "an OCI image is of a Linux program, and this build is for {}",
+                target.triple
+            ))
+            .with_hint("build for Linux: --target x86_64-unknown-linux-musl (or aarch64-unknown-linux-musl, armv7-unknown-linux-musleabihf)"),
+        ));
     }
     timings::enable(a.timings.is_some(), a.json_progress);
     let started = std::time::Instant::now();
@@ -343,6 +354,33 @@ fn build_cmd(
     finish(&built.as_ref().map(|_| ()).map_err(|c| *c));
     let built = built?;
     warn_linkage(ctx, target, &rt);
+    if oci {
+        for b in &built {
+            let image = std::fs::read(&b.job.out)
+                .ok()
+                .and_then(|bytes| oci::image(&b.job.name, &bytes, target.triple));
+            let path = oci::path_for(&b.job.out);
+            let written = image.map(|i| build::write_if_changed(&path, &i));
+            match written {
+                Some(Ok(_)) if ctx.json => println!(
+                    "{}",
+                    serde_json::json!({"image": path.to_string_lossy(), "program": b.job.out.to_string_lossy()})
+                ),
+                Some(Ok(_)) => println!(
+                    "  image  {} (docker load -i, then run localhost/{}:latest)",
+                    path.display(),
+                    b.job.name
+                ),
+                _ => {
+                    return Err(fail(
+                        cigscript::diagnostics::usage(format!("cannot write {}", path.display()))
+                            .code("E1004")
+                            .with_hint("write it somewhere you can with -o"),
+                    ))
+                }
+            }
+        }
+    }
     Ok(Some((built, rt)))
 }
 
