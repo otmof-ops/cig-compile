@@ -910,3 +910,42 @@ fn targets_say_the_stage_how_ci_proves_them_and_what_is_missing() {
     assert_eq!(freebsd["ci"], "built, not run");
     assert_eq!(freebsd["missing"], "no box (E777, E763)");
 }
+
+/// #37: `build --watch` builds, then builds again when the script is saved,
+/// until it is stopped.
+#[test]
+fn watch_rebuilds_on_save() {
+    let s = Sandbox::new();
+    s.write("w.cig", "exhale \"one\"\n");
+    let mut c = Command::new(env!("CARGO_BIN_EXE_cigcompile"));
+    s.env(&mut c);
+    let mut child = c
+        .args(["build", "w.cig", "--watch"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("start the watch");
+    let name = exe_name("w");
+    let says = |want: &str| -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while std::time::Instant::now() < deadline {
+            if s.path().join(&name).exists() {
+                let o = s.prog(&name, &[]);
+                if text(&o.stdout).trim() == want {
+                    return true;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        false
+    };
+    let first = says("one");
+    // A later time on a filesystem with coarse clocks, then the save.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    s.write("w.cig", "exhale \"two\"\n");
+    let second = first && says("two");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first, "the first build never ran");
+    assert!(second, "the save was not rebuilt");
+}
