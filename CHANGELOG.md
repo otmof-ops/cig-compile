@@ -5,6 +5,23 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **`build --sign <key>` and `verify --signature <sig>`** (#10). A build
+  with `--sign` writes a detached SSH signature of every program it made,
+  `<program>.sig`, made with `ssh-keygen -Y sign` and the namespace
+  `cigcompile-program`: a signature made here cannot be replayed as a git
+  or generic file signature, and one made with another namespace fails to
+  verify. `<key>` is an ssh private-key file, or a public-key file with
+  `ssh-agent` holding the private one. With `--sbom`, the SBOM is signed
+  too (`<program>.cdx.json.sig`).
+- **`verify` gains a `signature` part.** `--signature <file>` holds the
+  signature to a program by `ssh-keygen -Y verify` (with
+  `--allowed-signers <file>` and `--identity <id>`) or by
+  `-Y check-novalidate` (without one, reported `unchecked`). A bad
+  signature exits 1 like any other difference.
+- The Apple Developer ID and Authenticode parts of signing are a separate
+  step: they need identities an operator holds, not something a compiler
+  can build on its own (cig-script#153).
+
 - **Two more CIR passes:** `copy-prop` folds chains of immutable copies
   (`stick a = b` uses `b`), and `sccp` empties the dead side of an `if`
   whose condition is a known boolean constant. Both run at `-O1` and
@@ -14,6 +31,7 @@ project follows semantic versioning.
   `sccp` leaves a dead branch alone when emptying it would delete an
   effect (T3 catches that shape). Golden and negative tests sit under
   `tests/cir/copy-prop/` and `tests/cir/sccp/`.
+
 
 ## 0.1.2 — 2026-11-07
 
