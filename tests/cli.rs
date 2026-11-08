@@ -1077,9 +1077,18 @@ fn emit_deb_writes_a_debian_package_of_the_program() {
         "--pkg-description",
         "A hi program.",
     ]));
-    let deb_name = "hi_1.2.3_amd64.deb";
-    assert!(out.contains(deb_name), "{out}");
-    let deb = fs::read(s.path().join(deb_name)).unwrap();
+    // The machine's own architecture, as Debian names it: the program is
+    // built for the host, so its package is too.
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        "arm" => "armhf",
+        "x86" => "i386",
+        other => panic!("no Debian name for {other} in this test"),
+    };
+    let deb_name = format!("hi_1.2.3_{arch}.deb");
+    assert!(out.contains(&deb_name), "{out}");
+    let deb = fs::read(s.path().join(&deb_name)).unwrap();
     assert_eq!(&deb[..8], b"!<arch>\n", "the file is not an ar archive");
     // Three members in order: debian-binary, control.tar.gz, data.tar.gz.
     let members = ar_members(&deb[8..]);
@@ -1090,7 +1099,7 @@ fn emit_deb_writes_a_debian_package_of_the_program() {
     assert_eq!(members[0].1, b"2.0\n");
     // `dpkg-deb --info` and `--contents` read the archive.
     let dpkg = std::process::Command::new("dpkg-deb")
-        .args(["--info", s.path().join(deb_name).to_str().unwrap()])
+        .args(["--info", s.path().join(&deb_name).to_str().unwrap()])
         .output();
     let dpkg = match dpkg {
         Ok(d) => d,
@@ -1099,17 +1108,18 @@ fn emit_deb_writes_a_debian_package_of_the_program() {
     };
     let info = text(&dpkg.stdout);
     assert!(dpkg.status.success(), "dpkg-deb --info failed: {info}");
+    let arch_line = format!("Architecture: {arch}");
     for want in [
         "Package: hi",
         "Version: 1.2.3",
-        "Architecture: amd64",
+        arch_line.as_str(),
         "Maintainer: Jay Taylor <jay@example.com>",
         "Description: A hi program.",
     ] {
         assert!(info.contains(want), "{want:?} not in {info}");
     }
     let contents = std::process::Command::new("dpkg-deb")
-        .args(["--contents", s.path().join(deb_name).to_str().unwrap()])
+        .args(["--contents", s.path().join(&deb_name).to_str().unwrap()])
         .output()
         .unwrap();
     let c = text(&contents.stdout);
@@ -1132,7 +1142,7 @@ fn emit_deb_writes_a_debian_package_of_the_program() {
         "A hi program.",
     ]));
     assert_eq!(
-        fs::read(s.path().join(deb_name)).unwrap(),
+        fs::read(s.path().join(&deb_name)).unwrap(),
         deb,
         "a rebuild wrote other bytes"
     );
