@@ -18,6 +18,15 @@ pub struct Opts<'a> {
     pub program: &'a Path,
     pub script: Option<&'a Path>,
     pub runtime: Option<&'a Path>,
+    /// A detached SSH signature of the program to check, as `build --sign`
+    /// writes it (`<program>.sig`).
+    pub signature: Option<&'a Path>,
+    /// The allowed-signers file naming who may have signed the program;
+    /// without one, only the signature's integrity is checked.
+    pub allowed_signers: Option<&'a Path>,
+    /// The signer's identity to require in the allowed-signers file
+    /// (default `*`, any identity there).
+    pub identity: Option<&'a str>,
 }
 
 /// One part's verdict: `ok`, `differs` or `unchecked`, and what was found.
@@ -202,7 +211,46 @@ pub fn verify(ctx: &Ctx, o: &Opts) -> i32 {
             ),
         });
     }
+    // The signature: an SSH signature made by `build --sign` goes beside
+    // the program, and the verify uses `ssh-keygen -Y verify` (with
+    // --allowed-signers) or `-Y check-novalidate` (without it, which
+    // reports the signer is unchecked).
+    if let Some(sig) = o.signature {
+        rows.push(signature_row(o.program, sig, o.allowed_signers, o.identity));
+    }
     say(ctx, &shown, Some(&p), &rows)
+}
+
+/// Check the signature at `sig` of `program`, and shape the `signature`
+/// row the table shows: `ok`, `DIFFERS` or `unchecked`.
+fn signature_row(
+    program: &Path,
+    sig: &Path,
+    allowed: Option<&Path>,
+    identity: Option<&str>,
+) -> Row {
+    match crate::sign::check(program, sig, allowed, identity) {
+        Ok(crate::sign::Check::Ok(said)) => Row {
+            part: "signature",
+            verdict: "ok",
+            said,
+        },
+        Ok(crate::sign::Check::Unchecked(said)) => Row {
+            part: "signature",
+            verdict: "unchecked",
+            said,
+        },
+        Ok(crate::sign::Check::Differs(said)) => Row {
+            part: "signature",
+            verdict: "differs",
+            said,
+        },
+        Err(e) => Row {
+            part: "signature",
+            verdict: "differs",
+            said: e,
+        },
+    }
 }
 
 /// Where two byte strings first part, said by offset.

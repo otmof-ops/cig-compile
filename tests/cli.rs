@@ -1418,6 +1418,293 @@ fn package_refuses_a_release_that_has_no_asset_for_the_tool() {
     );
 }
 
+/// #10: `build --sign <key>` writes a detached SSH signature beside each
+/// program (and the SBOM, with --sbom too), with the namespace
+/// `cigcompile-program`. `verify --signature <sig> --allowed-signers <f>`
+/// checks it and reports `ok`, `DIFFERS` or `unchecked`. A flipped byte,
+/// a wrong identity and another namespace all exit 1.
+#[test]
+fn build_sign_writes_a_detached_ssh_signature_and_verify_checks_it() {
+    // ssh-keygen is on every Linux, macOS and Windows 10+ runner; skip
+    // the test with a clear note where it is not.
+    if !has_ssh_keygen() {
+        eprintln!("ssh-keygen is not on this machine: skipping");
+        return;
+    }
+    let s = Sandbox::new();
+    s.write("hi.cig", "exhale \"hi\"\n");
+    // Throwaway keys, never a real one.
+    let key = s.path().join("k");
+    ssh_keygen(&["-t", "ed25519", "-N", "", "-C", "signer@test", "-q", "-f"])
+        .arg(&key)
+        .status()
+        .expect("make a test key");
+    let pub_line = fs::read_to_string(s.path().join("k.pub")).unwrap();
+    let pub_line = pub_line.trim();
+    let allowed = s.path().join("allowed");
+    fs::write(&allowed, format!("signer@test {pub_line}\n")).unwrap();
+
+    // Build, signed. The SBOM is signed too.
+    let out = ok(&s.cc(&["build", "hi.cig", "--sign", key.to_str().unwrap(), "--sbom"]));
+    assert!(out.contains("cigcompile-program"), "{out}");
+    let prog = s.exe("hi");
+    let sig = s.path().join(format!("{}.sig", exe_name("hi")));
+    let sbom_sig = s.path().join(format!("{}.cdx.json.sig", exe_name("hi")));
+    assert!(sig.is_file(), "no {}", sig.display());
+    assert!(sbom_sig.is_file(), "no {}", sbom_sig.display());
+    let sig_text = fs::read_to_string(&sig).unwrap();
+    assert!(
+        sig_text.starts_with("-----BEGIN SSH SIGNATURE-----"),
+        "{sig_text}"
+    );
+
+    let signature_arg = sig.to_str().unwrap();
+    let allowed_arg = allowed.to_str().unwrap();
+
+    // Table: signature ok, every other part ok.
+    let good = ok(&s.cc(&[
+        "verify",
+        &exe_name("hi"),
+        "--runtime",
+        RT,
+        "--script",
+        "hi.cig",
+        "--signature",
+        signature_arg,
+        "--allowed-signers",
+        allowed_arg,
+        "--identity",
+        "signer@test",
+    ]));
+    assert!(
+        good.lines()
+            .any(|l| l.trim_start().starts_with("signature") && l.contains("ok")),
+        "{good}"
+    );
+
+    // With no --identity, the allowed-signers file names the signer.
+    let found = ok(&s.cc(&[
+        "verify",
+        &exe_name("hi"),
+        "--runtime",
+        RT,
+        "--script",
+        "hi.cig",
+        "--signature",
+        signature_arg,
+        "--allowed-signers",
+        allowed_arg,
+    ]));
+    assert!(
+        found
+            .lines()
+            .any(|l| l.trim_start().starts_with("signature") && l.contains("ok")),
+        "{found}"
+    );
+    // A file that does not list the key at all: DIFFERS, exit 1.
+    let stranger = s.path().join("stranger");
+    assert!(Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .arg(&stranger)
+        .status()
+        .unwrap()
+        .success());
+    let stranger_pub = fs::read_to_string(stranger.with_extension("pub")).unwrap();
+    let unlisted = s.path().join("unlisted");
+    fs::write(&unlisted, format!("signer@test {}", stranger_pub.trim())).unwrap();
+    let r = s.cc(&[
+        "verify",
+        &exe_name("hi"),
+        "--runtime",
+        RT,
+        "--signature",
+        signature_arg,
+        "--allowed-signers",
+        unlisted.to_str().unwrap(),
+    ]);
+    assert_eq!(r.status.code(), Some(1), "{}", text(&r.stdout));
+    assert!(
+        text(&r.stdout)
+            .lines()
+            .any(|l| l.contains("signature") && l.contains("DIFFERS")),
+        "{}",
+        text(&r.stdout)
+    );
+
+    // JSON names the signature part too.
+    let json: serde_json::Value = serde_json::from_str(
+        ok(&s.cc(&[
+            "--json",
+            "verify",
+            &exe_name("hi"),
+            "--runtime",
+            RT,
+            "--signature",
+            signature_arg,
+            "--allowed-signers",
+            allowed_arg,
+            "--identity",
+            "signer@test",
+        ]))
+        .trim(),
+    )
+    .unwrap();
+    assert_eq!(json["ok"], true, "{json}");
+    assert!(
+        json["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["part"] == "signature" && p["verdict"] == "ok"),
+        "{json}"
+    );
+
+    // Without --allowed-signers, the signer is not checked and the verdict
+    // is `unchecked` (but the signature's structure and namespace are
+    // still held: so nothing about the program fails here).
+    let unchecked = ok(&s.cc(&[
+        "verify",
+        &exe_name("hi"),
+        "--runtime",
+        RT,
+        "--signature",
+        signature_arg,
+    ]));
+    assert!(
+        unchecked
+            .lines()
+            .any(|l| l.trim_start().starts_with("signature") && l.contains("unchecked")),
+        "{unchecked}"
+    );
+
+    // Flip one byte in the program: the signature is of other bytes now,
+    // so verify exits 1 and names the signature part DIFFERS.
+    let tampered = s.path().join(exe_name("tampered"));
+    {
+        let mut bytes = fs::read(&prog).unwrap();
+        let at = bytes.len() / 2;
+        bytes[at] ^= 0xff;
+        fs::write(&tampered, bytes).unwrap();
+    }
+    let tampered_sig = s.path().join(format!("{}.sig", exe_name("tampered")));
+    fs::copy(&sig, &tampered_sig).unwrap();
+    let r = s.cc(&[
+        "verify",
+        &exe_name("tampered"),
+        "--runtime",
+        RT,
+        "--signature",
+        tampered_sig.to_str().unwrap(),
+        "--allowed-signers",
+        allowed_arg,
+        "--identity",
+        "signer@test",
+    ]);
+    assert_eq!(r.status.code(), Some(1), "{}", text(&r.stdout));
+    assert!(
+        text(&r.stdout)
+            .lines()
+            .any(|l| l.contains("signature") && l.contains("DIFFERS")),
+        "{}",
+        text(&r.stdout)
+    );
+
+    // An allowed-signers file that names another identity does not let
+    // this signer through.
+    let other_allowed = s.path().join("other-allowed");
+    fs::write(&other_allowed, format!("someone-else@test {pub_line}\n")).unwrap();
+    let r = s.cc(&[
+        "verify",
+        &exe_name("hi"),
+        "--runtime",
+        RT,
+        "--signature",
+        signature_arg,
+        "--allowed-signers",
+        other_allowed.to_str().unwrap(),
+        "--identity",
+        "signer@test",
+    ]);
+    assert_eq!(r.status.code(), Some(1), "{}", text(&r.stdout));
+    assert!(
+        text(&r.stdout)
+            .lines()
+            .any(|l| l.contains("signature") && l.contains("DIFFERS")),
+        "{}",
+        text(&r.stdout)
+    );
+
+    // A signature made with another namespace is rejected here: cigcompile
+    // signatures carry `cigcompile-program`, so one made as a git or
+    // generic file signature cannot be replayed as a program signature.
+    // ssh-keygen -Y sign writes `<file>.sig`; remove the one from the
+    // build first so it does not prompt to overwrite.
+    fs::remove_file(&sig).unwrap();
+    let other_ns_sig = s.path().join(format!("{}.other.sig", exe_name("hi")));
+    let status = ssh_keygen(&["-Y", "sign", "-f"])
+        .arg(&key)
+        .arg("-n")
+        .arg("some-other-ns")
+        .arg(&prog)
+        .status()
+        .expect("sign with another namespace");
+    assert!(status.success());
+    fs::rename(&sig, &other_ns_sig).unwrap();
+    let r = s.cc(&[
+        "verify",
+        &exe_name("hi"),
+        "--runtime",
+        RT,
+        "--signature",
+        other_ns_sig.to_str().unwrap(),
+        "--allowed-signers",
+        allowed_arg,
+        "--identity",
+        "signer@test",
+    ]);
+    assert_eq!(r.status.code(), Some(1), "{}", text(&r.stdout));
+    assert!(
+        text(&r.stdout)
+            .lines()
+            .any(|l| l.contains("signature") && l.contains("DIFFERS")),
+        "wrong-namespace: {}",
+        text(&r.stdout)
+    );
+    // The namespace is enforced even by check-novalidate: no allowed-signers.
+    let r = s.cc(&[
+        "verify",
+        &exe_name("hi"),
+        "--runtime",
+        RT,
+        "--signature",
+        other_ns_sig.to_str().unwrap(),
+    ]);
+    assert_eq!(r.status.code(), Some(1), "{}", text(&r.stdout));
+    assert!(
+        text(&r.stdout)
+            .lines()
+            .any(|l| l.contains("signature") && l.contains("DIFFERS")),
+        "wrong-namespace check-novalidate: {}",
+        text(&r.stdout)
+    );
+}
+
+fn has_ssh_keygen() -> bool {
+    Command::new("ssh-keygen")
+        .arg("-?")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
+}
+
+fn ssh_keygen(args: &[&str]) -> Command {
+    let mut c = Command::new("ssh-keygen");
+    c.args(args);
+    c
+}
+
 /// #38, item 1: `--emit cir-opt` is the explicit, after-the-passes name
 /// for the verified IR. At stage A it reads as `--emit cir` does (both
 /// are shaped by `-O`/`--passes`); the reserved name lets stage B split
