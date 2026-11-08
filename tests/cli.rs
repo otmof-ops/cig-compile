@@ -716,3 +716,164 @@ fn levels_and_pass_lists_shape_the_emitted_ir() {
         "--passes-diff without --emit"
     );
 }
+
+/// #40: `verify` reads a program's three parts and names the one that
+/// differs: the runtime (against the cig given, or cig's release assets),
+/// the payload (against its own sha256, and the script with --script) and
+/// the whole file (against what a build of those parts writes).
+#[test]
+fn verify_names_the_part_that_differs() {
+    let s = Sandbox::new();
+    s.write("hi.cig", "exhale \"hi\"\n");
+    ok(&s.cc(&["build", "hi.cig"]));
+    let prog = exe_name("hi");
+    let good = ok(&s.cc(&["verify", &prog, "--runtime", RT, "--script", "hi.cig"]));
+    for part in ["runtime", "payload", "script", "whole"] {
+        assert!(
+            good.lines()
+                .any(|l| l.trim_start().starts_with(part) && l.contains("ok")),
+            "{part}: {good}"
+        );
+    }
+    let json: serde_json::Value =
+        serde_json::from_str(ok(&s.cc(&["--json", "verify", &prog, "--runtime", RT])).trim())
+            .unwrap();
+    assert_eq!(json["ok"], true, "{json}");
+    // The runtime this test built is not one of cig's release assets.
+    let plain = s.cc(&["verify", &prog]);
+    assert_eq!(plain.status.code(), Some(1), "{}", text(&plain.stdout));
+    assert!(
+        text(&plain.stdout).contains("none of cig"),
+        "{}",
+        text(&plain.stdout)
+    );
+    // One byte changed in each part.
+    let bytes = fs::read(s.path().join(&prog)).unwrap();
+    let flip = |name: &str, at: usize| {
+        let mut b = bytes.clone();
+        b[at] ^= 0xff;
+        fs::write(s.path().join(name), b).unwrap();
+    };
+    flip("in-runtime", bytes.len() / 2);
+    flip("in-payload", bytes.len() - 60);
+    flip("in-trailer", bytes.len() - 5);
+    let r = s.cc(&["verify", "in-runtime", "--runtime", RT]);
+    assert_eq!(r.status.code(), Some(1));
+    assert!(
+        text(&r.stdout)
+            .lines()
+            .any(|l| l.contains("runtime") && l.contains("DIFFERS")),
+        "{}",
+        text(&r.stdout)
+    );
+    for damaged in ["in-payload", "in-trailer"] {
+        let r = s.cc(&["verify", damaged, "--runtime", RT]);
+        assert_eq!(r.status.code(), Some(1), "{damaged}");
+        assert!(
+            text(&r.stdout).contains("damaged"),
+            "{damaged}: {}",
+            text(&r.stdout)
+        );
+    }
+    // The script changed since the build.
+    s.write("hi.cig", "exhale \"bye\"\n");
+    let r = s.cc(&["verify", &prog, "--runtime", RT, "--script", "hi.cig"]);
+    assert_eq!(r.status.code(), Some(1));
+    assert!(
+        text(&r.stdout).contains("changed since the build, from line 1"),
+        "{}",
+        text(&r.stdout)
+    );
+    // Something that is not a program at all.
+    s.write("plain.txt", "not a program\n");
+    assert_eq!(s.cc(&["verify", "plain.txt"]).status.code(), Some(3));
+}
+
+/// #37, #12, #40: `--timings` tables the phases (and writes a Chrome trace),
+/// `--json-progress` says each step in order, one JSON object a line, and
+/// `--sbom` writes a CycloneDX file beside each program that a rebuild
+/// leaves byte for byte the same.
+#[test]
+fn timings_progress_and_sboms_say_what_the_build_did() {
+    use sha2::Digest;
+    let s = Sandbox::new();
+    s.write("proj/a.cig", "exhale 1\n");
+    s.write("proj/b.cig", "exhale 2\n");
+    let out = s.cc(&[
+        "build",
+        "proj",
+        "--timings=trace.json",
+        "--json-progress",
+        "--sbom",
+    ]);
+    ok(&out);
+    let err = text(&out.stderr);
+    let events: Vec<serde_json::Value> = err
+        .lines()
+        .filter(|l| l.starts_with('{'))
+        .map(|l| serde_json::from_str(l).expect("a progress line is JSON"))
+        .collect();
+    let kinds: Vec<String> = events
+        .iter()
+        .filter(|e| e["event"] != "phase")
+        .map(|e| e["event"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["start", "script", "built", "script", "built", "done"],
+        "{err}"
+    );
+    assert_eq!(events[0]["scripts"], 2);
+    assert!(events
+        .iter()
+        .any(|e| e["event"] == "phase" && e["phase"] == "check"));
+    assert!(err.contains("  total"), "{err}");
+    let trace: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(s.path().join("trace.json")).unwrap()).unwrap();
+    let names: Vec<&str> = trace["traceEvents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    for phase in [
+        "read", "check", "assemble", "hash", "write", "sbom", "build",
+    ] {
+        assert!(
+            names.contains(&phase),
+            "{phase} not in the trace: {names:?}"
+        );
+    }
+    // The SBOM names the program, its runtime and its script by sha256.
+    let prog = s.path().join("proj/bin").join(exe_name("a"));
+    let sbom_path = s
+        .path()
+        .join("proj/bin")
+        .join(format!("{}.cdx.json", exe_name("a")));
+    let first = fs::read_to_string(&sbom_path).unwrap();
+    let sbom: serde_json::Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(sbom["bomFormat"], "CycloneDX");
+    assert_eq!(sbom["specVersion"], "1.5");
+    let program_sha = hex::encode(sha2::Sha256::digest(fs::read(&prog).unwrap()));
+    assert_eq!(
+        sbom["metadata"]["component"]["hashes"][0]["content"],
+        program_sha.as_str()
+    );
+    let runtime_sha = hex::encode(sha2::Sha256::digest(fs::read(RT).unwrap()));
+    assert_eq!(
+        sbom["components"][0]["hashes"][0]["content"],
+        runtime_sha.as_str()
+    );
+    let script_sha = hex::encode(sha2::Sha256::digest(b"exhale 1\n"));
+    assert_eq!(
+        sbom["components"][1]["hashes"][0]["content"],
+        script_sha.as_str()
+    );
+    assert!(
+        !first.contains(&*s.path().to_string_lossy()),
+        "a build path is in the SBOM"
+    );
+    // A rebuild that changes nothing writes the same SBOM.
+    ok(&s.cc(&["build", "proj", "--sbom"]));
+    assert_eq!(fs::read_to_string(&sbom_path).unwrap(), first);
+}

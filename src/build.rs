@@ -149,12 +149,24 @@ pub fn build(
     target: &Target,
     runtime: Option<&Runtime>,
     index: &mut crate::cache::Index,
+    sbom: bool,
 ) -> Result<Vec<Built>, i32> {
+    use crate::timings::{phase, progress};
+    progress(
+        serde_json::json!({"event": "start", "scripts": jobs.len(), "check_only": runtime.is_none()}),
+    );
     let mut out = Vec::new();
-    for job in jobs {
-        let source = read_script(ctx, job)?;
+    for (n, job) in jobs.iter().enumerate() {
+        progress(
+            serde_json::json!({"event": "script", "script": job.file, "n": n + 1, "of": jobs.len()}),
+        );
+        let source = phase(&job.file, "read", || read_script(ctx, job)).inspect_err(|_| {
+            progress(serde_json::json!({"event": "failed", "script": job.file}));
+        })?;
         let Some(runtime) = runtime else {
-            check(ctx, job, &source)?;
+            phase(&job.file, "check", || check(ctx, job, &source)).inspect_err(|_| {
+                progress(serde_json::json!({"event": "failed", "script": job.file}));
+            })?;
             if let Err(d) = pin_holds(job, &source, crate::runtime::wanted()) {
                 cigscript::cli::report(ctx, &d, None, None);
                 return Err(exit::USAGE);
@@ -164,6 +176,7 @@ pub fn build(
             } else {
                 println!("checked {}", job.file);
             }
+            progress(serde_json::json!({"event": "checked", "script": job.file}));
             continue;
         };
         let key = crate::cache::key(&[
@@ -179,7 +192,8 @@ pub fn build(
         ]);
         // Unchanged since it was built: say the warnings again, check the
         // pin (a .cig-version may have come or gone), and touch nothing.
-        if let Some((sha256, warnings)) = index.fresh(&job.out, &key) {
+        if let Some((sha256, warnings)) = phase(&job.file, "index", || index.fresh(&job.out, &key))
+        {
             say_warnings(ctx, &warnings);
             if let Err(d) = pin_holds(job, &source, &runtime.version) {
                 cigscript::cli::report(ctx, &d, None, None);
@@ -193,12 +207,29 @@ pub fn build(
                     .unwrap_or(0),
                 written: false,
             };
+            if sbom {
+                if let Err(e) = crate::sbom::write(job, &source, &built.sha256, runtime) {
+                    let d = usage(format!("cannot write the SBOM beside the program: {e}"))
+                        .code("E1004")
+                        .with_hint("write it somewhere you can with -o");
+                    cigscript::cli::report(ctx, &d, None, None);
+                    return Err(exit::USAGE);
+                }
+            }
             say(ctx, &built, target, runtime);
+            progress(
+                serde_json::json!({"event": "built", "script": job.file, "program": job.out.to_string_lossy(), "written": false}),
+            );
             out.push(built);
             continue;
         }
-        let warnings = check(ctx, job, &source)?;
-        if let Err(d) = pin_holds(job, &source, &runtime.version) {
+        let warnings =
+            phase(&job.file, "check", || check(ctx, job, &source)).inspect_err(|_| {
+                progress(serde_json::json!({"event": "failed", "script": job.file}));
+            })?;
+        if let Err(d) = phase(&job.file, "pin", || {
+            pin_holds(job, &source, &runtime.version)
+        }) {
             cigscript::cli::report(ctx, &d, None, None);
             return Err(exit::USAGE);
         }
@@ -211,13 +242,26 @@ pub fn build(
             cigscript::cli::report(ctx, &d, None, None);
             exit::USAGE
         };
-        let bytes = program_bytes(job, &source, runtime).map_err(|e| {
+        phase(&job.file, "runtime", || runtime.bytes().map(|_| ())).map_err(|e| {
             cannot_write(e, &format!("read the runtime {}", runtime.path.display()))
         })?;
-        let sha256 = hex::encode(Sha256::digest(&bytes));
-        let written = write_if_changed(&job.out, &bytes)
+        let bytes = phase(&job.file, "assemble", || {
+            program_bytes(job, &source, runtime)
+        })
+        .map_err(|e| cannot_write(e, &format!("read the runtime {}", runtime.path.display())))?;
+        let sha256 = phase(&job.file, "hash", || hex::encode(Sha256::digest(&bytes)));
+        let written = phase(&job.file, "write", || write_if_changed(&job.out, &bytes))
             .map_err(|e| cannot_write(e, &format!("write {}", job.out.display())))?;
         index.note_program(&job.out, &key, &sha256, &warnings);
+        if sbom {
+            phase(&job.file, "sbom", || {
+                crate::sbom::write(job, &source, &sha256, runtime)
+            })
+            .map_err(|e| cannot_write(e, "write the SBOM beside the program"))?;
+        }
+        progress(
+            serde_json::json!({"event": "built", "script": job.file, "program": job.out.to_string_lossy(), "written": written}),
+        );
         let built = Built {
             job: job.clone(),
             sha256,
@@ -227,6 +271,7 @@ pub fn build(
         say(ctx, &built, target, runtime);
         out.push(built);
     }
+    progress(serde_json::json!({"event": "done", "scripts": jobs.len()}));
     Ok(out)
 }
 

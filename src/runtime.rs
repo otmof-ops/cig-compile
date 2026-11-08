@@ -155,6 +155,7 @@ pub struct Runtime {
     /// it is a dynamically linked ELF executable ([`needs_of`]).
     pub needs: Option<String>,
     bytes: std::cell::OnceCell<Vec<u8>>,
+    sha256: std::cell::OnceCell<String>,
 }
 
 impl Runtime {
@@ -164,6 +165,16 @@ impl Runtime {
             let _ = self.bytes.set(b);
         }
         Ok(self.bytes.get().expect("set above"))
+    }
+
+    /// The runtime's sha256, hex, worked out once a build.
+    pub fn sha256(&self) -> std::io::Result<&str> {
+        if self.sha256.get().is_none() {
+            use sha2::{Digest, Sha256};
+            let h = hex::encode(Sha256::digest(self.bytes()?));
+            let _ = self.sha256.set(h);
+        }
+        Ok(self.sha256.get().expect("set above"))
     }
 }
 
@@ -350,6 +361,7 @@ pub fn load(
                     id,
                     needs,
                     bytes: std::cell::OnceCell::new(),
+                    sha256: std::cell::OnceCell::new(),
                 });
             }
         }
@@ -458,6 +470,7 @@ pub fn load(
         id,
         needs,
         bytes: cell,
+        sha256: std::cell::OnceCell::new(),
     })
 }
 
