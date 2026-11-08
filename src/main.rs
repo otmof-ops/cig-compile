@@ -8,14 +8,18 @@
 mod bench;
 mod build;
 mod cache;
+mod deb;
 mod digests;
 mod fat;
 mod fetch;
+mod gzip;
 mod oci;
+mod pkg;
 mod project;
 mod reduce;
 mod runtime;
 mod sbom;
+mod tar;
 mod test;
 mod timings;
 mod verify;
@@ -66,6 +70,8 @@ enum Command {
     Verify(VerifyArgs),
     /// Cut a script down to the smallest one that is still interesting, for a bug report: by default, that its program differs from it (as `cigcompile test` finds); with a command after `--`, that the command exits 0 on it (`{}` is the candidate's path).
     Reduce(ReduceArgs),
+    /// Generate a Homebrew formula or a Scoop manifest for a release, pointing at its release assets by URL and sha256. Nothing is built.
+    Package(PackageArgs),
 }
 
 #[derive(Args)]
@@ -148,8 +154,8 @@ struct BuildArgs {
     /// Check only: write nothing, need no runtime.
     #[arg(long)]
     check: bool,
-    /// `cir`: print the verified IR (#3) instead of a program. `oci`: the program, and beside it an OCI image of it (`<program>.oci.tar`, a scratch image of one file; Linux targets).
-    #[arg(long, value_name = "WHAT", value_parser = ["cir", "oci"])]
+    /// `cir`: print the verified IR (#3) instead of a program. `oci`: the program, and beside it an OCI image of it (`<program>.oci.tar`, a scratch image of one file; Linux targets). `deb`: the program, and beside it a `.deb` that installs it to `/usr/bin/<name>` (Linux targets; `--pkg-version`, `--pkg-maintainer`, `--pkg-description` shape the control file).
+    #[arg(long, value_name = "WHAT", value_parser = ["cir", "oci", "deb"])]
     emit: Option<String>,
     /// The optimisation level: 0 (lowering only), 1 or 2 (every pass there is). Stage A programs carry the script, so the level shapes `--emit` until stage B.
     #[arg(short = 'O', value_name = "LEVEL", value_parser = ["0", "1", "2"], conflicts_with = "passes")]
@@ -172,6 +178,49 @@ struct BuildArgs {
     /// Build, then build again whenever a script changes (a script added to the folder too), until Ctrl-C.
     #[arg(long, conflicts_with_all = ["emit", "check"])]
     watch: bool,
+    /// With --emit deb, the Version field of the control file (default 0.0.0).
+    #[arg(long, value_name = "VERSION")]
+    pkg_version: Option<String>,
+    /// With --emit deb, the Maintainer field (default `cigcompile <nobody@localhost>`).
+    #[arg(long, value_name = "NAME <email>")]
+    pkg_maintainer: Option<String>,
+    /// With --emit deb, the Description field (default `<name>, a CigScript program compiled with cigcompile.`).
+    #[arg(long, value_name = "TEXT")]
+    pkg_description: Option<String>,
+}
+
+#[derive(Args)]
+struct PackageArgs {
+    /// A Homebrew formula (a Ruby class) for the release.
+    #[arg(long, conflicts_with = "scoop")]
+    brew: bool,
+    /// A Scoop manifest (a JSON object) for the release.
+    #[arg(long)]
+    scoop: bool,
+    /// A JSON manifest with the release's name, version, homepage, license, description, and an assets array of {target, url, sha256}. Combined with any --asset given on the command line.
+    #[arg(long, value_name = "FILE")]
+    manifest: Option<PathBuf>,
+    /// The program's name on the formula or the manifest (default: the manifest's `name`).
+    #[arg(long)]
+    name: Option<String>,
+    /// The release's version (default: the manifest's `version`).
+    #[arg(long)]
+    version: Option<String>,
+    /// The project's homepage (default: the manifest's `homepage`).
+    #[arg(long)]
+    homepage: Option<String>,
+    /// The program's license, as SPDX (default: the manifest's `license`).
+    #[arg(long)]
+    license: Option<String>,
+    /// A one-line description (default: the manifest's `description`).
+    #[arg(long)]
+    description: Option<String>,
+    /// A release asset, `TARGET=URL,SHA256`, repeatable: the target triple, then the URL, then the hex sha256. For `--brew` give macOS and Linux assets; for `--scoop` give Windows assets.
+    #[arg(long, value_name = "TARGET=URL,SHA256")]
+    asset: Vec<String>,
+    /// Where the formula or the manifest goes (default stdout).
+    #[arg(short, long)]
+    out: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -267,6 +316,7 @@ fn run() -> i32 {
                 predicate: &a.predicate,
             },
         ),
+        Some(Command::Package(a)) => package_cmd(&ctx, &a),
         Some(Command::Bench(a)) => {
             let mut index = cache::Index::load();
             let found = runtime::find(runtime::host(), a.runtime.as_deref(), &mut index);
@@ -370,10 +420,20 @@ fn build_cmd(
         return Ok(None);
     }
     let oci = a.emit.as_deref() == Some("oci");
+    let deb = a.emit.as_deref() == Some("deb");
     if oci && oci::platform(target.triple).is_none() {
         return Err(fail(
             cigscript::diagnostics::usage(format!(
                 "an OCI image is of a Linux program, and this build is for {}",
+                target.triple
+            ))
+            .with_hint("build for Linux: --target x86_64-unknown-linux-musl (or aarch64-unknown-linux-musl, armv7-unknown-linux-musleabihf)"),
+        ));
+    }
+    if deb && deb::arch(target.triple).is_none() {
+        return Err(fail(
+            cigscript::diagnostics::usage(format!(
+                "a .deb is for a Linux target, and this build is for {}",
                 target.triple
             ))
             .with_hint("build for Linux: --target x86_64-unknown-linux-musl (or aarch64-unknown-linux-musl, armv7-unknown-linux-musleabihf)"),
@@ -435,7 +495,185 @@ fn build_cmd(
             }
         }
     }
+    if deb {
+        emit_deb(ctx, a, target, &built).map_err(fail)?;
+    }
     Ok(Some((built, rt)))
+}
+
+/// `--emit deb`: beside each program, a `.deb` that installs it to
+/// `/usr/bin/<name>`. Reproducible: the same build writes the same bytes
+/// (src/deb.rs). Nothing is installed to make it.
+fn emit_deb(
+    ctx: &cigscript::cli::Ctx,
+    a: &BuildArgs,
+    target: &runtime::Target,
+    built: &[build::Built],
+) -> Result<(), cigscript::diagnostics::Diagnostic> {
+    for b in built {
+        let meta = deb::meta_for(
+            &b.job.name,
+            target,
+            a.pkg_version.as_deref(),
+            a.pkg_maintainer.as_deref(),
+            a.pkg_description.as_deref(),
+        )?;
+        let path = deb::path_for(&b.job.out, &meta);
+        let program = std::fs::read(&b.job.out).map_err(|e| {
+            cigscript::diagnostics::usage(format!("cannot read {}: {e}", b.job.out.display()))
+                .code("E1004")
+                .with_hint("write it somewhere you can with -o")
+        })?;
+        let archive = deb::package(&b.job.name, &program, &meta);
+        build::write_if_changed(&path, &archive).map_err(|e| {
+            cigscript::diagnostics::usage(format!("cannot write {}: {e}", path.display()))
+                .code("E1004")
+                .with_hint("write it somewhere you can with -o")
+        })?;
+        if ctx.json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "deb": path.to_string_lossy(),
+                    "program": b.job.out.to_string_lossy(),
+                    "package": meta.package,
+                    "version": meta.version,
+                    "architecture": meta.arch,
+                })
+            );
+        } else {
+            println!(
+                "  deb    {} ({}_{}_{}.deb, dpkg -i to install to /usr/bin/{})",
+                path.display(),
+                meta.package,
+                meta.version,
+                meta.arch,
+                b.job.name,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `cigcompile package`: a Homebrew formula or a Scoop manifest for a
+/// released program, from flags and an optional JSON manifest. Nothing is
+/// built; the formula or the manifest installs what the release already
+/// published.
+fn package_cmd(ctx: &cigscript::cli::Ctx, a: &PackageArgs) -> i32 {
+    let fail = |d: cigscript::diagnostics::Diagnostic| {
+        cigscript::cli::report(ctx, &d, None, None);
+        exit::USAGE
+    };
+    if !a.brew && !a.scoop {
+        return fail(
+            cigscript::diagnostics::usage("name --brew or --scoop")
+                .with_hint("--brew writes a Homebrew formula; --scoop writes a Scoop manifest"),
+        );
+    }
+    let mut release = if let Some(path) = &a.manifest {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                return fail(
+                    cigscript::diagnostics::usage(format!("cannot read {}: {e}", path.display()))
+                        .code("E1000")
+                        .with_hint("name a JSON manifest you can read with --manifest"),
+                )
+            }
+        };
+        match pkg::parse_manifest(&text) {
+            Ok(r) => r,
+            Err(d) => return fail(d),
+        }
+    } else {
+        pkg::Release {
+            name: String::new(),
+            version: String::new(),
+            homepage: String::new(),
+            license: String::new(),
+            description: String::new(),
+            assets: Vec::new(),
+        }
+    };
+    let overlay = |field: &mut String, flag: Option<&str>| {
+        if let Some(v) = flag {
+            *field = v.to_string();
+        }
+    };
+    overlay(&mut release.name, a.name.as_deref());
+    overlay(&mut release.version, a.version.as_deref());
+    overlay(&mut release.homepage, a.homepage.as_deref());
+    overlay(&mut release.license, a.license.as_deref());
+    overlay(&mut release.description, a.description.as_deref());
+    for s in &a.asset {
+        match pkg::parse_asset(s) {
+            Ok(asset) => {
+                release.assets.retain(|x| x.target != asset.target);
+                release.assets.push(asset);
+            }
+            Err(d) => return fail(d),
+        }
+    }
+    for (field, name) in [
+        (&release.name, "name"),
+        (&release.version, "version"),
+        (&release.homepage, "homepage"),
+        (&release.license, "license"),
+        (&release.description, "description"),
+    ] {
+        if field.is_empty() {
+            return fail(
+                cigscript::diagnostics::usage(format!("no {name}"))
+                    .with_hint(format!("pass --{name}, or name it in the --manifest")),
+            );
+        }
+    }
+    if release.assets.is_empty() {
+        return fail(
+            cigscript::diagnostics::usage("no release assets to point at")
+                .with_hint("pass --asset TARGET=URL,SHA256 for every per-target release asset"),
+        );
+    }
+    let text = match if a.brew {
+        pkg::brew(&release)
+    } else {
+        pkg::scoop(&release)
+    } {
+        Ok(t) => t,
+        Err(d) => return fail(d),
+    };
+    match &a.out {
+        Some(path) => {
+            if let Err(e) = build::write_if_changed(path, text.as_bytes()) {
+                return fail(
+                    cigscript::diagnostics::usage(format!("cannot write {}: {e}", path.display()))
+                        .code("E1004")
+                        .with_hint("write it somewhere you can with -o"),
+                );
+            }
+            if ctx.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "kind": if a.brew { "brew" } else { "scoop" },
+                        "out": path.to_string_lossy(),
+                    })
+                );
+            } else {
+                println!("wrote {}", path.display());
+            }
+        }
+        None => {
+            use std::io::Write as _;
+            if let Err(e) = std::io::stdout().write_all(text.as_bytes()) {
+                return fail(
+                    cigscript::diagnostics::usage(format!("cannot write stdout: {e}"))
+                        .code("E1004"),
+                );
+            }
+        }
+    }
+    exit::OK
 }
 
 /// A runtime given by hand that links this machine's glibc makes programs

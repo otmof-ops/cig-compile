@@ -1045,3 +1045,333 @@ fn emit_oci_writes_an_image_of_the_program() {
         "a rebuild wrote other bytes"
     );
 }
+
+/// #41: `--emit deb` writes, beside a Linux program, a `.deb` whose control
+/// file names the package, version, architecture and maintainer and whose
+/// `data.tar.gz` holds the program at `/usr/bin/<name>`. A rebuild writes
+/// the same bytes. Off Linux it is refused, since the archive is of a Linux
+/// program.
+#[test]
+fn emit_deb_writes_a_debian_package_of_the_program() {
+    let s = Sandbox::new();
+    s.write("hi.cig", "exhale \"hi\"\n");
+    if !cfg!(target_os = "linux") {
+        let r = s.cc(&["build", "hi.cig", "--emit", "deb"]);
+        assert_eq!(r.status.code(), Some(3));
+        assert!(
+            text(&r.stderr).contains("a .deb is for a Linux target"),
+            "{}",
+            text(&r.stderr)
+        );
+        return;
+    }
+    let out = ok(&s.cc(&[
+        "build",
+        "hi.cig",
+        "--emit",
+        "deb",
+        "--pkg-version",
+        "1.2.3",
+        "--pkg-maintainer",
+        "Jay Taylor <jay@example.com>",
+        "--pkg-description",
+        "A hi program.",
+    ]));
+    let deb_name = "hi_1.2.3_amd64.deb";
+    assert!(out.contains(deb_name), "{out}");
+    let deb = fs::read(s.path().join(deb_name)).unwrap();
+    assert_eq!(&deb[..8], b"!<arch>\n", "the file is not an ar archive");
+    // Three members in order: debian-binary, control.tar.gz, data.tar.gz.
+    let members = ar_members(&deb[8..]);
+    assert_eq!(
+        members.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+        vec!["debian-binary", "control.tar.gz", "data.tar.gz"],
+    );
+    assert_eq!(members[0].1, b"2.0\n");
+    // `dpkg-deb --info` and `--contents` read the archive.
+    let dpkg = std::process::Command::new("dpkg-deb")
+        .args(["--info", s.path().join(deb_name).to_str().unwrap()])
+        .output();
+    let dpkg = match dpkg {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => panic!("dpkg-deb --info: {e}"),
+    };
+    let info = text(&dpkg.stdout);
+    assert!(dpkg.status.success(), "dpkg-deb --info failed: {info}");
+    for want in [
+        "Package: hi",
+        "Version: 1.2.3",
+        "Architecture: amd64",
+        "Maintainer: Jay Taylor <jay@example.com>",
+        "Description: A hi program.",
+    ] {
+        assert!(info.contains(want), "{want:?} not in {info}");
+    }
+    let contents = std::process::Command::new("dpkg-deb")
+        .args(["--contents", s.path().join(deb_name).to_str().unwrap()])
+        .output()
+        .unwrap();
+    let c = text(&contents.stdout);
+    assert!(contents.status.success(), "dpkg-deb --contents: {c}");
+    assert!(c.contains("./usr/bin/hi"), "{c}");
+    // Time is zero and owner root, so the listing shows 0/0 and 1970.
+    assert!(c.contains("0/0"), "{c}");
+    assert!(c.contains("1970-"), "{c}");
+    // A rebuild writes the same bytes.
+    ok(&s.cc(&[
+        "build",
+        "hi.cig",
+        "--emit",
+        "deb",
+        "--pkg-version",
+        "1.2.3",
+        "--pkg-maintainer",
+        "Jay Taylor <jay@example.com>",
+        "--pkg-description",
+        "A hi program.",
+    ]));
+    assert_eq!(
+        fs::read(s.path().join(deb_name)).unwrap(),
+        deb,
+        "a rebuild wrote other bytes"
+    );
+}
+
+/// The ar archive's members, by name: enough of BSD-style ar for a .deb's
+/// three members (16-byte space-padded name, 60-byte header, data padded to
+/// an even length with `\n`).
+fn ar_members(mut b: &[u8]) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    while b.len() >= 60 {
+        let name = std::str::from_utf8(&b[..16])
+            .unwrap()
+            .trim_end()
+            .to_string();
+        let size: usize = std::str::from_utf8(&b[48..58])
+            .unwrap()
+            .trim_end()
+            .parse()
+            .unwrap();
+        b = &b[60..];
+        out.push((name, b[..size].to_vec()));
+        let step = size + size % 2;
+        b = &b[step..];
+    }
+    out
+}
+
+/// #41: `cigcompile package --brew` writes a Homebrew formula pointing at
+/// per-target release URLs with their sha256, and `--scoop` the same for
+/// Windows. The output is stable: the same inputs write the same bytes.
+#[test]
+fn package_brew_and_scoop_name_each_release_assets_url_and_sha256() {
+    let s = Sandbox::new();
+    let sha_mac = "a".repeat(64);
+    let sha_linux = "b".repeat(64);
+    let sha_win = "c".repeat(64);
+    let brew = ok(&s.cc(&[
+        "package",
+        "--brew",
+        "--name",
+        "tidy",
+        "--version",
+        "1.0.0",
+        "--homepage",
+        "https://example.com/tidy",
+        "--license",
+        "Apache-2.0",
+        "--description",
+        "Tidy downloads.",
+        "--asset",
+        &format!("aarch64-apple-darwin=https://example.com/tidy-1.0.0-macos-aarch64,{sha_mac}"),
+        "--asset",
+        &format!(
+            "x86_64-unknown-linux-musl=https://example.com/tidy-1.0.0-linux-x86_64,{sha_linux}"
+        ),
+    ]));
+    assert!(brew.starts_with("class Tidy < Formula\n"), "{brew}");
+    assert!(brew.contains("desc \"Tidy downloads.\""));
+    assert!(brew.contains("on_macos do"));
+    assert!(brew.contains("on_linux do"));
+    assert!(brew.contains(&format!("\"{sha_mac}\"")));
+    assert!(brew.contains(&format!("\"{sha_linux}\"")));
+    assert!(brew.contains("bin.install Dir[\"*\"].first => \"tidy\""));
+    assert!(brew.contains("assert_predicate bin/\"tidy\", :exist?"));
+    let scoop = ok(&s.cc(&[
+        "package",
+        "--scoop",
+        "--name",
+        "tidy",
+        "--version",
+        "1.0.0",
+        "--homepage",
+        "https://example.com/tidy",
+        "--license",
+        "Apache-2.0",
+        "--description",
+        "Tidy downloads.",
+        "--asset",
+        &format!(
+            "x86_64-pc-windows-msvc=https://example.com/tidy-1.0.0-windows-x86_64.exe,{sha_win}"
+        ),
+    ]));
+    let v: serde_json::Value = serde_json::from_str(&scoop).unwrap();
+    assert_eq!(v["version"], "1.0.0");
+    assert_eq!(v["license"], "Apache-2.0");
+    assert_eq!(v["architecture"]["64bit"]["hash"], sha_win);
+    assert_eq!(
+        v["architecture"]["64bit"]["url"],
+        "https://example.com/tidy-1.0.0-windows-x86_64.exe"
+    );
+    assert_eq!(v["bin"], "tidy.exe");
+}
+
+/// #41: `cigcompile package` reads the release from a JSON manifest, and
+/// a `--asset` on the command line overrides one named in it. Golden: the
+/// text is the same bytes on every run.
+#[test]
+fn package_reads_a_manifest_and_overrides_are_applied() {
+    let s = Sandbox::new();
+    let sha = "a".repeat(64);
+    let sha_other = "9".repeat(64);
+    let manifest = serde_json::json!({
+        "name": "tidy",
+        "version": "1.0.0",
+        "homepage": "https://example.com/tidy",
+        "license": "Apache-2.0",
+        "description": "Tidy downloads.",
+        "assets": [{
+            "target": "aarch64-apple-darwin",
+            "url": "https://example.com/tidy-1.0.0-macos-aarch64",
+            "sha256": sha,
+        }],
+    });
+    s.write("release.json", &manifest.to_string());
+    let out1 = ok(&s.cc(&[
+        "package",
+        "--brew",
+        "--manifest",
+        "release.json",
+        "--out",
+        "tidy.rb",
+    ]));
+    assert!(out1.contains("wrote"), "{out1}");
+    let a = fs::read_to_string(s.path().join("tidy.rb")).unwrap();
+    assert!(a.contains("class Tidy < Formula"));
+    assert!(a.contains(&format!("\"{sha}\"")));
+    // A --asset on the command line replaces the manifest's for that target.
+    let out2 = ok(&s.cc(&[
+        "package",
+        "--brew",
+        "--manifest",
+        "release.json",
+        "--asset",
+        &format!("aarch64-apple-darwin=https://example.com/other,{sha_other}"),
+        "--out",
+        "tidy2.rb",
+    ]));
+    assert!(out2.contains("wrote"), "{out2}");
+    let b = fs::read_to_string(s.path().join("tidy2.rb")).unwrap();
+    assert!(b.contains(&format!("\"{sha_other}\"")));
+    assert!(!b.contains(&format!("\"{sha}\"")));
+    assert!(b.contains("https://example.com/other"));
+    // A rerun with the same inputs writes the same bytes.
+    ok(&s.cc(&[
+        "package",
+        "--brew",
+        "--manifest",
+        "release.json",
+        "--out",
+        "tidy3.rb",
+    ]));
+    assert_eq!(
+        fs::read_to_string(s.path().join("tidy3.rb")).unwrap(),
+        a,
+        "the formula was not reproducible"
+    );
+}
+
+/// A release with no macOS or Linux asset cannot have a Homebrew formula;
+/// one with no Windows asset cannot have a Scoop manifest. The command says
+/// which.
+#[test]
+fn package_refuses_a_release_that_has_no_asset_for_the_tool() {
+    let s = Sandbox::new();
+    let sha = "a".repeat(64);
+    let brew = s.cc(&[
+        "package",
+        "--brew",
+        "--name",
+        "tidy",
+        "--version",
+        "1.0.0",
+        "--homepage",
+        "https://example.com",
+        "--license",
+        "Apache-2.0",
+        "--description",
+        "A thing.",
+        "--asset",
+        &format!("x86_64-pc-windows-msvc=https://example.com/windows,{sha}"),
+    ]);
+    assert_eq!(brew.status.code(), Some(3));
+    assert!(
+        text(&brew.stderr).contains("macOS or Linux"),
+        "{}",
+        text(&brew.stderr)
+    );
+    let scoop = s.cc(&[
+        "package",
+        "--scoop",
+        "--name",
+        "tidy",
+        "--version",
+        "1.0.0",
+        "--homepage",
+        "https://example.com",
+        "--license",
+        "Apache-2.0",
+        "--description",
+        "A thing.",
+        "--asset",
+        &format!("aarch64-apple-darwin=https://example.com/macos,{sha}"),
+    ]);
+    assert_eq!(scoop.status.code(), Some(3));
+    assert!(
+        text(&scoop.stderr).contains("Windows"),
+        "{}",
+        text(&scoop.stderr)
+    );
+    // Without --brew or --scoop, it says to pick one.
+    let neither = s.cc(&["package", "--name", "x"]);
+    assert_eq!(neither.status.code(), Some(3));
+    assert!(
+        text(&neither.stderr).contains("--brew or --scoop"),
+        "{}",
+        text(&neither.stderr)
+    );
+    // A malformed --asset is refused with a clear message.
+    let bad = s.cc(&[
+        "package",
+        "--brew",
+        "--name",
+        "x",
+        "--version",
+        "1.0.0",
+        "--homepage",
+        "https://example.com",
+        "--license",
+        "Apache-2.0",
+        "--description",
+        "x",
+        "--asset",
+        "aarch64-apple-darwin=https://example.com,short",
+    ]);
+    assert_eq!(bad.status.code(), Some(3));
+    assert!(
+        text(&bad.stderr).contains("64 hex"),
+        "{}",
+        text(&bad.stderr)
+    );
+}
