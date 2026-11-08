@@ -28,7 +28,32 @@ pub struct Target {
     pub parts: &'static [&'static str],
 }
 
+/// The stage every target's programs are built at: the checked script
+/// appended to cig's runtime (stage A). Stage B is the bytecode (#31).
+pub const STAGE: &str = "A";
+
 impl Target {
+    /// How cigcompile's CI proves its programs: run on a runner of that
+    /// machine, or built and their bytes checked where no runner exists.
+    pub fn ci(&self) -> &'static str {
+        match self.triple {
+            "armv7-unknown-linux-musleabihf" | "x86_64-unknown-freebsd" => "built, not run",
+            "universal2-apple-darwin" => "run on both Macs",
+            _ => "run on its own runner",
+        }
+    }
+
+    /// What a program there lacks that it has on Linux: the box, cig's
+    /// copy-on-write layer and namespaces (CigScript#106), where a boxed hop
+    /// is refused or falls back to the tin (E777, E763).
+    pub fn missing(&self) -> &'static str {
+        if self.triple.contains("linux") {
+            ""
+        } else {
+            "no box (E777, E763)"
+        }
+    }
+
     /// What its executables end in.
     pub fn suffix(&self) -> &'static str {
         if self.format == Format::Pe {

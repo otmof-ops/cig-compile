@@ -877,3 +877,36 @@ fn timings_progress_and_sboms_say_what_the_build_did() {
     ok(&s.cc(&["build", "proj", "--sbom"]));
     assert_eq!(fs::read_to_string(&sbom_path).unwrap(), first);
 }
+
+/// #41: `targets` says, for each machine, the stage its programs are built
+/// at, how CI proves them, and what a program there lacks.
+#[test]
+fn targets_say_the_stage_how_ci_proves_them_and_what_is_missing() {
+    let s = Sandbox::new();
+    let out = ok(&s.cc(&["targets"]));
+    let line = |triple: &str| {
+        out.lines()
+            .find(|l| l.starts_with(triple))
+            .unwrap_or_else(|| panic!("{triple}: {out}"))
+            .to_string()
+    };
+    assert!(line("x86_64-unknown-linux-musl").contains("stage A  run on its own runner"));
+    assert!(!line("aarch64-unknown-linux-musl").contains("no box"));
+    assert!(line("armv7-unknown-linux-musleabihf").contains("built, not run"));
+    assert!(line("aarch64-apple-darwin").contains("no box (E777, E763)"));
+    assert!(
+        out.lines().all(|l| l == l.trim_end()),
+        "trailing spaces: {out:?}"
+    );
+    let json: Vec<serde_json::Value> = ok(&s.cc(&["--json", "targets"]))
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let freebsd = json
+        .iter()
+        .find(|t| t["triple"] == "x86_64-unknown-freebsd")
+        .unwrap();
+    assert_eq!(freebsd["stage"], "A");
+    assert_eq!(freebsd["ci"], "built, not run");
+    assert_eq!(freebsd["missing"], "no box (E777, E763)");
+}
