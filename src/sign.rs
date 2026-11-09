@@ -30,6 +30,34 @@ pub fn path_for(file: &Path) -> PathBuf {
     file.with_file_name(format!("{name}.sig"))
 }
 
+/// A build's pre-flight for `--sign <key>`: `ssh-keygen` is on this
+/// machine and the key file is there and readable. Called before a build
+/// starts, so a signer that is not there refuses the build up front and
+/// nothing is written. The agent, when it holds the private half of a
+/// public-key file, is not asked here: a key whose private half the agent
+/// holds is still itself a readable file, and `ssh-keygen -Y sign` is
+/// what says `agent refused signature` or `couldn't parse private key` at
+/// sign time. With staging, a failure there leaves `--out` alone too.
+pub fn precheck_signer(key: &Path) -> Result<(), String> {
+    require_ssh_keygen()?;
+    let md = std::fs::metadata(key).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("no signing key at {}", key.display())
+        } else {
+            format!("cannot read the signing key at {}: {e}", key.display())
+        }
+    })?;
+    if !md.is_file() {
+        return Err(format!(
+            "{} is not a file, so it is not an ssh key",
+            key.display()
+        ));
+    }
+    std::fs::File::open(key)
+        .map_err(|e| format!("cannot read the signing key at {}: {e}", key.display()))?;
+    Ok(())
+}
+
 /// Check `ssh-keygen` is on this machine. Called before a sign or a verify
 /// so the message names the one missing thing, not a shell failure.
 pub fn require_ssh_keygen() -> Result<(), String> {
@@ -224,5 +252,19 @@ mod tests {
         // Changing this breaks every signature made so far: if it ever has
         // to change, the old one must still verify in a later cigcompile.
         assert_eq!(NAMESPACE, "cigcompile-program");
+    }
+
+    #[test]
+    fn precheck_names_a_missing_key_file() {
+        let d = tempfile::tempdir().unwrap();
+        let e = precheck_signer(&d.path().join("not-here")).unwrap_err();
+        assert!(e.contains("no signing key"), "{e}");
+    }
+
+    #[test]
+    fn precheck_names_a_directory_as_not_a_key() {
+        let d = tempfile::tempdir().unwrap();
+        let e = precheck_signer(d.path()).unwrap_err();
+        assert!(e.contains("not a file") || e.contains("cannot read"), "{e}");
     }
 }

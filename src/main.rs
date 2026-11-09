@@ -21,6 +21,7 @@ mod reduce;
 mod runtime;
 mod sbom;
 mod sign;
+mod stage;
 mod tar;
 mod test;
 mod timings;
@@ -499,65 +500,179 @@ fn build_cmd(
     };
     let mut index = cache::Index::load();
     if a.check {
-        let checked = build::build(ctx, &jobs, target, None, &mut index, false).map(|_| ());
+        let checked = build::build(ctx, &jobs, target, None, &mut index, false, None).map(|_| ());
         finish(&checked);
         checked?;
         return Ok(None);
     }
+    // Pre-flight: a `--sign` with no signer never writes a thing.
+    // `ssh-keygen` must be on this machine and the key file must be
+    // readable, before the runtime is loaded or a program is built.
+    if let Some(key) = a.sign.as_deref() {
+        if let Err(e) = sign::precheck_signer(key) {
+            let d = cigscript::diagnostics::usage(e)
+                .code("E1004")
+                .with_hint("install OpenSSH (openssh-client on Debian and Ubuntu, openssh on macOS and Windows 10+), and name a key file you can read with --sign");
+            cigscript::cli::report(ctx, &d, None, None);
+            return Err(exit::USAGE);
+        }
+    }
     let found = runtime::find(target, a.runtime.as_deref(), &mut index);
     index.save();
     let rt = found.map_err(fail)?;
-    let built = build::build(ctx, &jobs, target, Some(&rt), &mut index, a.sbom);
+    // Stage every output beside `--out` when a build writes more than
+    // one thing (`--sign`, `--sbom`, `--emit oci`, `--emit deb`). A
+    // failing step then leaves `--out` as it was (#66): the staging
+    // folder is removed and the error names what is still at `--out`.
+    let want_staging = a.sign.is_some() || a.sbom || oci || deb;
+    let stages =
+        if want_staging {
+            match stage::plan(&jobs) {
+                Ok(s) => s,
+                Err(e) => return Err(fail(
+                    cigscript::diagnostics::usage(format!(
+                        "cannot open a staging folder beside --out: {e}"
+                    ))
+                    .code("E1004")
+                    .with_hint(
+                        "write it somewhere you can with -o, or free the space the message names",
+                    ),
+                )),
+            }
+        } else {
+            Vec::new()
+        };
+    let stage_out: Vec<std::path::PathBuf> = stages.iter().map(|s| s.staged_out.clone()).collect();
+    let stage_to = if want_staging {
+        Some(stage_out.as_slice())
+    } else {
+        None
+    };
+    let built = build::build(ctx, &jobs, target, Some(&rt), &mut index, a.sbom, stage_to);
     index.save();
     finish(&built.as_ref().map(|_| ()).map_err(|c| *c));
-    let built = built?;
+    let built = match built {
+        Ok(b) => b,
+        Err(code) => {
+            if want_staging {
+                stage::discard(&stages);
+            }
+            return Err(code);
+        }
+    };
+    // Each built's `b.job.out` is the FINAL path; `written_at[i]` is
+    // where the file was written (a staging path when staging, the
+    // final path otherwise). Sign and emit operate on the written-at
+    // path, so a failure there does not touch `--out`.
+    let written_at: Vec<std::path::PathBuf> = if want_staging {
+        stage_out.clone()
+    } else {
+        built.iter().map(|b| b.job.out.clone()).collect()
+    };
     if let Some(key) = a.sign.as_deref() {
-        sign_built(ctx, &built, key, a.sbom)?;
+        if let Err(code) = sign_built(ctx, &built, key, a.sbom, &written_at) {
+            if want_staging {
+                let why = stage::why_nothing_was_written(&stages);
+                let d = cigscript::diagnostics::usage(why)
+                    .code("E1004")
+                    .with_hint("fix the signer and build again; nothing at --out was touched");
+                cigscript::cli::report(ctx, &d, None, None);
+                stage::discard(&stages);
+            }
+            return Err(code);
+        }
     }
     warn_linkage(ctx, target, &rt);
     if oci {
-        for b in &built {
-            let image = std::fs::read(&b.job.out)
-                .ok()
-                .and_then(|bytes| oci::image(&b.job.name, &bytes, target.triple));
-            let path = oci::path_for(&b.job.out);
-            let written = image.map(|i| build::write_if_changed(&path, &i));
-            match written {
-                Some(Ok(_)) if ctx.json => println!(
-                    "{}",
-                    serde_json::json!({"image": path.to_string_lossy(), "program": b.job.out.to_string_lossy()})
-                ),
-                Some(Ok(_)) => println!(
-                    "  image  {} (docker load -i, then run localhost/{}:latest)",
-                    path.display(),
-                    b.job.name
-                ),
-                _ => {
-                    return Err(fail(
-                        cigscript::diagnostics::usage(format!("cannot write {}", path.display()))
-                            .code("E1004")
-                            .with_hint("write it somewhere you can with -o"),
-                    ))
-                }
+        if let Err(code) = emit_oci(ctx, &built, target, &written_at) {
+            if want_staging {
+                let why = stage::why_nothing_was_written(&stages);
+                let d = cigscript::diagnostics::usage(why)
+                    .code("E1004")
+                    .with_hint("write it somewhere you can with -o; nothing at --out was touched");
+                cigscript::cli::report(ctx, &d, None, None);
+                stage::discard(&stages);
             }
+            return Err(code);
         }
     }
     if deb {
-        emit_deb(ctx, a, target, &built).map_err(fail)?;
+        if let Err(d) = emit_deb(ctx, a, target, &built, &written_at) {
+            cigscript::cli::report(ctx, &d, None, None);
+            if want_staging {
+                let why = stage::why_nothing_was_written(&stages);
+                let d = cigscript::diagnostics::usage(why)
+                    .code("E1004")
+                    .with_hint("write it somewhere you can with -o; nothing at --out was touched");
+                cigscript::cli::report(ctx, &d, None, None);
+                stage::discard(&stages);
+            }
+            return Err(exit::USAGE);
+        }
+    }
+    let replaced: Vec<bool> = if want_staging {
+        match stage::commit(stages) {
+            Ok(r) => r,
+            Err(e) => {
+                let d = cigscript::diagnostics::usage(format!(
+                    "cannot move built files into place: {e}"
+                ))
+                .code("E1004")
+                .with_hint(
+                    "write it somewhere you can with -o, or free the space the message names",
+                );
+                cigscript::cli::report(ctx, &d, None, None);
+                return Err(exit::USAGE);
+            }
+        }
+    } else {
+        built.iter().map(|b| b.written).collect()
+    };
+    // A program and its signature always match: a build that does not sign
+    // and replaced the program takes away the signatures beside it, which
+    // signed the program from before.
+    if a.sign.is_none() {
+        for (b, r) in built.iter().zip(replaced.iter()) {
+            if *r {
+                drop_stale_signatures(ctx, &b.job.out);
+            }
+        }
     }
     Ok(Some((built, rt)))
+}
+
+/// Remove `<program>.sig` and the SBOM's `.sig` beside a program this
+/// build replaced without signing, and say so.
+fn drop_stale_signatures(ctx: &cigscript::cli::Ctx, program: &std::path::Path) {
+    for sig in [
+        sign::path_for(program),
+        sign::path_for(&sbom::path_for(program)),
+    ] {
+        if sig.is_file() && std::fs::remove_file(&sig).is_ok() && !ctx.json {
+            println!(
+                "  removed {}: it signed the program from before",
+                sig.display()
+            );
+        }
+    }
 }
 
 /// `--emit deb`: beside each program, a `.deb` that installs it to
 /// `/usr/bin/<name>`. Reproducible: the same build writes the same bytes
 /// (src/deb.rs). Nothing is installed to make it.
+///
+/// `written_at[i]` is where the program was written (a staging path when
+/// staging, else `b.job.out`); the `.deb` is written beside it. A failing
+/// write there leaves the final `--out` as it was, since the commit step
+/// is what moves either into place (#66).
 fn emit_deb(
     ctx: &cigscript::cli::Ctx,
     a: &BuildArgs,
     target: &runtime::Target,
     built: &[build::Built],
+    written_at: &[std::path::PathBuf],
 ) -> Result<(), cigscript::diagnostics::Diagnostic> {
-    for b in built {
+    for (b, at) in built.iter().zip(written_at.iter()) {
         let meta = deb::meta_for(
             &b.job.name,
             target,
@@ -565,15 +680,16 @@ fn emit_deb(
             a.pkg_maintainer.as_deref(),
             a.pkg_description.as_deref(),
         )?;
-        let path = deb::path_for(&b.job.out, &meta);
-        let program = std::fs::read(&b.job.out).map_err(|e| {
+        let write_to = deb::path_for(at, &meta);
+        let final_path = deb::path_for(&b.job.out, &meta);
+        let program = std::fs::read(at).map_err(|e| {
             cigscript::diagnostics::usage(format!("cannot read {}: {e}", b.job.out.display()))
                 .code("E1004")
                 .with_hint("write it somewhere you can with -o")
         })?;
         let archive = deb::package(&b.job.name, &program, &meta);
-        build::write_if_changed(&path, &archive).map_err(|e| {
-            cigscript::diagnostics::usage(format!("cannot write {}: {e}", path.display()))
+        build::write_if_changed(&write_to, &archive).map_err(|e| {
+            cigscript::diagnostics::usage(format!("cannot write {}: {e}", final_path.display()))
                 .code("E1004")
                 .with_hint("write it somewhere you can with -o")
         })?;
@@ -581,7 +697,7 @@ fn emit_deb(
             println!(
                 "{}",
                 serde_json::json!({
-                    "deb": path.to_string_lossy(),
+                    "deb": final_path.to_string_lossy(),
                     "program": b.job.out.to_string_lossy(),
                     "package": meta.package,
                     "version": meta.version,
@@ -591,12 +707,56 @@ fn emit_deb(
         } else {
             println!(
                 "  deb    {} ({}_{}_{}.deb, dpkg -i to install to /usr/bin/{})",
-                path.display(),
+                final_path.display(),
                 meta.package,
                 meta.version,
                 meta.arch,
                 b.job.name,
             );
+        }
+    }
+    Ok(())
+}
+
+/// `--emit oci`: beside each Linux program, an OCI image of it (#41).
+///
+/// `written_at[i]` is where the program was written (a staging path when
+/// staging, else `b.job.out`); the image is written beside it. A failing
+/// write there leaves the final `--out` as it was (#66).
+fn emit_oci(
+    ctx: &Ctx,
+    built: &[build::Built],
+    target: &runtime::Target,
+    written_at: &[std::path::PathBuf],
+) -> Result<(), i32> {
+    let fail = |d: cigscript::diagnostics::Diagnostic| {
+        cigscript::cli::report(ctx, &d, None, None);
+        exit::USAGE
+    };
+    for (b, at) in built.iter().zip(written_at.iter()) {
+        let image = std::fs::read(at)
+            .ok()
+            .and_then(|bytes| oci::image(&b.job.name, &bytes, target.triple));
+        let write_to = oci::path_for(at);
+        let final_path = oci::path_for(&b.job.out);
+        let written = image.map(|i| build::write_if_changed(&write_to, &i));
+        match written {
+            Some(Ok(_)) if ctx.json => println!(
+                "{}",
+                serde_json::json!({"image": final_path.to_string_lossy(), "program": b.job.out.to_string_lossy()})
+            ),
+            Some(Ok(_)) => println!(
+                "  image  {} (docker load -i, then run localhost/{}:latest)",
+                final_path.display(),
+                b.job.name
+            ),
+            _ => {
+                return Err(fail(
+                    cigscript::diagnostics::usage(format!("cannot write {}", final_path.display()))
+                        .code("E1004")
+                        .with_hint("write it somewhere you can with -o"),
+                ))
+            }
         }
     }
     Ok(())
@@ -612,6 +772,7 @@ fn sign_built(
     built: &[build::Built],
     key: &std::path::Path,
     sbom: bool,
+    written_at: &[std::path::PathBuf],
 ) -> Result<(), i32> {
     let fail = |message: String, hint: &str| {
         let d = cigscript::diagnostics::usage(message)
@@ -626,8 +787,12 @@ fn sign_built(
             "install OpenSSH (openssh-client on Debian and Ubuntu, openssh on macOS and Windows 10+)",
         ));
     }
-    for b in built {
-        if let Err(e) = sign::sign(&b.job.out, key) {
+    // The signed-at / signature-at path is what the sign step writes to
+    // (staged when staging, the final path otherwise); the json/line
+    // tells the operator the final path (`b.job.out`), which is where it
+    // lands after the commit step.
+    for (b, at) in built.iter().zip(written_at.iter()) {
+        if let Err(e) = sign::sign(at, key) {
             return Err(fail(
                 format!("cannot sign {}: {e}", b.job.out.display()),
                 "give --sign an ssh private-key file, or a public-key file with ssh-agent holding the private one",
@@ -647,18 +812,20 @@ fn sign_built(
             );
         }
         if sbom {
-            let sbom_path = sbom::path_for(&b.job.out);
-            if let Err(e) = sign::sign(&sbom_path, key) {
+            let sbom_at = sbom::path_for(at);
+            if let Err(e) = sign::sign(&sbom_at, key) {
+                let sbom_final = sbom::path_for(&b.job.out);
                 return Err(fail(
-                    format!("cannot sign {}: {e}", sbom_path.display()),
+                    format!("cannot sign {}: {e}", sbom_final.display()),
                     "give --sign an ssh private-key file, or a public-key file with ssh-agent holding the private one",
                 ));
             }
-            let sig = sign::path_for(&sbom_path);
+            let sbom_final = sbom::path_for(&b.job.out);
+            let sig = sign::path_for(&sbom_final);
             if ctx.json {
                 println!(
                     "{}",
-                    serde_json::json!({"signed": sbom_path.to_string_lossy(), "signature": sig.to_string_lossy(), "namespace": sign::NAMESPACE})
+                    serde_json::json!({"signed": sbom_final.to_string_lossy(), "signature": sig.to_string_lossy(), "namespace": sign::NAMESPACE})
                 );
             } else {
                 println!(

@@ -1836,6 +1836,302 @@ fn bench_script_runs_one_user_script_through_the_set_harness() {
     assert_eq!(both.status.code(), Some(3), "{}", text(&both.stderr));
 }
 
+/// #66: a `build --sign` whose sign step cannot go through writes
+/// nothing to `--out`: no unsigned program, no SBOM, no image. A failing
+/// signer refuses the build; a missing key refuses it the same.
+#[test]
+fn a_failed_sign_writes_nothing() {
+    let s = Sandbox::new();
+    s.write("fib.cig", "exhale 1\n");
+    // --out is a clean folder: no leftover from a previous build.
+    fs::create_dir_all(s.path().join("out")).unwrap();
+    let out_path = s.path().join("out").join(exe_name("fib"));
+    // A key that is not there: the pre-flight refuses with E1004 and
+    // nothing in `out/` is touched.
+    let nokey = s.path().join("nokey");
+    let r = s.cc(&[
+        "build",
+        "fib.cig",
+        "-o",
+        out_path.to_str().unwrap(),
+        "--sign",
+        nokey.to_str().unwrap(),
+        "--sbom",
+    ]);
+    assert_eq!(r.status.code(), Some(3), "{}", text(&r.stderr));
+    assert!(text(&r.stderr).contains("E1004"), "{}", text(&r.stderr));
+    // `out/` is empty: no program, no SBOM, no `.sig`.
+    let left: Vec<_> = fs::read_dir(s.path().join("out"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert!(
+        left.is_empty(),
+        "a failed sign left files in --out: {left:?}"
+    );
+}
+
+/// A build that does not sign, over a program that was signed, takes the
+/// old signatures away when it replaces the program: a program and its
+/// `.sig` always match. A rebuild that changes nothing keeps them.
+#[test]
+fn an_unsigned_rebuild_takes_the_old_signature_away() {
+    if !has_ssh_keygen() {
+        eprintln!("ssh-keygen is not on this machine: skipping");
+        return;
+    }
+    let s = Sandbox::new();
+    s.write("fib.cig", "exhale 1\n");
+    s.write("fib2.cig", "exhale 2\n");
+    let key = s.path().join("k");
+    ssh_keygen(&["-t", "ed25519", "-N", "", "-C", "signer@test", "-q", "-f"])
+        .arg(&key)
+        .status()
+        .expect("make a test key");
+    let out_path = s.path().join("out").join(exe_name("fib"));
+    let out = out_path.to_str().unwrap();
+    ok(&s.cc(&[
+        "build",
+        "fib.cig",
+        "-o",
+        out,
+        "--sign",
+        key.to_str().unwrap(),
+        "--sbom",
+    ]));
+    let sig = out_path.with_file_name(format!("{}.sig", exe_name("fib")));
+    let sbom_sig = out_path.with_file_name(format!("{}.cdx.json.sig", exe_name("fib")));
+    assert!(sig.is_file() && sbom_sig.is_file());
+    // The same script, unsigned: nothing changed, so the signatures stay.
+    ok(&s.cc(&["build", "fib.cig", "-o", out, "--sbom"]));
+    assert!(sig.is_file(), "an unchanged program lost its signature");
+    // Another script, unsigned: the program is replaced, its old
+    // signatures go with the program they signed.
+    let r = s.cc(&["build", "fib2.cig", "-o", out, "--sbom"]);
+    ok(&r);
+    assert!(
+        !sig.exists(),
+        "{} still sits beside a program it did not sign",
+        sig.display()
+    );
+    assert!(
+        !sbom_sig.exists(),
+        "{} still sits beside an SBOM it did not sign",
+        sbom_sig.display()
+    );
+    assert!(
+        text(&r.stdout).contains("it signed the program from before"),
+        "{}",
+        text(&r.stdout)
+    );
+    // The same holds for a plain build, with nothing staged.
+    ok(&s.cc(&[
+        "build",
+        "fib.cig",
+        "-o",
+        out,
+        "--sign",
+        key.to_str().unwrap(),
+    ]));
+    assert!(sig.is_file());
+    ok(&s.cc(&["build", "fib2.cig", "-o", out]));
+    assert!(!sig.exists(), "a plain rebuild left {}", sig.display());
+}
+
+/// #66: a `build --sign` that fails over an earlier signed program
+/// leaves the earlier program and its `.sig` byte for byte. Without
+/// this, a failed rebuild writes an unsigned program over the signed
+/// one and takes the `.sig` with it.
+#[test]
+fn a_failed_sign_keeps_the_old_signed_program() {
+    if !has_ssh_keygen() {
+        eprintln!("ssh-keygen is not on this machine: skipping");
+        return;
+    }
+    let s = Sandbox::new();
+    s.write("fib.cig", "exhale 1\n");
+    s.write("fib2.cig", "exhale 2\n");
+    let key = s.path().join("k");
+    ssh_keygen(&["-t", "ed25519", "-N", "", "-C", "signer@test", "-q", "-f"])
+        .arg(&key)
+        .status()
+        .expect("make a test key");
+    let out_path = s.path().join("out").join(exe_name("fib"));
+    // First: a good signed build.
+    ok(&s.cc(&[
+        "build",
+        "fib.cig",
+        "-o",
+        out_path.to_str().unwrap(),
+        "--sign",
+        key.to_str().unwrap(),
+        "--sbom",
+    ]));
+    let sig = out_path.with_file_name(format!("{}.sig", exe_name("fib")));
+    let sbom = out_path.with_file_name(format!("{}.cdx.json", exe_name("fib")));
+    assert!(out_path.is_file(), "no {}", out_path.display());
+    assert!(sig.is_file(), "no {}", sig.display());
+    assert!(sbom.is_file(), "no {}", sbom.display());
+    let program_before = fs::read(&out_path).unwrap();
+    let sig_before = fs::read(&sig).unwrap();
+    let sbom_before = fs::read(&sbom).unwrap();
+    // Second: a build over the same --out with a failing signer. The
+    // script differs so the new program would be different bytes.
+    let nokey = s.path().join("nokey");
+    let r = s.cc(&[
+        "build",
+        "fib2.cig",
+        "-o",
+        out_path.to_str().unwrap(),
+        "--sign",
+        nokey.to_str().unwrap(),
+        "--sbom",
+    ]);
+    assert_eq!(r.status.code(), Some(3), "{}", text(&r.stderr));
+    assert!(text(&r.stderr).contains("E1004"), "{}", text(&r.stderr));
+    // The earlier program, SBOM and .sig are untouched, byte for byte.
+    assert_eq!(fs::read(&out_path).unwrap(), program_before);
+    assert_eq!(fs::read(&sig).unwrap(), sig_before);
+    assert_eq!(fs::read(&sbom).unwrap(), sbom_before);
+    // The staging folder is gone.
+    let left: Vec<_> = fs::read_dir(out_path.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains(".cigcompile-") && n.ends_with(".stage"))
+        .collect();
+    assert!(
+        left.is_empty(),
+        "a staging folder was left behind: {left:?}"
+    );
+}
+
+/// #66: `build --sign` with `ssh-keygen` not on this machine refuses the
+/// build up front (E1004) and writes nothing. The signer pre-flight runs
+/// before the program is assembled or the SBOM written.
+#[test]
+fn no_ssh_keygen_refuses_before_building() {
+    let s = Sandbox::new();
+    s.write("fib.cig", "exhale 1\n");
+    // Make a readable "key" file so the pre-flight does not stop on
+    // the key being missing: it should stop on `ssh-keygen` missing
+    // from PATH.
+    let key = s.path().join("k");
+    fs::write(&key, "unused for this test").unwrap();
+    let out_path = s.path().join("out").join(exe_name("fib"));
+    fs::create_dir_all(out_path.parent().unwrap()).unwrap();
+    // Run with a PATH that has nothing on it: `ssh-keygen` is not
+    // found, `Command::new` fails at spawn.
+    let mut c = Command::new(env!("CARGO_BIN_EXE_cigcompile"));
+    s.env(&mut c);
+    c.env("PATH", s.path().join("no-tools-here"));
+    let r = c
+        .args([
+            "build",
+            "fib.cig",
+            "-o",
+            out_path.to_str().unwrap(),
+            "--sign",
+            key.to_str().unwrap(),
+            "--sbom",
+        ])
+        .output()
+        .expect("run cigcompile");
+    assert_eq!(r.status.code(), Some(3), "{}", text(&r.stderr));
+    assert!(text(&r.stderr).contains("E1004"), "{}", text(&r.stderr));
+    assert!(
+        text(&r.stderr).contains("ssh-keygen"),
+        "the message names what is missing: {}",
+        text(&r.stderr)
+    );
+    assert!(
+        !out_path.exists(),
+        "a program was written before the signer was checked"
+    );
+    let left: Vec<_> = fs::read_dir(out_path.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert!(
+        left.is_empty(),
+        "files were written before the signer was checked: {left:?}"
+    );
+}
+
+/// #66: a build that writes more than one output (program, `.sig`, SBOM,
+/// image) has all of them or none of them in `--out`. A kill between
+/// steps leaves the staging folder only; here a failing later step
+/// stands in for the kill.
+#[test]
+fn outputs_appear_together() {
+    if !has_ssh_keygen() {
+        eprintln!("ssh-keygen is not on this machine: skipping");
+        return;
+    }
+    let s = Sandbox::new();
+    s.write("hi.cig", "exhale 1\n");
+    let key = s.path().join("k");
+    ssh_keygen(&["-t", "ed25519", "-N", "", "-C", "signer@test", "-q", "-f"])
+        .arg(&key)
+        .status()
+        .expect("make a test key");
+    let out_path = s.path().join("out").join(exe_name("hi"));
+    // The good case: all four outputs land together.
+    let args_oci = [
+        "build",
+        "hi.cig",
+        "-o",
+        out_path.to_str().unwrap(),
+        "--sign",
+        key.to_str().unwrap(),
+        "--sbom",
+        "--emit",
+        "oci",
+        "--target",
+        "x86_64-unknown-linux-musl",
+    ];
+    ok(&s.cc(&args_oci));
+    let sig = out_path.with_file_name(format!("{}.sig", exe_name("hi")));
+    let sbom = out_path.with_file_name(format!("{}.cdx.json", exe_name("hi")));
+    let image = out_path.with_file_name(format!("{}.oci.tar", exe_name("hi")));
+    assert!(out_path.is_file(), "no {}", out_path.display());
+    assert!(sig.is_file(), "no {}", sig.display());
+    assert!(sbom.is_file(), "no {}", sbom.display());
+    assert!(image.is_file(), "no {}", image.display());
+    // The failing case: a fresh --out and a sign that cannot go through.
+    // The build has to stop before the image is written, so no image
+    // appears without the program, SBOM and signature beside it.
+    let out2 = s.path().join("out2").join(exe_name("hi"));
+    fs::create_dir_all(out2.parent().unwrap()).unwrap();
+    let nokey = s.path().join("nokey");
+    let args_fail = [
+        "build",
+        "hi.cig",
+        "-o",
+        out2.to_str().unwrap(),
+        "--sign",
+        nokey.to_str().unwrap(),
+        "--sbom",
+        "--emit",
+        "oci",
+        "--target",
+        "x86_64-unknown-linux-musl",
+    ];
+    let r = s.cc(&args_fail);
+    assert_eq!(r.status.code(), Some(3), "{}", text(&r.stderr));
+    let left: Vec<_> = fs::read_dir(out2.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert!(
+        left.is_empty(),
+        "a failing build left some outputs but not others: {left:?}"
+    );
+}
+
 /// #33 with #38: a pass with no remarks of its own (`copy-prop`, `sccp`)
 /// is still said, as having changed the IR or not, so `--remarks` tells the
 /// whole story of a fold that copy propagation made possible.
