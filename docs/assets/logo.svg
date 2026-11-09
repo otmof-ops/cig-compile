@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="140" viewBox="0 0 560 140" role="img" aria-label="CigCompile: a CigScript script, sealed into a program that runs with nothing installed">
+  <title>CigCompile</title>
+  <defs>
+    <radialGradient id="ember" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fff7ed"/>
+      <stop offset="45%" stop-color="#fb923c"/>
+      <stop offset="100%" stop-color="#ea580c" stop-opacity="0.9"/>
+    </radialGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f3f4f6"/>
+      <stop offset="100%" stop-color="#e5e7eb"/>
+    </linearGradient>
+    <linearGradient id="paper-up" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f3f4f6"/>
+      <stop offset="100%" stop-color="#e5e7eb"/>
+    </linearGradient>
+  </defs>
+  <!-- smoke: the script, alight -->
+  <g fill="none" stroke="#9ca3af" stroke-width="2.2" stroke-linecap="round" opacity="0.85">
+    <path d="M 30 78 C 20 68, 42 60, 30 50"/>
+    <path d="M 38 76 C 50 66, 28 60, 40 46"/>
+    <path d="M 22 80 C 12 72, 24 64, 18 54"/>
+  </g>
+  <!-- the stick: paper, filter, ember -->
+  <rect x="30" y="86" width="58" height="20" rx="5" fill="url(#paper)" stroke="#d1d5db" stroke-width="1.5"/>
+  <rect x="86" y="86" width="26" height="20" rx="5" fill="#d6b370"/>
+  <rect x="89" y="90" width="20" height="3" fill="#c8a25f" opacity="0.6"/>
+  <rect x="89" y="99" width="20" height="3" fill="#c8a25f" opacity="0.6"/>
+  <circle cx="30" cy="96" r="17" fill="#f97316" opacity="0.14"/>
+  <circle cx="30" cy="96" r="11" fill="url(#ember)"/>
+  <!-- into the pack -->
+  <g fill="none" stroke="#f97316" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 122 88 L 130 96 L 122 104" opacity="0.35"/>
+    <path d="M 134 88 L 142 96 L 134 104" opacity="0.65"/>
+    <path d="M 146 88 L 154 96 L 146 104"/>
+  </g>
+  <!-- the program: a sealed pack, the runtime and the script in one -->
+  <rect x="164" y="48" width="66" height="80" rx="8" fill="url(#paper-up)" stroke="#d1d5db" stroke-width="1.5"/>
+  <rect x="164" y="48" width="66" height="20" rx="7" fill="#e5e7eb" stroke="#d1d5db" stroke-width="1.5"/>
+  <rect x="164" y="92" width="66" height="12" fill="#f97316" opacity="0.9"/>
+  <circle cx="197" cy="68" r="9" fill="#f97316"/>
+  <path d="M 192.5 68 L 196 71.5 L 202 64.5" fill="none" stroke="#fff7ed" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- wordmark -->
+  <text x="250" y="88" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="40" font-weight="700" fill="#6b7280" letter-spacing="-1">Cig<tspan fill="#f97316">Compile</tspan></text>
+  <text x="252" y="116" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="14" fill="#9ca3af">programs that run with nothing installed</text>
+</svg>
