@@ -27,6 +27,9 @@ pub struct Opts<'a> {
     /// The signer's identity to require in the allowed-signers file
     /// (default `*`, any identity there).
     pub identity: Option<&'a str>,
+    /// A program pass to check (`<program>.pass`, as `build --pass` writes
+    /// it). `allowed_signers`, when given, is who is trusted for it.
+    pub pass: Option<&'a Path>,
 }
 
 /// One part's verdict: `ok`, `differs` or `unchecked`, and what was found.
@@ -188,13 +191,15 @@ pub fn verify(ctx: &Ctx, o: &Opts) -> i32 {
     }
     // The whole file, against what a build of these parts writes.
     let rebuilt = program::append(runtime, &p);
+    let signed_since =
+        bytes.starts_with(&rebuilt) && image.is_some_and(|i| i.certificates.is_some());
     if rebuilt == bytes {
         rows.push(Row {
             part: "whole",
             verdict: "ok",
             said: "byte for byte what a build of these parts writes".to_string(),
         });
-    } else if bytes.starts_with(&rebuilt) && image.is_some_and(|i| i.certificates.is_some()) {
+    } else if signed_since {
         rows.push(Row {
             part: "whole",
             verdict: "ok",
@@ -217,6 +222,29 @@ pub fn verify(ctx: &Ctx, o: &Opts) -> i32 {
     // reports the signer is unchecked).
     if let Some(sig) = o.signature {
         rows.push(signature_row(o.program, sig, o.allowed_signers, o.identity));
+    }
+    // The program pass names the program's bytes as they were built. Code
+    // signing rewrites them (a PE's headers, a Mach-O's image), so a pass
+    // is checked before signing, and a signed program says so.
+    if let Some(at) = o.pass {
+        let sha = hex::encode(Sha256::digest(&bytes));
+        rows.push(match crate::pass::check(at, &sha, o.allowed_signers) {
+            Ok(said) => Row {
+                part: "pass",
+                verdict: "ok",
+                said,
+            },
+            Err(why) if rebuilt != bytes && signed_since => Row {
+                part: "pass",
+                verdict: "differs",
+                said: format!("{why}; this program was code-signed since its build, and a pass names the bytes before signing: check it then"),
+            },
+            Err(why) => Row {
+                part: "pass",
+                verdict: "differs",
+                said: why,
+            },
+        });
     }
     say(ctx, &shown, Some(&p), &rows)
 }

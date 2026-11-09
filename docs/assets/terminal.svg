@@ -8,8 +8,8 @@
   <text x="460.0" y="21" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" fill="#9ca3af">~/demo</text>
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12.5" fill="#d1d5db">
     <text x="22" y="56.0" xml:space="preserve"><tspan fill="#9ca3af">$ </tspan><tspan fill="#f3f4f6" font-weight="700">cigcompile build tidy-downloads.cig</tspan></text>
-    <text x="22" y="73.5" xml:space="preserve"><tspan fill="#fb923c" font-weight="700">compiled</tspan><tspan fill="#d1d5db"> tidy-downloads.cig -&gt; tidy-downloads </tspan><tspan fill="#9ca3af">(11.4 MB, cig 1.18.0 for x86_64-unknown-linux-musl)</tspan></text>
-    <text x="22" y="91.0" xml:space="preserve"><tspan fill="#9ca3af">  sha256 de1a5ae28c851e4369f973691c1b39206c5c6a9c202c2ab3414de7e4568860ce</tspan></text>
+    <text x="22" y="73.5" xml:space="preserve"><tspan fill="#fb923c" font-weight="700">compiled</tspan><tspan fill="#d1d5db"> tidy-downloads.cig -&gt; tidy-downloads </tspan><tspan fill="#9ca3af">(13.0 MB, cig 1.20.0 for x86_64-unknown-linux-musl)</tspan></text>
+    <text x="22" y="91.0" xml:space="preserve"><tspan fill="#9ca3af">  sha256 ccc4d0244fbbbba107a40ff3a7bd3f921233f38447ea125f6771ad25308a9d3d</tspan></text>
     <text x="22" y="126.0" xml:space="preserve"><tspan fill="#9ca3af">$ </tspan><tspan fill="#f3f4f6" font-weight="700">./tidy-downloads --dry-run Downloads</tspan></text>
     <text x="22" y="143.5" xml:space="preserve"><tspan fill="#d1d5db">moved 5 files</tspan></text>
     <text x="22" y="161.0" xml:space="preserve"><tspan fill="#fb923c" font-weight="700">dry-run plan:</tspan><tspan fill="#d1d5db"> 8 ops</tspan></text>
@@ -20,14 +20,14 @@
     <text x="22" y="248.5" xml:space="preserve"><tspan fill="#9ca3af">nothing was changed</tspan></text>
     <text x="22" y="283.5" xml:space="preserve"><tspan fill="#9ca3af">$ </tspan><tspan fill="#f3f4f6" font-weight="700">./tidy-downloads Downloads</tspan></text>
     <text x="22" y="301.0" xml:space="preserve"><tspan fill="#d1d5db">moved 5 files</tspan></text>
-    <text x="22" y="318.5" xml:space="preserve"><tspan fill="#fb923c" font-weight="700">burned</tspan><tspan fill="#d1d5db"> 8 ops (0 irreversible), run 20261109T091447-bb20e5</tspan></text>
+    <text x="22" y="318.5" xml:space="preserve"><tspan fill="#fb923c" font-weight="700">burned</tspan><tspan fill="#d1d5db"> 8 ops (0 irreversible), run 20261109T155753-1f3c08</tspan></text>
     <text x="22" y="353.5" xml:space="preserve"><tspan fill="#9ca3af">$ </tspan><tspan fill="#f3f4f6" font-weight="700">cigcompile verify tidy-downloads</tspan></text>
     <text x="22" y="371.0" xml:space="preserve"><tspan fill="#d1d5db">tidy-downloads</tspan></text>
-    <text x="22" y="388.5" xml:space="preserve"><tspan fill="#d1d5db">  runtime  </tspan><tspan fill="#4ade80">ok</tspan><tspan fill="#9ca3af">        cig's release asset cig-v1.18.0-linux-x86_64 (sha256 10077bd729b5d59c)</tspan></text>
-    <text x="22" y="406.0" xml:space="preserve"><tspan fill="#d1d5db">  payload  </tspan><tspan fill="#4ade80">ok</tspan><tspan fill="#9ca3af">        tidy-downloads.cig (56 lines, sha256 ef45e516e5a0fd63), built by cigcompile 0.2.0 for cig 1.18.0</tspan></text>
+    <text x="22" y="388.5" xml:space="preserve"><tspan fill="#d1d5db">  runtime  </tspan><tspan fill="#4ade80">ok</tspan><tspan fill="#9ca3af">        cig's release asset cig-v1.20.0-linux-x86_64 (sha256 4649fda09236ada8)</tspan></text>
+    <text x="22" y="406.0" xml:space="preserve"><tspan fill="#d1d5db">  payload  </tspan><tspan fill="#4ade80">ok</tspan><tspan fill="#9ca3af">        tidy-downloads.cig (56 lines, sha256 ef45e516e5a0fd63), built by cigcompile 0.3.0 for cig 1.20.0</tspan></text>
     <text x="22" y="423.5" xml:space="preserve"><tspan fill="#d1d5db">  whole    </tspan><tspan fill="#4ade80">ok</tspan><tspan fill="#9ca3af">        byte for byte what a build of these parts writes</tspan></text>
     <text x="22" y="458.5" xml:space="preserve"><tspan fill="#9ca3af">$ </tspan><tspan fill="#f3f4f6" font-weight="700">./tidy-downloads --unburn-last 1</tspan></text>
-    <text x="22" y="476.0" xml:space="preserve"><tspan fill="#d1d5db">undo 1 run (20261109T091447-bb20e5 -&gt; 20261109T091447-bb20e5), newest first</tspan></text>
+    <text x="22" y="476.0" xml:space="preserve"><tspan fill="#d1d5db">undo 1 run (20261109T155753-1f3c08 -&gt; 20261109T155753-1f3c08), newest first</tspan></text>
     <text x="22" y="493.5" xml:space="preserve"><tspan fill="#9ca3af">  8 ops across 13 files; 0 irreversible (a hop's own effects, which no unburn puts back)</tspan></text>
     <text x="22" y="511.0" xml:space="preserve"><tspan fill="#9ca3af">  …</tspan></text>
     <text x="22" y="528.5" xml:space="preserve"><tspan fill="#4ade80">  restored</tspan><tspan fill="#d1d5db"> move Downloads/screenshot.png -&gt; Downloads/image/screenshot.png </tspan><tspan fill="#9ca3af">(moved back: Downloads/screenshot.png)</tspan></text>

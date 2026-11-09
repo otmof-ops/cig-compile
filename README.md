@@ -63,7 +63,7 @@ and puts everything back, with no cig on the machine:
 | every machine cig is released for | `--target` builds for Linux (x86_64, aarch64, arm), macOS (each, or one universal program), Windows (x86_64, aarch64) and FreeBSD, from any machine |
 | what `cig run` does, exactly | burns, `--dry-run` plans, journals, rollback, the four kinds of no and every explain page are cig's own; the differential suite proves it |
 | an undo inside the program | `--unburn-last N`, `--unburn-since AGE` and `--unburn-to <run>` put back a stretch of the program's own runs, and leave other programs' alone |
-| programs you can check | `cigcompile verify` holds the runtime to the sha256 this compiler pins, the script to its record and the whole file to a rebuild; `--sign` adds an SSH signature, `--sbom` a CycloneDX SBOM, and `audit` reads the hardening from the headers |
+| programs you can check | `cigcompile verify` holds the runtime to the sha256 this compiler pins, the script to its record and the whole file to a rebuild; `--sign` adds an SSH signature, `--pass` a pass naming the machine that built it, `--sbom` a CycloneDX SBOM, and `audit` reads the hardening from the headers |
 | the same bytes everywhere | the same script, compiler and runtime make the same file on any machine; CI builds one script on five runners and compares them |
 | ready to ship | `--emit oci` makes a scratch image of one file, `--emit deb` a Debian package, and `package --brew` or `--scoop` a Homebrew formula or a Scoop manifest |
 | all or nothing | a build that signs, writes an SBOM or a package stages every output beside `--out` and moves them into place together, or leaves what was there |
@@ -104,7 +104,7 @@ Each release has an asset for every machine cig is released for, with its
 sha256 and a build provenance attestation:
 
 ```sh
-v=v0.2.0 asset=linux-x86_64     # the latest release; or linux-aarch64, linux-arm, macos-aarch64, macos-x86_64, freebsd-x86_64
+v=v0.3.0 asset=linux-x86_64     # the latest release; or linux-aarch64, linux-arm, macos-aarch64, macos-x86_64, freebsd-x86_64
 base=https://github.com/otmof-ops/cig-compile/releases/download/$v
 curl -LO "$base/cigcompile-$v-$asset" -LO "$base/cigcompile-$v-$asset.sha256"
 sha256sum -c "cigcompile-$v-$asset.sha256"                       # shasum -a 256 -c on macOS
@@ -131,7 +131,7 @@ not run. The compiler itself is released for the same machines.
 
 ## Limits, honestly
 
-- **A program carries cig whole.** A compiled hello is about 11 MB and
+- **A program carries cig whole.** A compiled hello is about 13 MB and
   starts in about 8 ms here, as cig does. A runtime that is only what a
   program uses waits on the crate split ([#1](https://github.com/otmof-ops/cig-compile/issues/1),
   [#4](https://github.com/otmof-ops/cig-compile/issues/4)).

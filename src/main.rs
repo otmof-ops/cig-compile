@@ -15,6 +15,7 @@ mod fat;
 mod fetch;
 mod gzip;
 mod oci;
+mod pass;
 mod pkg;
 mod project;
 mod reduce;
@@ -104,6 +105,9 @@ struct VerifyArgs {
     /// The signer's identity to require in the allowed-signers file (default `*`, any identity there).
     #[arg(long, value_name = "ID")]
     identity: Option<String>,
+    /// A program pass (as `build --pass` writes, <program>.pass) to check: it holds here (this machine made it, or a signer trusted here for programs did) and it names this program. --allowed-signers, when given, is who is trusted for it (a line's namespaces must name `cigpass-program`); else cig's own allowed signers.
+    #[arg(long, value_name = "FILE")]
+    pass: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -206,6 +210,9 @@ struct BuildArgs {
     /// A detached SSH signature beside each program, <program>.sig (and the SBOM's, with --sbom), made with `ssh-keygen -Y sign` and the namespace `cigcompile-program`. KEY is an ssh private-key file, or a public-key file with an agent holding the private one.
     #[arg(long, value_name = "KEY")]
     sign: Option<PathBuf>,
+    /// A program pass beside each program, <program>.pass: a sealed pass from this machine's tin naming the program by sha256, with its script, its cig, what built it and its target (and its SBOM's sha256, with --sbom). Another machine that trusts this one for programs checks it with `cigcompile verify --pass`; `cig pass key --kinds program` prints the line its allowed signers need.
+    #[arg(long)]
+    pass: bool,
     /// Build, then build again whenever a script changes (a script added to the folder too), until Ctrl-C.
     #[arg(long, conflicts_with_all = ["emit", "check"])]
     watch: bool,
@@ -340,6 +347,7 @@ fn run() -> i32 {
                 signature: a.signature.as_deref(),
                 allowed_signers: a.allowed_signers.as_deref(),
                 identity: a.identity.as_deref(),
+                pass: a.pass.as_deref(),
             },
         ),
         Some(Command::Reduce(a)) => reduce::reduce(
@@ -524,7 +532,7 @@ fn build_cmd(
     // one thing (`--sign`, `--sbom`, `--emit oci`, `--emit deb`). A
     // failing step then leaves `--out` as it was (#66): the staging
     // folder is removed and the error names what is still at `--out`.
-    let want_staging = a.sign.is_some() || a.sbom || oci || deb;
+    let want_staging = a.sign.is_some() || a.pass || a.sbom || oci || deb;
     let stages =
         if want_staging {
             match stage::plan(&jobs) {
@@ -576,6 +584,20 @@ fn build_cmd(
                 let d = cigscript::diagnostics::usage(why)
                     .code("E1004")
                     .with_hint("fix the signer and build again; nothing at --out was touched");
+                cigscript::cli::report(ctx, &d, None, None);
+                stage::discard(&stages);
+            }
+            return Err(code);
+        }
+    }
+    if a.pass {
+        let triple = runtime::triple_of(target, &rt);
+        if let Err(code) = pass_built(ctx, &built, &triple, a.sbom, &written_at) {
+            if want_staging {
+                let why = stage::why_nothing_was_written(&stages);
+                let d = cigscript::diagnostics::usage(why).code("E1004").with_hint(
+                    "fix what the message names and build again; nothing at --out was touched",
+                );
                 cigscript::cli::report(ctx, &d, None, None);
                 stage::discard(&stages);
             }
@@ -635,6 +657,19 @@ fn build_cmd(
         for (b, r) in built.iter().zip(replaced.iter()) {
             if *r {
                 drop_stale_signatures(ctx, &b.job.out);
+            }
+        }
+    }
+    // The same for a program pass: one that named the program from before
+    // goes with it.
+    if !a.pass {
+        for (b, r) in built.iter().zip(replaced.iter()) {
+            let stale = pass::path_for(&b.job.out);
+            if *r && stale.is_file() && std::fs::remove_file(&stale).is_ok() && !ctx.json {
+                println!(
+                    "  removed {}: it named the program from before",
+                    stale.display()
+                );
             }
         }
     }
@@ -834,6 +869,48 @@ fn sign_built(
                     sign::NAMESPACE
                 );
             }
+        }
+    }
+    Ok(())
+}
+
+/// `build --pass`: a program pass beside each program written (a staging
+/// path when staging), naming it by sha256, for the triple the program
+/// really is (cig-script#186).
+fn pass_built(
+    ctx: &Ctx,
+    built: &[build::Built],
+    triple: &str,
+    sbom: bool,
+    written_at: &[std::path::PathBuf],
+) -> Result<(), i32> {
+    for (b, at) in built.iter().zip(written_at.iter()) {
+        let sbom_at = sbom.then(|| sbom::path_for(at));
+        let id = match pass::write(at, triple, sbom_at.as_deref()) {
+            Ok(id) => id,
+            Err(e) => {
+                let d = cigscript::diagnostics::usage(format!(
+                    "cannot make a program pass for {}: {e}",
+                    b.job.out.display()
+                ))
+                .code("E1004")
+                .with_hint("cig doctor says where this machine's tin key is kept, and why it cannot be read");
+                cigscript::cli::report(ctx, &d, None, None);
+                return Err(build::exit::USAGE);
+            }
+        };
+        let to = pass::path_for(&b.job.out);
+        if ctx.json {
+            println!(
+                "{}",
+                serde_json::json!({"passed": b.job.out.to_string_lossy(), "pass": to.to_string_lossy(), "kind": pass::KIND, "id": id})
+            );
+        } else {
+            println!(
+                "  pass {} (a program pass from this machine, id {})",
+                to.display(),
+                &id[..12]
+            );
         }
     }
     Ok(())

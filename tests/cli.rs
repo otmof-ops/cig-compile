@@ -2157,3 +2157,97 @@ fn remarks_say_a_pass_changed_the_ir_without_remarks_of_its_own() {
     );
     assert!(quiet.contains("copy-prop: nothing to do"), "{quiet}");
 }
+
+/// `build --pass` writes a program pass from this machine's tin beside the
+/// program; `verify --pass` holds it to that program, says who made it,
+/// and trusts another machine's only through allowed signers. Checking
+/// makes no key on a machine that has none, and a build without `--pass`
+/// that replaces the program takes the old pass away (cig-script#186).
+#[test]
+fn a_program_pass_names_who_built_the_program() {
+    let s = Sandbox::new();
+    s.write("hi.cig", "exhale \"hi\"\n");
+    let out = ok(&s.cc(&["build", "hi.cig", "--pass"]));
+    let pass = s.path().join(format!("{}.pass", exe_name("hi")));
+    assert!(out.contains("a program pass from this machine"), "{out}");
+    assert!(
+        fs::read_to_string(&pass).unwrap().starts_with("cigpass1."),
+        "{}",
+        pass.display()
+    );
+    let pass_arg = pass.to_str().unwrap().to_string();
+    let good = ok(&s.cc(&[
+        "verify",
+        &exe_name("hi"),
+        "--runtime",
+        RT,
+        "--pass",
+        &pass_arg,
+    ]));
+    assert!(good.contains("made by this machine"), "{good}");
+
+    // Another program: its sha256 is not the one the pass names.
+    s.write("other.cig", "exhale \"other\"\n");
+    ok(&s.cc(&["build", "other.cig"]));
+    let o = s.cc(&[
+        "verify",
+        &exe_name("other"),
+        "--runtime",
+        RT,
+        "--pass",
+        &pass_arg,
+    ]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o.stdout));
+    assert!(
+        text(&o.stdout).contains("another program"),
+        "{}",
+        text(&o.stdout)
+    );
+
+    // Another machine with no key of its own: not trusted until its
+    // allowed signers name this machine for programs, and no key is made.
+    let there = Sandbox::new();
+    let prog = s.exe("hi");
+    let prog_arg = prog.to_str().unwrap().to_string();
+    let o = there.cc(&["verify", &prog_arg, "--runtime", RT, "--pass", &pass_arg]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o.stdout));
+    assert!(
+        text(&o.stdout).contains("cig pass key --kinds program"),
+        "{}",
+        text(&o.stdout)
+    );
+    let line = text(&s.cig(&["pass", "key", "--kinds", "program"]).stdout)
+        .lines()
+        .find(|l| l.contains("ssh-ed25519") && l.contains("cigpass-program"))
+        .unwrap_or_else(|| panic!("no allowed-signers line"))
+        .trim()
+        .to_string();
+    let allowed = there.path().join("allowed");
+    fs::write(&allowed, format!("{line}\n")).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&allowed, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let trusted = ok(&there.cc(&[
+        "verify",
+        &prog_arg,
+        "--runtime",
+        RT,
+        "--pass",
+        &pass_arg,
+        "--allowed-signers",
+        allowed.to_str().unwrap(),
+    ]));
+    assert!(trusted.contains("pass     ok"), "{trusted}");
+    assert!(
+        !there.path().join(".cigscript-keys").exists(),
+        "checking a pass made a key on the other machine"
+    );
+
+    // A build without --pass that replaces the program takes the pass away.
+    s.write("hi.cig", "exhale \"hi again\"\n");
+    let out = ok(&s.cc(&["build", "hi.cig"]));
+    assert!(out.contains("it named the program from before"), "{out}");
+    assert!(!pass.exists());
+}

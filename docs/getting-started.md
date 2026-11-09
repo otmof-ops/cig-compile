@@ -11,7 +11,7 @@ can paste along; set it to a release that exists on the
 [releases page](https://github.com/otmof-ops/cig-compile/releases):
 
 ```sh
-v=v0.2.0                                                 # the release to install
+v=v0.3.0                                                 # the release to install
 asset=linux-x86_64                                       # or linux-aarch64, linux-arm,
                                                          # macos-aarch64, macos-x86_64,
                                                          # freebsd-x86_64
@@ -31,7 +31,8 @@ On Windows the asset is `cigcompile-$v-windows-x86_64.exe` or
 cigcompile needs nothing else installed. A build for this machine uses the
 `cig` of the pinned version when it's here, and fetches cig's release the
 first time it isn't. On Windows and macOS an SSH client is only needed for
-`--sign` and `verify --signature`.
+`--sign` and `verify --signature`; `--pass` and `verify --pass` need
+nothing.
 
 ## 2. Build your first program
 
@@ -47,10 +48,10 @@ cigcompile build hello.cig
 The first build on a machine prints the fetch, once:
 
 ```
-fetching cig-v1.18.0-linux-x86_64 from otmof-ops/cig-script (sha256 10077bd729b5...)
-kept /home/you/.cigscript/cigcompile/runtimes/1.18.0/linux-x86_64/cig (sha256 matches the pin)
-compiled hello.cig -> hello (11.4 MB, cig 1.18.0 for x86_64-unknown-linux-musl)
-  sha256 5fb41aa50ff1993b5c8472fb8b12687ad6cf0afec2324e046678e38b1462401f
+fetching cig-v1.20.0-linux-x86_64 from otmof-ops/cig-script (sha256 4649fda09236...)
+kept /home/you/.cigscript/cigcompile/runtimes/1.20.0/linux-x86_64/cig (sha256 matches the pin)
+compiled hello.cig -> hello (13.0 MB, cig 1.20.0 for x86_64-unknown-linux-musl)
+  sha256 1e05c279d4a35f7c0398c5619450b86903d9836e65eb29c0aa33eb3d38f13e4b
 ```
 
 A second `cigcompile build` with nothing changed reads neither the
@@ -58,8 +59,8 @@ runtime nor the program, writes nothing, and takes about a
 millisecond:
 
 ```
-up to date: hello (11.4 MB)
-  sha256 5fb41aa50ff1993b5c8472fb8b12687ad6cf0afec2324e046678e38b1462401f
+up to date: hello (13.0 MB)
+  sha256 1e05c279d4a35f7c0398c5619450b86903d9836e65eb29c0aa33eb3d38f13e4b
 ```
 
 That's the build index at work; see [how it works](how-it-works.md).
@@ -83,8 +84,8 @@ program (`--dry-run`, `--no-rollback`, `--unburn`, and so on), and
 ```
 hello  a CigScript program
   compiled from  hello.cig  (sha256 de4c85156932095faef8c6bb02e3d49759b4f41f0a6bb71f41d94396ebcb49e8)
-  compiled by    cigcompile 0.2.0
-  runs on        cig 1.18.0 (this binary)
+  compiled by    cigcompile 0.3.0
+  runs on        cig 1.20.0 (this binary)
 ```
 
 ## 4. Check the program does what the script does
@@ -97,8 +98,8 @@ build didn't go wrong in between:
 
 ```
 $ cigcompile test hello.cig
-up to date: hello (11.4 MB)
-  sha256 5fb41aa50ff1993b5c8472fb8b12687ad6cf0afec2324e046678e38b1462401f
+up to date: hello (13.0 MB)
+  sha256 1e05c279d4a35f7c0398c5619450b86903d9836e65eb29c0aa33eb3d38f13e4b
 same     hello.cig (dry run: the same plan, output and exit)
 ```
 
@@ -113,7 +114,7 @@ machine. `cigcompile targets` lists them:
 
 ```
 $ cigcompile targets
-x86_64-unknown-linux-musl        linux-x86_64     stage A  run on its own runner                        this machine; runtime /home/you/.local/bin/cig
+x86_64-unknown-linux-musl        linux-x86_64     stage A  run on its own runner                        this machine; runtime /home/you/.cigscript/cigcompile/runtimes/1.20.0/linux-x86_64/cig
 aarch64-unknown-linux-musl       linux-aarch64    stage A  run on its own runner
 armv7-unknown-linux-musleabihf   linux-arm        stage A  built, not run
 aarch64-apple-darwin             macos-aarch64    stage A  run on its own runner  no box (E777, E763)
@@ -129,10 +130,10 @@ there lacks (the box is Linux's). To build a hello for Apple Silicon:
 
 ```
 $ cigcompile build hello.cig -o bin-mac/hello --target aarch64-apple-darwin
-fetching cig-v1.18.0-macos-aarch64 from otmof-ops/cig-script (sha256 e00872a534f7...)
-kept /home/you/.cigscript/cigcompile/runtimes/1.18.0/macos-aarch64/cig (sha256 matches the pin)
-compiled hello.cig -> bin-mac/hello (6.9 MB, cig 1.18.0 for aarch64-apple-darwin)
-  sha256 e27d1ba3ba281bb5ccd4c25340b496ecee8e3972e83f573989ad2a558741548b
+fetching cig-v1.20.0-macos-aarch64 from otmof-ops/cig-script (sha256 ec803067ef2d...)
+kept /home/you/.cigscript/cigcompile/runtimes/1.20.0/macos-aarch64/cig (sha256 matches the pin)
+compiled hello.cig -> bin-mac/hello (8.2 MB, cig 1.20.0 for aarch64-apple-darwin)
+  sha256 240a4ad886cfd3be8f6962210edcca353581873c5a2ab9a83f492da0db4308a7
 ```
 
 The runtime for another machine is cig's own release asset for it, of
@@ -154,8 +155,8 @@ against the bytes a build of those parts writes.
 ```
 $ cigcompile verify hello --script hello.cig
 hello
-  runtime  ok        cig's release asset cig-v1.18.0-linux-x86_64 (sha256 10077bd729b5d59c)
-  payload  ok        hello.cig (1 lines, sha256 de4c85156932095f), built by cigcompile 0.2.0 for cig 1.18.0
+  runtime  ok        cig's release asset cig-v1.20.0-linux-x86_64 (sha256 4649fda09236ada8)
+  payload  ok        hello.cig (1 lines, sha256 de4c85156932095f), built by cigcompile 0.3.0 for cig 1.20.0
   script   ok        hello.cig is the script it was built from
   whole    ok        byte for byte what a build of these parts writes
 ```

@@ -250,7 +250,7 @@ first 1.6 ms is spawning the process, the rest is cig starting and
 the script's one line of work. The budget tracked in [#14](https://github.com/otmof-ops/cig-compile/issues/14) is 5 ms at
 stage A, 3 ms at stage C and 2 ms at stage D.
 
-The size today is cig's: about 11 MB on Linux, 7 MB on macOS, with
+The size today is cig's: about 13 MB on Linux, 8 MB on macOS, with
 the payload a few hundred bytes. Stage B and the crate split ([#1](https://github.com/otmof-ops/cig-compile/issues/1))
 are what take size and start-up down together; see the
 [roadmap](roadmap.md).

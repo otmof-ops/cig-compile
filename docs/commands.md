@@ -4,7 +4,7 @@
 cigcompile build [path] [-o out] [--target T] [--runtime cig] [--check]
                  [--emit cir|cir-opt|oci|deb] [-O 0|1|2] [--passes a,b,...] [--passes-diff]
                  [--remarks] [--timings[=FILE]] [--json-progress] [--sbom]
-                 [--sign <key>] [--watch]
+                 [--sign <key>] [--pass] [--watch]
                  [--pkg-version V] [--pkg-maintainer "Name <email>"] [--pkg-description TEXT]
 cigcompile test [path] ...    # same build flags; then runs the plan both sides and compares
 cigcompile clean [path] [-o out] [--target T] [--force]
@@ -14,6 +14,7 @@ cigcompile bench [script] [--set DIR] [--runs N] [--ref] [--markdown] [--runtime
 cigcompile audit <program>
 cigcompile verify <program> [--script s.cig] [--runtime cig]
                             [--signature <sig>] [--allowed-signers <file>] [--identity <id>]
+                            [--pass <program>.pass]
 cigcompile reduce <script> [-o out] [--runtime cig] [-- command...]
 cigcompile package --brew|--scoop [--manifest FILE]
                    [--name N --version V --homepage URL --license SPDX --description TEXT]
@@ -63,6 +64,7 @@ Flags:
 | `--json-progress` | one JSON object a line on stderr (`start`, `script`, `phase`, `built`, `done`), for an editor or a window |
 | `--sbom` | a CycloneDX 1.5 file beside each program, `<program>.cdx.json`, naming its runtime and script by sha256, with no time and no build path in it |
 | `--sign <key>` | a detached SSH signature beside each program (and the SBOM, with `--sbom`); see [shipping](shipping.md) |
+| `--pass` | a program pass beside each program, `<program>.pass`: a sealed pass from this machine's tin naming the program by sha256, its script, its cig, what built it and its target (and the SBOM's sha256, with `--sbom`); see [shipping](shipping.md#program-passes---pass) |
 | `--watch` | build, then build again on every save, until Ctrl-C |
 | `--pkg-version V` | with `--emit deb`, the control file's Version (default `0.0.0`) |
 | `--pkg-maintainer "Name <email>"` | with `--emit deb`, the control file's Maintainer (default `cigcompile <nobody@localhost>`) |
@@ -77,7 +79,7 @@ Where programs go, and how a build decides:
   `<folder>/bin/<triple>/`. `-o DIR` renames the `bin` folder.
 - Every write is to a temporary file beside the output and renamed over
   it. A build that stops halfway leaves the old program there, or none.
-- A build with `--sign`, `--sbom`, `--emit oci` or `--emit deb` writes
+- A build with `--sign`, `--pass`, `--sbom`, `--emit oci` or `--emit deb` writes
   every output to a staging folder beside `--out` first and moves them
   into place only when every step has succeeded: see [shipping a
   program](shipping.md#all-or-nothing-staging).
@@ -208,6 +210,13 @@ The parts:
   is checked (`-Y check-novalidate`) and the part is reported
   `unchecked`. With one, the signer must be in the file; `--identity
   <id>` names which signer (the default is `*`).
+- **pass** — with `--pass <file>`, a program pass (as `build --pass`
+  writes it): it holds here (this machine made it, or a signer trusted
+  here for programs did) and it names this program by sha256. Who is
+  trusted is `--allowed-signers` when given (a line's namespaces must
+  name `cigpass-program`), else cig's own allowed signers; either file
+  must be yours, a regular file and closed to others' writes, or it
+  trusts nobody. Checking a pass makes no key on a machine that has none.
 - **whole** — the whole file against the bytes a build of those parts
   writes.
 
@@ -333,6 +342,7 @@ Beside each program:
 | `<program>.cdx.json` | `--sbom`: the CycloneDX 1.5 SBOM |
 | `<program>.sig` | `--sign`: the detached SSH signature |
 | `<program>.cdx.json.sig` | `--sbom --sign`: the SBOM's signature |
+| `<program>.pass` | `--pass`: the program pass |
 | `<program>.oci.tar` | `--emit oci`: the OCI image |
 | `<name>_<version>_<arch>.deb` | `--emit deb`: the Debian package |
 

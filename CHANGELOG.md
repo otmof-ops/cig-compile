@@ -3,8 +3,29 @@
 All notable changes to CigCompile. The format follows Keep a Changelog; the
 project follows semantic versioning.
 
-## Unreleased
+## 0.3.0 — 2026-11-09
 
+Programs for cig 1.20.0; program passes; a signed build that writes
+everything or nothing; ten more benchmarks; and guides, a logo and
+diagrams that put CigCompile beside the rest of the cig family.
+
+- **Programs for cig 1.20.0.** The pinned runtime is cig 1.20.0's release,
+  with cig 1.19.0's under it: passes (checked once, trusted while what
+  they read holds), the tin hidden from boxed hops, a seal key that
+  rotates and wipes itself, a keys folder that is private and checked
+  (`E721`), a run history that stays quick as it grows, and `cig runs
+  --verify` reading every journal (cig-script's notes for 1.19.0 and
+  1.20.0 say it all).
+- **Program passes** (cig-script#186). `build --pass` writes
+  `<program>.pass` beside each program: a sealed pass from this
+  machine's tin naming the program by sha256, its script, its cig, what
+  built it and its target, and the SBOM's sha256 with `--sbom`. `verify
+  --pass` holds it to the program and says who made it; another machine
+  trusts it through its allowed signers (`cig pass key --kinds program`
+  prints the line), and checking makes no key on a machine without one.
+  It goes through the same all-or-nothing staging as `--sign`, and a
+  build without `--pass` that replaces the program takes the old pass
+  away.
 - **`build --sign` is all-or-nothing** (#66). A build with `--sign`
   checks the signer up front (`ssh-keygen` on this machine, the key file
   readable, E1004 before anything is written) and writes each output
@@ -18,7 +39,6 @@ project follows semantic versioning.
   A program and its signature always match: a build that does not sign
   and replaces a program takes away the `.sig` (and the SBOM's) beside
   it, which signed the program from before.
-
 - **Ten more benchmarks for #30.** `regex-ish`, `json-deep`, `strbuild`,
   `richards`, `deltablue`, `burn-mixed`, `orchestrate` and `startup-0`,
   `startup-1`, `startup-10` join the set, each with its `.expect` output
@@ -30,6 +50,12 @@ project follows semantic versioning.
   `.expect5x`: the harness runs them at 1x and 5x and reports `compute
   ms`, the slope between the medians, apart from start-up. No new CI
   jobs, no schedules.
+- **Guides and the family's look** (#70). A logo, a social preview, a
+  diagram of a build's stages and a terminal of a real session, drawn in
+  the cig family's colours; a README in the shape of cig-orchestrator's;
+  and the guides it points to: getting started, every command, shipping
+  a program, how it works, troubleshooting by error code, and the
+  roadmap. Every output shown is a real run's.
 
 ## 0.2.0 — 2026-11-08
 
