@@ -2070,6 +2070,12 @@ fn outputs_appear_together() {
         eprintln!("ssh-keygen is not on this machine: skipping");
         return;
     }
+    if !cfg!(target_os = "linux") {
+        // An OCI image is of a Linux program (`--emit oci` is refused
+        // elsewhere), and this machine's runtime is the one at hand.
+        eprintln!("--emit oci is Linux's: skipping");
+        return;
+    }
     let s = Sandbox::new();
     s.write("hi.cig", "exhale 1\n");
     let key = s.path().join("k");
@@ -2089,8 +2095,6 @@ fn outputs_appear_together() {
         "--sbom",
         "--emit",
         "oci",
-        "--target",
-        "x86_64-unknown-linux-musl",
     ];
     ok(&s.cc(&args_oci));
     let sig = out_path.with_file_name(format!("{}.sig", exe_name("hi")));
@@ -2116,8 +2120,6 @@ fn outputs_appear_together() {
         "--sbom",
         "--emit",
         "oci",
-        "--target",
-        "x86_64-unknown-linux-musl",
     ];
     let r = s.cc(&args_fail);
     assert_eq!(r.status.code(), Some(3), "{}", text(&r.stderr));
