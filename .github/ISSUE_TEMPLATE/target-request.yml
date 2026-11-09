@@ -1,0 +1,55 @@
+name: A machine or an output a program should support
+description: A target triple cigcompile should build for, or a package format a program should ship as.
+title: "target: "
+labels: ["target", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        cigcompile builds for every machine cig is released for, and writes OCI images,
+        `.deb` packages, Homebrew formulas and Scoop manifests today. If a target or an
+        output is missing, this is where to ask.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What's missing
+      options:
+        - A machine (a new target triple)
+        - A package format (a way to install or ship a program)
+        - A container or image format
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: The target or the format
+      placeholder: "wasm32-wasi, riscv64-linux-gnu, Android aarch64, Flatpak, MSIX, Nix..."
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What you'd use it for
+      description: The project, where the program would run or be installed, what already ships for it today.
+    validations:
+      required: true
+  - type: textarea
+    id: shape
+    attributes:
+      label: What the output would look like
+      description: For a target, the triple and whether cig is released for it (`cigcompile targets`). For a format, the file name or the command a user runs to install.
+      placeholder: "cigcompile build tool.cig --target wasm32-wasi -> tool.wasm; wasmtime tool.wasm."
+  - type: input
+    id: docs
+    attributes:
+      label: Its documentation, or an upstream spec
+      placeholder: https://...
+  - type: dropdown
+    id: try
+    attributes:
+      label: Can you try a build before it lands?
+      options:
+        - Yes, on real hardware or an installed runtime
+        - Yes, on a small example
+        - Not right now

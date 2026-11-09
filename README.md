@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://github.com/otmof-ops/cig-script"><img alt="a CigScript tool" src="https://img.shields.io/badge/a-CigScript%20tool-f97316"></a>
   <a href="https://github.com/otmof-ops/cig-compile/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/otmof-ops/cig-compile?color=f97316&label=release"></a>
-  <a href="docs/commands.md#targets"><img alt="9 machines" src="https://img.shields.io/badge/machines-9-6b7280"></a>
+  <a href="docs/commands.md#cigcompile-targets"><img alt="9 machines" src="https://img.shields.io/badge/machines-9-6b7280"></a>
   <a href="docs/roadmap.md"><img alt="stage A shipped" src="https://img.shields.io/badge/stage-A%20shipped-6b7280"></a>
   <a href="LICENSE"><img alt="license Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-6b7280"></a>
   <img alt="installs needed: 0" src="https://img.shields.io/badge/installs%20needed-0-2ea44f">
@@ -43,7 +43,7 @@ cigcompile build tidy-downloads.cig --target universal2-apple-darwin   # one pro
 cigcompile verify tidy-downloads             # each part is what a build writes
 ```
 
-[Getting started](docs/getting-started.md) walks through it in five
+[Getting started](docs/getting-started.md) walks through it in ten
 minutes, install included.
 
 ## See it run

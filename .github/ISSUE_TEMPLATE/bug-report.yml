@@ -1,0 +1,56 @@
+name: Something went wrong
+description: cigcompile did the wrong thing, said the wrong thing, or stopped when it shouldn't have.
+title: "bug: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Nobody's on trial. Four things make a report easy to fix; the rest is optional.
+        Take anything secret out of what you paste.
+  - type: textarea
+    id: script
+    attributes:
+      label: The script
+      description: The .cig file, or the smallest one that still shows the problem. `cigcompile reduce <script>` cuts a differing script down for you.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: The command you ran
+      placeholder: cigcompile build tools/tidy.cig --target aarch64-apple-darwin
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: What it printed
+      description: Everything, including any error code (E1001 and so on). Paste, don't summarize.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions and platform
+      description: "`cigcompile --version`, `cig --version`, and your operating system."
+      placeholder: cigcompile 0.2.0 (makes programs for cig 1.18.0), cig 1.18.0, Linux x86_64
+    validations:
+      required: true
+  - type: textarea
+    id: verify
+    attributes:
+      label: cigcompile verify, if the problem is with a built program
+      description: "`cigcompile verify <program> --script <script>` runs nothing and says which part differs."
+      render: text
+  - type: markdown
+    attributes:
+      value: "What you get back: a fix, and a test that keeps it fixed."

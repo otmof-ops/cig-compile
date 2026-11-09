@@ -1,0 +1,35 @@
+name: Ask for guidance
+description: Compiling a CigScript project to programs and stuck, or not sure where to start. A person answers.
+title: "guidance: "
+labels: ["guidance", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ask anything, however small. Every guidance request gets a direct answer, here,
+        with steps for your project.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What you're trying to do
+    validations:
+      required: true
+  - type: textarea
+    id: project
+    attributes:
+      label: Your project
+      description: Where the .cig scripts live, where the programs should land, the machines they need to run on, and how you ship them today.
+      placeholder: One .cig per tool in tools/, built for Linux x86_64 and macOS; shipped as a GitHub release and a Homebrew tap.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you've tried, and what happened
+      description: Commands and what they printed.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: cigcompile 0.2.0, cig 1.18.0, Linux x86_64
