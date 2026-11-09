@@ -3,6 +3,20 @@
 All notable changes to CigCompile. The format follows Keep a Changelog; the
 project follows semantic versioning.
 
+## Unreleased
+
+- **Ten more benchmarks for #30.** `regex-ish`, `json-deep`, `strbuild`,
+  `richards`, `deltablue`, `burn-mixed`, `orchestrate` and `startup-0`,
+  `startup-1`, `startup-10` join the set, each with its `.expect` output
+  and, where a language can say the same, Python, Node and Rust
+  references that print the same bytes. `orchestrate` is
+  cig-orchestrator's own 12.5k-line `orchestrate.cig` (the differential
+  suite's copy) run with `help`, and a benchmark can now take
+  arguments. The six that take a size read `args[0]` and ship a
+  `.expect5x`: the harness runs them at 1x and 5x and reports `compute
+  ms`, the slope between the medians, apart from start-up. No new CI
+  jobs, no schedules.
+
 ## 0.2.0 — 2026-11-08
 
 Programs for cig 1.18.0, checked, signed and read back for their
