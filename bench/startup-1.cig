@@ -1,0 +1,3 @@
+# Startup with one stdlib module touched.
+stick _ = math.abs(-1)
+exhale "hello"

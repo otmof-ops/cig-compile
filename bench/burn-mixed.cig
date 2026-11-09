@@ -1,0 +1,18 @@
+# Burn-mixed: many small burns of five writes each (200 at 5x); burn entry and
+# exit, not just ops. No hops: a hop is a process start, timed by other sets.
+pack { "./scratch" }
+stick scale = int(args.get(0, "1"))
+stick rounds = 40 * scale
+roll written = 0
+for r in 0..rounds {
+  burn {
+    stick base = "scratch/b${r % 5}"
+    fs.write_text("${base}-a.txt", "a${r}")
+    fs.write_text("${base}-b.txt", "b${r}")
+    fs.write_text("${base}-c.txt", "c${r}")
+    fs.write_text("${base}-d.txt", "d${r}")
+    fs.write_text("${base}-e.txt", "e${r}")
+  }
+  written += 5
+}
+exhale written

@@ -1,0 +1,15 @@
+const path = require("path");
+const crypto = require("crypto");
+const os = require("os");
+const url = require("url");
+const _1 = Math.abs(-1);
+const _2 = String(1);
+const _3 = JSON.stringify({a: 1});
+const _4 = "a b".split(" ");
+const _5 = path.basename("/x/y");
+const _6 = Date.now();
+const _7 = crypto.createHash("sha256").update("x").digest("hex").slice(0, 8);
+const _8 = process.version;
+const _9 = process.env.PATH ?? "";
+const _10 = [].length;
+console.log("hello");

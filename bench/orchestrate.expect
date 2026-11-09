@@ -1,0 +1,59 @@
+cig-orchestrator 1.14.0: every language in the project, one chain, no glue script.
+
+  cigo adopt [--write] [--force] [--depth=N]
+                              find every language, task runner and script folder here;
+                              propose cig-tasks.json
+  cigo list [--all]           components, stage groups and tasks
+  cigo run <task>... [--only] [--force] [--strict] [--box|--no-box] [--versions=ask|always|never|off] [-- <args for the last task named>]
+                              `cigo run test` tests every language, `cigo run ci` does
+                              format-check, lint, check, build and test everywhere
+  cigo plan [<task>...] [--only]
+                              the order a run would take
+  cigo show <task>            where a task comes from and everything it will do
+  cigo audit [<task>...] [--json|--sarif|--markdown] [--offline]
+                              what the guard reads before a task runs: install hooks, findings, and
+                              the lockfiles' packages against OSV (name@version alone is sent)
+  cigo audit --update-db [<ecosystem>...]
+                              build the offline OSV database (npm, PyPI, crates.io, Go, RubyGems, Packagist, Maven, NuGet)
+  cigo rehearse <npm:name[@version]|pypi:name[==version]|crates:name[@version]|./script.sh> [--json] [--keep]
+                              install it in cig's contained box (Linux) and say what it did beyond its footprint
+  cigo rehearse --changed [--base=<rev>] [--list] [--max=N] [--fresh] [--json|--sarif|--markdown]
+                              every package the lockfiles add or change since the default branch, rehearsed
+  cigo blacklist [list | add <thing> [--reason=...] [--expires=90d] | remove <entry> | why <thing> | reload]
+  cigo quarantine [list | show <sha256> | clear [--all]]   what run-url downloaded, kept to read again
+                              your own blacklist: packages, files, domains, ranges and URLs the guard refuses
+  cigo guard [setup | scope <1-5> [--yes] | pause [30m] | off | on | allow <program> | log | uninstall [--yes]]
+                              how much of this machine the guard covers: level 2 puts every package
+                              manager behind it (npm install, pip install, cargo build, npx...) anywhere
+  cigo undo last              undo the newest guarded call (cig unburn)
+  cigo agent [run -- <command> | log | undo --session=<id>|--since=2h [--yes]]
+                              what your AI agents run: boxed, read first, a person approves the risky ones
+  cigo approve <id>           approve one agent command rated high (outside the agent's session)
+  cigo run-url <url> [--trust] [-- <args>]
+                              the safe way to curl | sh: downloaded, read, rehearsed in the box, then run
+  cigo trust [<task>|list|show <task>|revoke <task>|revoke --all]
+                              approve a task as it is now (signed with the tin's key), or see and drop approvals
+  cigo check [--strict]       the manifest, checked before anything runs
+  cigo doctor [--strict]      each toolchain: installed, which version, against the project's pins
+  cigo versions [switch|keep|install [--yes]]
+                              each language's pin against this machine, and whether tasks run on
+                              the pinned version through mise, asdf, rustup, uv, fnm... (never your default)
+  cigo outputs [<task>...]    what the last run's tasks handed on
+  cigo toolchains [<name>] [--markdown]
+                              the toolchains this knows
+  cigo version [--json]       this cigo and the cig it runs on
+  cigo update [--check] [--to=X.Y.Z]
+                              install the newest release, checksum and attestation verified
+  cigo crash [list|show|send|delete <id>]
+                              cigo's own crash reports; sent through cig's ashtray when cig's `reports` setting says so
+  cigo report <run> [--send]  a run's bundle (cig's report, the manifest's shape) for an issue; --send files it through cig
+  cigo config [<key> [<value>|--unset]]
+                              every setting through its layers (cigo config explain <key>)
+
+Every command that opens a project says where versions disagree: the installed cig against
+the project's pins (.cig-version, the manifest's `cig`, a script's `# cig` header) and each
+toolchain against its pins (.nvmrc, go.mod...). `--strict` on check and run stops on one; `cigo versions`
+runs tasks on the pinned versions through a version manager already here, per task, never your default.
+Stages: setup, format, format-check, lint, check, build, test, package, run, clean.
+cig's own flags go before the command: `cigo --dry-run run ci`, `cigo --no-rollback run build`.
+Afterwards: `cig runs` lists every run, `cig unburn <run>` undoes one.

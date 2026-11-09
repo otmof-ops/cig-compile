@@ -26,10 +26,17 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// A benchmark: its script, what it must print, and what it stresses.
+/// `expect5x` is the output at scale 5 (`args[0] = "5"`); when it is `Some`
+/// the harness times a second pass at that size, and the slope between the
+/// two is reported as compute time, apart from start-up. `args` are what
+/// the script is given (after `--` for `cig run`, as the program's own
+/// arguments when compiled).
 pub struct Bench {
     pub name: &'static str,
     pub source: &'static str,
     pub expect: &'static str,
+    pub expect5x: Option<&'static str>,
+    pub args: &'static [&'static str],
     pub stresses: &'static str,
 }
 
@@ -39,13 +46,37 @@ macro_rules! bench {
             name: $name,
             source: include_str!(concat!("../bench/", $name, ".cig")),
             expect: include_str!(concat!("../bench/", $name, ".expect")),
+            expect5x: None,
+            args: &[],
+            stresses: $stresses,
+        }
+    };
+    ($name:literal, $stresses:literal, from $path:literal, args $args:expr) => {
+        Bench {
+            name: $name,
+            source: include_str!($path),
+            expect: include_str!(concat!("../bench/", $name, ".expect")),
+            expect5x: None,
+            args: $args,
+            stresses: $stresses,
+        }
+    };
+    ($name:literal, $stresses:literal, scaled) => {
+        Bench {
+            name: $name,
+            source: include_str!(concat!("../bench/", $name, ".cig")),
+            expect: include_str!(concat!("../bench/", $name, ".expect")),
+            expect5x: Some(include_str!(concat!("../bench/", $name, ".expect5x"))),
+            args: &[],
             stresses: $stresses,
         }
     };
 }
 
 /// The set: what #2 names (file walking, CSV, JSON, string building, a tight
-/// numeric loop, a big burn), and the classic benchmarks #30 adds.
+/// numeric loop, a big burn), and the classic benchmarks #30 adds. A `scaled`
+/// benchmark reads `args[0]` as a size and is run at 1x and 5x, so the
+/// compute slope is reported apart from the fixed start-up.
 pub const SET: &[Bench] = &[
     bench!("hello", "start-up"),
     bench!("loop", "integer arithmetic in a counted loop"),
@@ -66,6 +97,29 @@ pub const SET: &[Bench] = &[
     bench!("dispatch", "lambdas kept in a map, called by key"),
     bench!("sieve", "a 300k-element list of booleans"),
     bench!("words", "split, map counting, string compare"),
+    bench!("regex-ish", "string find, replace and split", scaled),
+    bench!(
+        "json-deep",
+        "a six-level nested document, parse and walk",
+        scaled
+    ),
+    bench!("strbuild", "s += piece, the quadratic trap", scaled),
+    bench!("richards", "a priority scheduler of tasks", scaled),
+    bench!("deltablue", "a constraint chain, method-heavy", scaled),
+    bench!(
+        "burn-mixed",
+        "200 small burns of five writes each at 5x",
+        scaled
+    ),
+    bench!(
+        "orchestrate",
+        "cig-orchestrator's own 12.5k-line orchestrate.cig: help",
+        from "../tests/corpus/cig-orchestrator/orchestrate.cig",
+        args &["help"]
+    ),
+    bench!("startup-0", "start-up, no stdlib module touched"),
+    bench!("startup-1", "start-up, one stdlib module"),
+    bench!("startup-10", "start-up, ten stdlib modules"),
 ];
 
 /// The reference versions (`--ref`): language, file extension, source.
@@ -100,6 +154,32 @@ const REFS: &[(&str, &str, &str)] = &[
     ("sieve", "rs", include_str!("../bench/ref/sieve.rs")),
     ("words", "py", include_str!("../bench/ref/words.py")),
     ("words", "js", include_str!("../bench/ref/words.js")),
+    ("regex-ish", "py", include_str!("../bench/ref/regex-ish.py")),
+    ("regex-ish", "js", include_str!("../bench/ref/regex-ish.js")),
+    ("json-deep", "py", include_str!("../bench/ref/json-deep.py")),
+    ("json-deep", "js", include_str!("../bench/ref/json-deep.js")),
+    ("strbuild", "py", include_str!("../bench/ref/strbuild.py")),
+    ("strbuild", "js", include_str!("../bench/ref/strbuild.js")),
+    ("strbuild", "rs", include_str!("../bench/ref/strbuild.rs")),
+    ("richards", "py", include_str!("../bench/ref/richards.py")),
+    ("richards", "js", include_str!("../bench/ref/richards.js")),
+    ("deltablue", "py", include_str!("../bench/ref/deltablue.py")),
+    ("deltablue", "js", include_str!("../bench/ref/deltablue.js")),
+    ("startup-0", "py", include_str!("../bench/ref/startup-0.py")),
+    ("startup-0", "js", include_str!("../bench/ref/startup-0.js")),
+    ("startup-0", "rs", include_str!("../bench/ref/startup-0.rs")),
+    ("startup-1", "py", include_str!("../bench/ref/startup-1.py")),
+    ("startup-1", "js", include_str!("../bench/ref/startup-1.js")),
+    (
+        "startup-10",
+        "py",
+        include_str!("../bench/ref/startup-10.py"),
+    ),
+    (
+        "startup-10",
+        "js",
+        include_str!("../bench/ref/startup-10.js"),
+    ),
 ];
 
 /// The languages `--ref` runs, as their columns are headed.
@@ -194,7 +274,21 @@ struct Row {
     bytes: u64,
     interpreted: Side,
     compiled: Side,
+    /// The 5x pass, where the benchmark declared one (`expect5x`).
+    interpreted_5x: Option<Side>,
+    compiled_5x: Option<Side>,
     refs: Vec<(&'static str, Side)>,
+    refs_5x: Vec<(&'static str, Side)>,
+}
+
+/// One benchmark the harness measures: its source, its 1x expected output,
+/// and the 5x expected output when the script takes a size argument.
+struct Loaded {
+    name: String,
+    source: String,
+    expect: String,
+    expect5x: Option<String>,
+    args: Vec<String>,
 }
 
 /// The benchmarks a run measures: the set, a folder's, or one user
@@ -205,7 +299,7 @@ fn benchmarks(
     runtime: &Runtime,
     set: Option<&Path>,
     script: Option<&Path>,
-) -> Result<Vec<(String, String, String)>, String> {
+) -> Result<Vec<Loaded>, String> {
     if let Some(path) = script {
         let name = path
             .file_stem()
@@ -218,17 +312,23 @@ fn benchmarks(
             std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let expect = cig_run_output(runtime, path, &source)
             .map_err(|e| format!("{}: {e}", path.display()))?;
-        return Ok(vec![(name, source, expect)]);
+        return Ok(vec![Loaded {
+            name,
+            source,
+            expect,
+            expect5x: None,
+            args: Vec::new(),
+        }]);
     }
     let Some(dir) = set else {
         return Ok(SET
             .iter()
-            .map(|b| {
-                (
-                    b.name.to_string(),
-                    b.source.to_string(),
-                    b.expect.to_string(),
-                )
+            .map(|b| Loaded {
+                name: b.name.to_string(),
+                source: b.source.to_string(),
+                expect: b.expect.to_string(),
+                expect5x: b.expect5x.map(|s| s.to_string()),
+                args: b.args.iter().map(|a| a.to_string()).collect(),
             })
             .collect());
     };
@@ -247,7 +347,14 @@ fn benchmarks(
         let source = std::fs::read_to_string(&script).map_err(|e| format!("{name}: {e}"))?;
         let expect = std::fs::read_to_string(script.with_extension("expect"))
             .map_err(|_| format!("{name}: no {name}.expect beside it"))?;
-        out.push((name, source, expect));
+        let expect5x = std::fs::read_to_string(script.with_extension("expect5x")).ok();
+        out.push(Loaded {
+            name,
+            source,
+            expect,
+            expect5x,
+            args: Vec::new(),
+        });
     }
     Ok(out)
 }
@@ -314,7 +421,14 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
         RefTools::default()
     };
     let mut rows = Vec::new();
-    for (name, source, expect) in &set {
+    for Loaded {
+        name,
+        source,
+        expect,
+        expect5x,
+        args,
+    } in &set
+    {
         let src = root.join("src");
         std::fs::create_dir_all(&src).expect("a temp folder");
         let script = src.join(format!("{name}.cig"));
@@ -334,11 +448,17 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
             std::fs::write(work.join(format!("{name}.cig")), source).expect("the script");
             work
         };
+        // The interpreter is given the size after `--`; the compiled
+        // program takes it as `argv[1]`. Scale 1 passes nothing: a
+        // benchmark that does not take a size argument is unchanged.
         let interpreted = sample(o.runs, expect, |i| {
             let mut c = Command::new(&runtime.path);
             env(&mut c);
             c.current_dir(fresh("i", i))
                 .args(["run", &format!("{name}.cig")]);
+            if !args.is_empty() {
+                c.arg("--").args(args);
+            }
             c
         });
         let compiled = match &built {
@@ -346,26 +466,58 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
             Ok(_) => sample(o.runs, expect, |i| {
                 let mut c = Command::new(&bin);
                 env(&mut c);
-                c.current_dir(fresh("p", i));
+                c.current_dir(fresh("p", i)).args(args);
                 c
             }),
         };
-        let refs = LANGS
+        let (interpreted_5x, compiled_5x) = match expect5x.as_deref() {
+            None => (None, None),
+            Some(e5) => {
+                let five = sample(o.runs, e5, |i| {
+                    let mut c = Command::new(&runtime.path);
+                    env(&mut c);
+                    c.current_dir(fresh("i5", i))
+                        .args(["run", &format!("{name}.cig"), "--", "5"]);
+                    c
+                });
+                let fivec = match &built {
+                    Err(_) => Side::Absent("the build failed".into()),
+                    Ok(_) => sample(o.runs, e5, |i| {
+                        let mut c = Command::new(&bin);
+                        env(&mut c);
+                        c.current_dir(fresh("p5", i)).arg("5");
+                        c
+                    }),
+                };
+                (Some(five), Some(fivec))
+            }
+        };
+        let refs: Vec<(&'static str, Side)> = LANGS
             .iter()
             .filter(|_| o.refs)
-            .map(|(lang, _)| (*lang, tools.side(name, lang, o.runs, expect)))
+            .map(|(lang, _)| (*lang, tools.side(name, lang, o.runs, expect, 1)))
             .collect();
+        let refs_5x: Vec<(&'static str, Side)> = match expect5x.as_deref() {
+            Some(e5) if o.refs => LANGS
+                .iter()
+                .map(|(lang, _)| (*lang, tools.side(name, lang, o.runs, e5, 5)))
+                .collect(),
+            _ => Vec::new(),
+        };
         rows.push(Row {
             name: name.clone(),
             build_ms,
             bytes,
             interpreted,
             compiled,
+            interpreted_5x,
+            compiled_5x,
             refs,
+            refs_5x,
         });
     }
     // A rebuild of the first benchmark that changes nothing.
-    let noop_ms = set.first().map(|(name, _, _)| {
+    let noop_ms = set.first().map(|Loaded { name, .. }| {
         let mut c = Command::new(&me);
         env(&mut c);
         c.arg("build")
@@ -395,10 +547,15 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
     let wrong: Vec<&str> = rows
         .iter()
         .filter(|r| {
-            [&r.interpreted, &r.compiled]
+            let base = [&r.interpreted, &r.compiled]
                 .into_iter()
-                .chain(r.refs.iter().map(|(_, s)| s))
-                .any(|s| matches!(s, Side::Wrong(_)))
+                .chain(r.refs.iter().map(|(_, s)| s));
+            let five = r
+                .interpreted_5x
+                .iter()
+                .chain(r.compiled_5x.iter())
+                .chain(r.refs_5x.iter().map(|(_, s)| s));
+            base.chain(five).any(|s| matches!(s, Side::Wrong(_)))
                 || matches!(r.compiled, Side::Absent(_))
         })
         .map(|r| r.name.as_str())
@@ -416,6 +573,12 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
         for (what, s) in [("interpreted", &r.interpreted), ("compiled", &r.compiled)]
             .into_iter()
             .chain(r.refs.iter().map(|(l, s)| (*l, s)))
+            .chain(
+                r.interpreted_5x
+                    .iter()
+                    .map(|s| ("interpreted (5x)", s))
+                    .chain(r.compiled_5x.iter().map(|s| ("compiled (5x)", s))),
+            )
         {
             if let Side::Wrong(why) = s {
                 eprintln!("bench: {} ({what}) is WRONG: {why}", r.name);
@@ -586,7 +749,7 @@ impl RefTools {
         }
     }
 
-    fn side(&self, name: &str, lang: &str, runs: usize, expect: &str) -> Side {
+    fn side(&self, name: &str, lang: &str, runs: usize, expect: &str, scale: usize) -> Side {
         let Some((_, _, source)) = REFS.iter().find(|(n, l, _)| *n == name && *l == lang) else {
             return Side::Absent("no reference".into());
         };
@@ -641,6 +804,9 @@ impl RefTools {
         sample(runs, expect, |_| {
             let mut c = command();
             c.stdin(Stdio::null());
+            if scale > 1 {
+                c.arg(scale.to_string());
+            }
             c
         })
     }
@@ -811,6 +977,21 @@ fn cell(s: &Side) -> String {
     }
 }
 
+/// Compute time, apart from start-up: the slope between the 1x and 5x
+/// medians, as `(ms5 - ms1) / 4`. Reuses [`Stats`] without a second
+/// summary pass; empty when a benchmark did not declare a 5x.
+fn compute_ms(one: &Side, five: Option<&Side>) -> Option<f64> {
+    let (a, b) = (one.stats()?, five?.stats()?);
+    Some(((b.median - a.median) / 4.0).max(0.0))
+}
+
+/// The compute-time slope as a table cell; a benchmark without a 5x shows a dash.
+fn compute_cell(one: &Side, five: Option<&Side>) -> String {
+    compute_ms(one, five)
+        .map(|ms| format!("{ms:.1}"))
+        .unwrap_or_else(|| "-".into())
+}
+
 /// cig's interpreted median over another side's.
 fn ratio(r: &Row, other: &Side) -> String {
     match (r.interpreted.stats(), other.stats()) {
@@ -835,8 +1016,8 @@ fn print_table(o: &Opts, rows: &[Row], checks: &[Check], c: &Conditions) {
     println!("{}", c.line(version));
     println!();
     let mut head = format!(
-        "{:<10} {:>9} {:>8} {:>12} {:>10} {:>6} {:>8}",
-        "program", "build ms", "size MB", "interpreted", "compiled", "CV", "RSS MB"
+        "{:<11} {:>9} {:>8} {:>12} {:>10} {:>10} {:>6} {:>8}",
+        "program", "build ms", "size MB", "interpreted", "compiled", "compute ms", "CV", "RSS MB"
     );
     for (_, title) in LANGS.iter().filter(|_| o.refs) {
         head.push_str(&format!(" {title:>8}"));
@@ -852,12 +1033,13 @@ fn print_table(o: &Opts, rows: &[Row], checks: &[Check], c: &Conditions) {
             .map(|s| format!("{:.1}%", s.cv * 100.0))
             .unwrap_or_else(|| "-".into());
         let mut line = format!(
-            "{:<10} {:>9.1} {:>8.1} {:>12} {:>10} {:>6} {:>8}",
+            "{:<11} {:>9.1} {:>8.1} {:>12} {:>10} {:>10} {:>6} {:>8}",
             r.name,
             r.build_ms,
             r.bytes as f64 / 1e6,
             cell(&r.interpreted),
             cell(&r.compiled),
+            compute_cell(&r.interpreted, r.interpreted_5x.as_ref()),
             cv,
             rss_cell(&r.interpreted)
         );
@@ -918,9 +1100,9 @@ fn print_markdown(o: &Opts, rows: &[Row], checks: &[Check], c: &Conditions) {
     println!("**cigcompile bench**: {}", c.line(cigscript::VERSION));
     println!();
     let mut head =
-        "| benchmark | stresses | interpreted ms | compiled ms | p10 to p90 | CV | RSS MB |"
+        "| benchmark | stresses | interpreted ms | compiled ms | compute ms | p10 to p90 | CV | RSS MB |"
             .to_string();
-    let mut rule = "|---|---|---:|---:|---|---:|---:|".to_string();
+    let mut rule = "|---|---|---:|---:|---:|---|---:|---:|".to_string();
     for (_, title) in LANGS.iter().filter(|_| o.refs) {
         head.push_str(&format!(" {title} ms |"));
         rule.push_str("---:|");
@@ -942,11 +1124,12 @@ fn print_markdown(o: &Opts, rows: &[Row], checks: &[Check], c: &Conditions) {
             .map(|s| format!("{:.1}%", s.cv * 100.0))
             .unwrap_or_else(|| "-".into());
         let mut line = format!(
-            "| `{}` | {} | {} | {} | {spread} | {cv} | {} |",
+            "| `{}` | {} | {} | {} | {} | {spread} | {cv} | {} |",
             r.name,
             stresses(&r.name),
             cell(&r.interpreted),
             cell(&r.compiled),
+            compute_cell(&r.interpreted, r.interpreted_5x.as_ref()),
             rss_cell(&r.interpreted)
         );
         for (_, s) in &r.refs {
@@ -993,10 +1176,18 @@ fn print_json(o: &Opts, rows: &[Row], checks: &[Check], c: &Conditions, runtime:
                 .iter()
                 .map(|(l, s)| (l.to_string(), side_json(s)))
                 .collect();
+            let refs_5x: serde_json::Map<String, serde_json::Value> = r
+                .refs_5x
+                .iter()
+                .map(|(l, s)| (l.to_string(), side_json(s)))
+                .collect();
             serde_json::json!({
                 "name": r.name, "stresses": stresses(&r.name), "build_ms": r.build_ms, "bytes": r.bytes,
                 "interpreted": side_json(&r.interpreted), "compiled": side_json(&r.compiled),
-                "refs": refs,
+                "interpreted_5x": r.interpreted_5x.as_ref().map(side_json),
+                "compiled_5x": r.compiled_5x.as_ref().map(side_json),
+                "compute_ms": compute_ms(&r.interpreted, r.interpreted_5x.as_ref()),
+                "refs": refs, "refs_5x": refs_5x,
             })
         })
         .collect();
@@ -1041,6 +1232,15 @@ mod tests {
         for b in SET {
             assert!(!b.expect.is_empty(), "{}: an empty .expect", b.name);
             assert!(!b.stresses.is_empty());
+            if let Some(e5) = b.expect5x {
+                assert!(!e5.is_empty(), "{}: an empty .expect5x", b.name);
+                assert_ne!(
+                    b.expect.trim(),
+                    e5.trim(),
+                    "{}: scaled benchmark whose 5x output matches its 1x",
+                    b.name
+                );
+            }
         }
         for (name, lang, _) in REFS {
             assert!(
@@ -1048,5 +1248,21 @@ mod tests {
                 "{name}.{lang}: not in the set"
             );
         }
+    }
+
+    /// The compute-time slope reuses [`Stats`] and reports non-negative ms
+    /// derived from the 1x and 5x medians, with no slope when 5x is absent.
+    #[test]
+    fn compute_time_is_the_slope_between_the_one_and_five_times_medians() {
+        let s1 = Side::Timed(Stats::of(&[10.0], None));
+        let s5 = Side::Timed(Stats::of(&[42.0], None));
+        assert_eq!(compute_ms(&s1, Some(&s5)), Some(8.0));
+        // A 5x that came back faster clamps to zero rather than negative compute.
+        let s5_fast = Side::Timed(Stats::of(&[6.0], None));
+        assert_eq!(compute_ms(&s1, Some(&s5_fast)), Some(0.0));
+        // No 5x means no slope.
+        assert_eq!(compute_ms(&s1, None), None);
+        // A 5x that is absent or wrong leaves the slope empty.
+        assert_eq!(compute_ms(&s1, Some(&Side::Absent("x".into()))), None);
     }
 }
