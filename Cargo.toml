@@ -1,6 +1,6 @@
 [package]
 name = "cigcompile"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.82"
 description = "CigCompile: CigScript scripts as programs that run with nothing installed"
@@ -24,7 +24,7 @@ name = "cig-runtime"
 path = "src/bin/cig-runtime.rs"
 
 [dependencies]
-cigscript = { git = "https://github.com/otmof-ops/cig-script", tag = "v1.18.0" }
+cigscript = { git = "https://github.com/otmof-ops/cig-script", tag = "v1.20.0" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

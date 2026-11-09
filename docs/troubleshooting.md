@@ -24,8 +24,8 @@ one, or pass a folder with `cigcompile build <folder>`.
 ### `E1001 no runtime for the target`
 
 ```
-error[E1001 usage]: no cig 1.18.0 to append the program to was found on this machine
-  = hint: install cig 1.18.0 (cig update, or its release), or pass one with --runtime
+error[E1001 usage]: no cig 1.20.0 to append the program to was found on this machine
+  = hint: found, not usable: its release (cig-v1.20.0-linux-x86_64 is not kept here, and CIGCOMPILE_OFFLINE forbids fetching it); pass cig 1.20.0 with --runtime
 ```
 
 cigcompile pins exactly one cig version. The runtime for this machine
@@ -46,7 +46,8 @@ it. `CIGCOMPILE_OFFLINE=1` forbids the fetch; `cigcompile fetch
 ### `E1002 the runtime is another cig`
 
 ```
-error[E1002 usage]: /usr/bin/cig is cig 1.17.0; a program would be for cig 1.18.0
+error[E1002 usage]: /home/you/old/cig is cig 1.16.1; this cigcompile makes programs for cig 1.20.0
+  = hint: pass cig 1.20.0 with --runtime, or use the cigcompile built for cig 1.16.1
 ```
 
 A cig given with `--runtime` must be the version this compiler pins
@@ -56,8 +57,8 @@ install the cigcompile for the cig you have.
 ### `E1003 the script's pin is not met`
 
 ```
-error[E1003 usage]: build.cig asks for cig >=1.20, and the program would run on cig 1.18.0
-  = hint: build.cig: fix the pin in the # cig line, or move it once the script works on 1.18.0
+error[E1003 usage]: build.cig asks for cig >=1.21.0, and the program would run on cig 1.20.0
+  = hint: pinned in build.cig (line 1): build with the cigcompile for that cig, or move the pin once the script works on 1.20.0
 ```
 
 A `.cig-version`, a `# cig` header, or the manifest's `cig` key asks
@@ -223,7 +224,7 @@ library the warning names is installed. Drop `--runtime`, or run
 ## Running offline
 
 ```
-error[E1001 usage]: cig-v1.18.0-macos-aarch64 is not kept here, and CIGCOMPILE_OFFLINE forbids fetching it
+error[E1001 usage]: cig-v1.20.0-macos-aarch64 is not kept here, and CIGCOMPILE_OFFLINE forbids fetching it
   = hint: pass the cig for aarch64-apple-darwin with --runtime, or fetch it first: cigcompile fetch --target aarch64-apple-darwin
 ```
 

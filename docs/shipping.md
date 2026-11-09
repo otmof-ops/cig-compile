@@ -1,15 +1,16 @@
 # Shipping a program
 
 A program made by cigcompile is a single file. This page is how to ship
-one: sign it, carry an SBOM with it, read the hardening it got from
+one: sign it, give it a pass that says which machine built it, carry an
+SBOM with it, read the hardening it got from
 cig's own build, write it as an OCI image or a `.deb`, write a Homebrew
 formula or a Scoop manifest for a release, build it the same bytes on
 every machine, and the license that travels with it.
 
 ## All-or-nothing staging
 
-A build that writes more than one thing — `--sign`, `--sbom`, `--emit
-oci`, `--emit deb`, or any of these together — writes to a staging
+A build that writes more than one thing — `--sign`, `--pass`, `--sbom`,
+`--emit oci`, `--emit deb`, or any of these together — writes to a staging
 folder beside `--out` first. The outputs move into place only when every
 step has succeeded. A failing sign or emit leaves `--out` exactly as it
 was, including an earlier signed program and its `.sig` byte for byte.
@@ -20,8 +21,9 @@ nothing was written: out/fib is still the program from before (signed)
 ```
 
 A build that does not sign and replaces a program takes away the `.sig`
-and the SBOM's `.sig` beside it, which signed the program from before. A
-program and its signature always match on disk.
+and the SBOM's `.sig` beside it, which signed the program from before; a
+build without `--pass` takes away the `.pass` the same way. A program and
+its signature, and its pass, always match on disk.
 
 ## Signatures (`--sign`)
 
@@ -57,6 +59,57 @@ cigcompile verify <program> --signature <program>.sig [--allowed-signers <file>]
 
 The exit is `1` when any part of the verify differs, as with every
 other `verify`.
+
+## Program passes (`--pass`)
+
+`cigcompile build --pass` writes a program pass beside each program,
+`<program>.pass`: a sealed pass (cig's passes, cig-script#186) from
+this machine's tin. It names the program by sha256 and says what it is:
+the script it carries (by name and sha256), the cig it runs on, the
+cigcompile that built it, the machine it is for, and, with `--sbom`, the
+SBOM's sha256. It records no path, so it reads the same anywhere, and
+it is sealed: nobody can add to it or narrow it.
+
+A signature says a key signed these bytes. A pass says this machine
+built them: its key is the tin's, which never leaves the machine and is
+hidden from boxed hops, so no second key file has to be kept and
+guarded for signing.
+
+```
+cigcompile build hello.cig --pass
+  pass hello.pass (a program pass from this machine, id 112e4922d8d2)
+```
+
+### Verifying a pass
+
+```
+cigcompile verify <program> --pass <program>.pass [--allowed-signers <file>]
+```
+
+- On the machine that built it, the pass holds with nothing more:
+  `pass  ok  made by this machine on 2026-11-09T15:57:52Z: hello.cig for
+  cig 1.20.0 on x86_64-unknown-linux-musl, built by cigcompile 0.3.0`.
+- On another machine, it holds when that machine trusts the builder for
+  programs. On the builder, `cig pass key --kinds program` prints the
+  line; put it in the other machine's allowed signers (cig's own,
+  `<keys>/allowed_signers` or `cig config pass_allowed_signers <file>`,
+  or a file given with `--allowed-signers`). The file must be yours and
+  closed to others' writes, or it trusts nobody.
+- A pass about another program, one changed by a byte, or one from a
+  signer not trusted here, is `DIFFERS`, with the reason, and the exit
+  is `1`.
+- Checking a pass makes no key on a machine that has none (a fresh CI
+  runner): with no key, nothing was revoked there, and the pass is
+  held to the allowed signers alone.
+
+A pass names the program's bytes as they were built. Code signing
+rewrites them (a PE's headers, a Mach-O's image), so check the pass
+before signing; on a signed program the row says why it differs.
+
+A pass carries the time it was made, so two builds of the same program
+write the same program but two different passes. A builder's key is
+retired from another machine's trust by its line in the allowed signers:
+take the line out, or give it `valid-before=` (OpenSSH's own option).
 
 ### Apple Developer ID and Authenticode
 
@@ -116,7 +169,7 @@ ones (a program needs nothing else).
 
 ```
 $ cigcompile build hello.cig --emit oci --target x86_64-unknown-linux-musl
-compiled hello.cig -> hello (11.4 MB, cig 1.18.0 for x86_64-unknown-linux-musl)
+compiled hello.cig -> hello (13.0 MB, cig 1.20.0 for x86_64-unknown-linux-musl)
   sha256 ...
   image  hello.oci.tar (docker load -i, then run localhost/hello:latest)
 ```
@@ -138,7 +191,7 @@ ar + tar + gzip, written here, so no dpkg is needed to make one.
 ```
 $ cigcompile build hello.cig --emit deb --target x86_64-unknown-linux-musl \
     --pkg-version 1.0.0 --pkg-description "greeting program"
-compiled hello.cig -> hello (11.4 MB, cig 1.18.0 for x86_64-unknown-linux-musl)
+compiled hello.cig -> hello (13.0 MB, cig 1.20.0 for x86_64-unknown-linux-musl)
   sha256 ...
   deb    hello_1.0.0_amd64.deb (hello_1.0.0_amd64.deb, dpkg -i to install to /usr/bin/hello)
 ```
