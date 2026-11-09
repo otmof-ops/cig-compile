@@ -1,20 +1,110 @@
-# CigCompile
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="CigCompile" width="520">
+</p>
 
-CigCompile turns CigScript (and later CigarScript) into programs that run with nothing installed.
+<p align="center">
+  <b>Your CigScript scripts, as programs that run with nothing installed.</b><br>
+  <i>A tool from the maker of <a href="https://github.com/otmof-ops/cig-script">CigScript</a>: the same burns, plan and rollback as <code>cig run</code>, byte for byte.</i>
+</p>
+
+<p align="center">
+  <a href="https://github.com/otmof-ops/cig-script"><img alt="a CigScript tool" src="https://img.shields.io/badge/a-CigScript%20tool-f97316"></a>
+  <a href="https://github.com/otmof-ops/cig-compile/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/otmof-ops/cig-compile?color=f97316&label=release"></a>
+  <a href="docs/commands.md#cigcompile-targets"><img alt="9 machines" src="https://img.shields.io/badge/machines-9-6b7280"></a>
+  <a href="docs/roadmap.md"><img alt="stage A shipped" src="https://img.shields.io/badge/stage-A%20shipped-6b7280"></a>
+  <a href="LICENSE"><img alt="license Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-6b7280"></a>
+  <img alt="installs needed: 0" src="https://img.shields.io/badge/installs%20needed-0-2ea44f">
+</p>
+
+A script is easy to write and awkward to hand over. Whoever runs it needs
+the interpreter, the right version of it, and a reason to trust both: a
+Python script needs Python, and a CigScript script needs `cig`. On a
+server you don't own, a friend's laptop or a fresh CI runner, that is the
+part that goes wrong.
+
+**`cigcompile` makes the script a program.** One file, for any machine cig
+is released for, that runs with nothing installed. The program is cig
+itself, of the version this compiler pins, with your checked script sealed
+onto its end, so it does exactly what `cig run` does: the same burns, the
+same plan from `--dry-run`, the same journal, and the same undo. The
+differential suite holds every script CigScript carries to that, byte for
+byte, on every pull request.
+
+<p align="center"><img src="docs/assets/stages.svg" alt="The script is checked, then appended to cig of the version this compiler pins, the runtime held to its sha256; the one file runs on every machine cig is released for. Stage A, the bundle, is shipped; a bytecode VM is next, then native code and types." width="820"></p>
+
+## Thirty seconds
 
 ```sh
-cigcompile build tools/tidy-downloads.cig      # -> ./tidy-downloads
-./tidy-downloads ~/Downloads                     # no cig on the machine needed
+cigcompile build tidy-downloads.cig          # one file: ./tidy-downloads
+./tidy-downloads --dry-run ~/Downloads       # the plan; nothing changes
+./tidy-downloads ~/Downloads                 # for real, every move journaled
+./tidy-downloads --unburn-last 1             # changed your mind: everything back
+cigcompile build tidy-downloads.cig --target universal2-apple-darwin   # one program for every Mac
+cigcompile verify tidy-downloads             # each part is what a build writes
 ```
 
-Phase one compiles CigScript as it is. The interpreter is the reference: a compiled program must do exactly what `cig run` does, byte for byte, with the same burns, plan, journal, rollback and errors. The differential suite proves it on every script CigScript carries.
+[Getting started](docs/getting-started.md) walks through it in ten
+minutes, install included.
+
+## See it run
+
+[`tidy-downloads.cig`](https://github.com/otmof-ops/cig-script/blob/main/examples/tidy-downloads.cig)
+is one of CigScript's own examples: it sorts a folder's loose files into
+folders by kind. Built into a program, it plans, runs, proves what it is,
+and puts everything back, with no cig on the machine:
+
+<p align="center"><img src="docs/assets/terminal.svg" alt="cigcompile build tidy-downloads.cig makes one program; the program shows its plan with --dry-run, moves five files for real, cigcompile verify finds every part as a build writes it, and --unburn-last 1 puts every file back" width="820"></p>
+
+## What you get
+
+| what you get | how |
+|---|---|
+| one file, nothing installed | a program is cig with your script appended: it needs no cig, no runtime and no network |
+| every machine cig is released for | `--target` builds for Linux (x86_64, aarch64, arm), macOS (each, or one universal program), Windows (x86_64, aarch64) and FreeBSD, from any machine |
+| what `cig run` does, exactly | burns, `--dry-run` plans, journals, rollback, the four kinds of no and every explain page are cig's own; the differential suite proves it |
+| an undo inside the program | `--unburn-last N`, `--unburn-since AGE` and `--unburn-to <run>` put back a stretch of the program's own runs, and leave other programs' alone |
+| programs you can check | `cigcompile verify` holds the runtime to the sha256 this compiler pins, the script to its record and the whole file to a rebuild; `--sign` adds an SSH signature, `--sbom` a CycloneDX SBOM, and `audit` reads the hardening from the headers |
+| the same bytes everywhere | the same script, compiler and runtime make the same file on any machine; CI builds one script on five runners and compares them |
+| ready to ship | `--emit oci` makes a scratch image of one file, `--emit deb` a Debian package, and `package --brew` or `--scoop` a Homebrew formula or a Scoop manifest |
+| all or nothing | a build that signs, writes an SBOM or a package stages every output beside `--out` and moves them into place together, or leaves what was there |
+| quick rebuilds | a rebuild that changes nothing touches nothing, in about a millisecond; `--watch` builds again on every save |
+| a look inside | `--emit cir` prints the verified IR, `--remarks` says what each pass did, and `--timings` where the build's time went |
+| the numbers | `cigcompile bench` runs 29 programs interpreted and compiled, beside Python, Node and Rust ([BENCHMARKS.md](docs/BENCHMARKS.md)) |
+
+## Guides
+
+| guide | read it when you want to |
+|---|---|
+| [Getting started](docs/getting-started.md) | install cigcompile, build your first program, and run it where there is no cig |
+| [Shipping a program](docs/shipping.md) | sign it, check it, give it an SBOM, or make an image, a `.deb`, a formula or a manifest of it |
+| [Commands](docs/commands.md) | look up any command, flag, exit code, environment variable or file cigcompile keeps |
+| [Troubleshooting](docs/troubleshooting.md) | understand an `E10xx`, or a build that won't go |
+| [How it works](docs/how-it-works.md) | read the compiler's insides before you change them |
+| [Roadmap](docs/roadmap.md) | see the stages to come, and how a request gets there |
+| [Benchmarks](docs/BENCHMARKS.md) | read the numbers, and run them yourself |
+| [The backend decision](docs/decisions/0001-backend.md) | see why stage A is a bundle, and what B, C and D will be |
+
+## Get help, ask for things, pitch in
+
+| you want to | go here |
+|---|---|
+| get unstuck building or shipping a program | [a guidance request](https://github.com/otmof-ops/cig-compile/issues/new?template=guidance-request.yml) |
+| build for a machine or an output it doesn't make yet | [a target request](https://github.com/otmof-ops/cig-compile/issues/new?template=target-request.yml) |
+| get something your other compiler does better | [a quality-of-life request](https://github.com/otmof-ops/cig-compile/issues/new?template=qol-request.yml) |
+| report something that went wrong | [a bug report](https://github.com/otmof-ops/cig-compile/issues/new?template=bug-report.yml) |
+| report a problem in the language itself | [CigScript's issues](https://github.com/otmof-ops/cig-script/issues) |
+| report a security problem | [SECURITY.md](SECURITY.md), never a public issue |
+| send a fix | [CONTRIBUTING.md](CONTRIBUTING.md) |
+
+[SUPPORT.md](SUPPORT.md) says what happens after you ask.
 
 ## Install
 
-Each release has an asset for every machine cig is released for, with its sha256 and a build provenance attestation:
+Each release has an asset for every machine cig is released for, with its
+sha256 and a build provenance attestation:
 
 ```sh
-v=v0.1.2 asset=linux-x86_64     # or linux-aarch64, linux-arm, macos-aarch64, macos-x86_64, freebsd-x86_64
+v=v0.2.0 asset=linux-x86_64     # the latest release; or linux-aarch64, linux-arm, macos-aarch64, macos-x86_64, freebsd-x86_64
 base=https://github.com/otmof-ops/cig-compile/releases/download/$v
 curl -LO "$base/cigcompile-$v-$asset" -LO "$base/cigcompile-$v-$asset.sha256"
 sha256sum -c "cigcompile-$v-$asset.sha256"                       # shasum -a 256 -c on macOS
@@ -22,95 +112,49 @@ gh attestation verify "cigcompile-$v-$asset" -R otmof-ops/cig-compile
 install -m 755 "cigcompile-$v-$asset" ~/.local/bin/cigcompile
 ```
 
-On Windows the assets are `cigcompile-v0.1.2-windows-x86_64.exe` and `-windows-aarch64.exe`. The compiler needs nothing else: the first build for a machine fetches cig's release for it, once, and holds it to the sha256 this compiler was built knowing. `cigcompile fetch --all` does that ahead of time, for a machine that builds offline. The `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES.md` and the SBOM (`cigcompile-v0.1.2.cdx.json`) are beside the assets.
+On Windows the assets are `cigcompile-<version>-windows-x86_64.exe` and
+`-windows-aarch64.exe`. The compiler needs nothing else: the first build
+for a machine fetches cig's release for it, once, and holds it to the
+sha256 this compiler was built knowing. `cigcompile fetch --all` does that
+ahead of time, for a machine that builds offline. The `LICENSE`, `NOTICE`,
+`THIRD-PARTY-NOTICES.md` and the SBOM are beside the assets.
 
-## How it works (stage A)
+## Where it runs
 
-A program is the `cig` binary of the version this compiler pins, with the checked script appended. At start-up, `cig` finds the script at its own end and runs it through the same run as `cig run`. The payload format and the program's command line are in CigScript's [docs/PROGRAMS.md](https://github.com/otmof-ops/cig-script/blob/main/docs/PROGRAMS.md). Why this is the first stage, and what comes after it (a bytecode VM, then Cranelift), is in [docs/decisions/0001-backend.md](docs/decisions/0001-backend.md).
+Programs run on the nine machines `cigcompile targets` lists: Linux on
+x86_64, aarch64 and 32-bit ARM, macOS on each architecture or as one
+universal program, Windows on x86_64 and aarch64, and FreeBSD on x86_64.
+A Linux program runs on any Linux, because its runtime is static. CI runs
+each program on a runner of its own machine, the universal one on both
+Macs; 32-bit ARM Linux and FreeBSD programs are built and checked there,
+not run. The compiler itself is released for the same machines.
 
-The runtime is built here, with the compiler: `cig-runtime` is `cig` of the pinned CigScript version, installed beside `cigcompile`. A program built with no `--runtime` uses the first of these:
-1. `--runtime`, or `CIGCOMPILE_RUNTIME`;
-2. `cig-runtime` beside `cigcompile`;
-3. a `cig` of the same version on `PATH`, or in the humidor;
-4. cig's own release for this machine, fetched once and held to the sha256 this compiler pins.
+## Limits, honestly
 
-A Linux program runs anywhere because its runtime is static, as cig's Linux releases are. A runtime found in steps 2 and 3 that is dynamically linked would tie its programs to this machine's glibc, so it is passed over for step 4. With step 4 out of reach (offline, `CIGCOMPILE_OFFLINE=1`) the build is refused with `E1008`. A dynamically linked runtime given in step 1 is used: the build warns, and says what the program needs (`for x86_64-unknown-linux-gnu (glibc 2.39)`).
+- **A program carries cig whole.** A compiled hello is about 11 MB and
+  starts in about 8 ms here, as cig does. A runtime that is only what a
+  program uses waits on the crate split ([#1](https://github.com/otmof-ops/cig-compile/issues/1),
+  [#4](https://github.com/otmof-ops/cig-compile/issues/4)).
+- **A program runs at the interpreter's speed.** Stage A is the bundle; the
+  speed comes with the bytecode VM and native code
+  ([#31](https://github.com/otmof-ops/cig-compile/issues/31),
+  [#32](https://github.com/otmof-ops/cig-compile/issues/32)).
+- **The box is Linux's.** A program's boxed hop is refused or falls back
+  elsewhere, as `cig`'s is (`E777`, `E763`).
+- **Signing is SSH's.** Apple Developer ID and Windows Authenticode need
+  identities you hold, and are a separate step.
 
-## Other machines
+Each of these is on the [roadmap](docs/roadmap.md).
 
-`cigcompile build tidy.cig --target aarch64-apple-darwin` builds a program for a Mac from any machine. Since cig 1.15.0 every cig is a runtime, so the runtime for another machine is cig's own release asset for it, of the version this compiler pins. It is:
-- fetched once, into `<cig home>/cigcompile/runtimes/`;
-- accepted only at the sha256 this compiler was built knowing (`src/digests.rs`, written by `ci/digests.sh` from the release's checksums).
+## Part of CigScript
 
-`--target universal2-apple-darwin` makes one program for every Mac. Its runtime is the arm64 and x86_64 releases in one universal binary, made here as lipo makes one, from the two pinned assets. Each slice keeps its own signature, and the program's payload goes after both, where cig finds it.
-
-A checksum fetched beside the asset would prove nothing against a tampered release; one built into the compiler does. `CIGCOMPILE_OFFLINE=1` forbids the fetch, and `--runtime` names a runtime by hand. CI builds for six machines and the universal Mac on one Linux runner, and runs each program on its own machine: the universal one on both Macs.
-
-## The commands
-
-| command | does |
-|---|---|
-| `cigcompile build [path] [-o out] [--target T] [--runtime cig] [--check]` | checks a script (or every `.cig` at the top of a folder) the way `cig check` does, then writes each as a program |
-| `cigcompile test [path]` | builds, then runs each program and its script with `--dry-run` and compares them: the plan, the output and the exit |
-| `cigcompile clean [path]` | removes the programs a build of this path wrote, and nothing else: a program there whose bytes are the ones the build index recorded. One of the same name from somewhere else is kept and named; `--force` removes it anyway |
-| `cigcompile targets` | the machines cig is released for, and the runtime found for this one; for each, the stage its programs are built at (A, the script on cig's runtime), how CI proves them (run on a runner of that machine, or built and not run: 32-bit ARM Linux and FreeBSD), and what a program there lacks (the box is Linux's: elsewhere a boxed hop is refused or falls back, E777 and E763) |
-| `cigcompile fetch [--target T] [--all]` | fetches the runtime for other machines ahead of a build |
-| `cigcompile bench [script] [--set DIR] [--runs N] [--budgets] [--ref] [--markdown]` | the benchmark set ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)), interpreted and compiled: each output checked first, then medians, spreads and peak memory; `--ref` adds the Python, Node and Rust references, and the budgets are #14's. A `script` alone is the user's own `.cig` run through the same harness: its expected output is what `cig run <script>` prints with no arguments, so a sample that drifts from it is `WRONG`. `--set` reads benchmarks from a folder (`<name>.cig` beside `<name>.expect`) instead of the set |
-| `cigcompile build <script> --emit cir\|cir-opt [-O0\|-O1\|-O2] [--passes a,b] [--passes-diff]` | prints the verified IR instead of a program. `-O0` is lowering only; `-O1` (the default) and `-O2` run every pass there is (`fold-consts`, `copy-prop`, `sccp`, `dead-pure`), and stage B's passes are what will set `-O2` apart. `--emit cir` is shaped by `-O`/`--passes`; `--emit cir-opt` is the explicit "after-the-passes" name (at stage A, the same IR as `cir` at the chosen level; reserved so that stage B can split the two without a flag change). `--passes` runs exactly the passes named, in that order, for bisecting. `--passes-diff` adds, after the IR, a unified diff of what each pass changed, or says it changed nothing. Stage A programs carry the script, so the level shapes `--emit` until stage B |
-| `cigcompile build ... [--remarks]` | says on stderr what each pass did or left alone: a summary a pass (`fold-consts: folded 3 constants`, `dead-pure: nothing to prune`), then one line per thing that changed with `file:line:col`. `--json` writes the remarks as JSON lines. Works with `--emit cir`/`cir-opt` and with a plain build, and costs nothing when off |
-| `cigcompile build [path] --watch` | builds, then builds again whenever a script is saved (or one is added to the folder), until Ctrl-C; a failed build is said and the next save tries again. The build index makes an unchanged script cost about a millisecond |
-| `cigcompile build ... [--timings[=trace.json]] [--json-progress] [--sbom]` | `--timings` tables where the build's time went, phase by phase (read, check, pin, runtime, assemble, hash, write, sbom), on stderr, and `=FILE` also writes a Chrome trace (chrome://tracing, Perfetto). `--json-progress` says each step as it happens, one JSON object a line on stderr (`start`, `script`, `phase`, `built` or `failed`, `done`), for a window or an editor. `--sbom` writes a CycloneDX 1.5 file beside each program, `<program>.cdx.json`, naming its runtime (cig's release asset, by version and sha256) and its script (by name and sha256), with no time and no build path in it, so a rebuild writes the same file |
-| `cigcompile build ... --sign <key>` | a detached SSH signature of each program, `<program>.sig`, made with `ssh-keygen -Y sign` and the namespace `cigcompile-program` (so one made here cannot be replayed as a git or file signature). `<key>` is an ssh private-key file, or a public-key file with `ssh-agent` holding the private one. The signer is checked up front (`ssh-keygen` on this machine, the key file readable) and the build is all-or-nothing: each output (program, `.sig`, SBOM, OCI image, `.deb`) is written to a staging folder beside `--out` and moved into place only when every step has succeeded, so a failing sign leaves `--out` exactly as it was, including an earlier signed program and its `.sig` byte for byte. With `--sbom`, the SBOM is signed too (`<program>.cdx.json.sig`). Apple Developer ID and Authenticode need identities an operator holds and are a separate step |
-| `cigcompile build <script> --emit oci [--target <linux>]` | the program, and beside it an OCI image of it, `<program>.oci.tar`: a scratch image of one file, the program, as its entrypoint (Linux targets; a program needs nothing else). `docker load -i` or `podman load -i` it, then run `localhost/<name>:latest`. Every time in it is zero and every owner root, so the same build writes the same bytes |
-| `cigcompile build <script> --emit deb [--pkg-version V] [--pkg-maintainer "Name <email>"] [--pkg-description TEXT] [--target <linux>]` | the program, and beside it a `.deb` of it, `<name>_<version>_<arch>.deb`: ar + tar + gzip, written in pure Rust, that installs the program to `/usr/bin/<name>` (Linux targets; `dpkg -i` to install, `dpkg-deb --info` and `--contents` to look). The control file names the Package (sanitised to Debian's rules from the program's name), Version (`--pkg-version`, or `0.0.0`), Architecture (from the target: `amd64`, `arm64`, `armhf`, `i386`), Maintainer and Description. Every time in it is zero and every owner root, so the same build writes the same bytes |
-| `cigcompile package --brew\|--scoop [--manifest FILE] [--name N --version V --homepage URL --license SPDX --description TEXT] [--asset TARGET=URL,SHA256]... [-o OUT]` | a Homebrew formula (`--brew`) or a Scoop manifest (`--scoop`) for a released program, pointing at its release assets by URL and sha256. Nothing is built: the inputs are the five fields and a `--asset` for each per-target release asset (`--brew` needs macOS or Linux assets, `--scoop` Windows ones), either on the command line or in a JSON `--manifest` (`{name, version, homepage, license, description, assets: [{target, url, sha256}]}`); a command-line `--asset` overrides the manifest's for that target. Written to `-o`, else stdout. The same inputs write the same bytes |
-| `cigcompile audit <program>` | the hardening the program carries, read from its headers: cig's own build's, since a program is cig with a script appended. ELF: PIE, RELRO (full with BIND_NOW, or static), a stack that is not executable, CET (IBT, shadow stack) or AArch64's BTI and PAC. Mach-O: PIE, the stack, a code signature, each slice of a universal one. PE: ASLR, NX, Control Flow Guard, an Authenticode signature. Report only: the exit is 0 whatever it finds; `--json` gives each part |
-| `cigcompile verify <program> [--script s.cig] [--runtime cig] [--signature <sig>] [--allowed-signers <file>] [--identity <id>]` | checks a program is what a build makes, part by part, and runs nothing: the runtime against the sha256 of cig's release assets this compiler pins (or the cig given), the payload against the sha256 its trailer and its record carry (and the script, with `--script`), and the whole file against the bytes a build of those parts writes. With `--signature`, the detached SSH signature too: the namespace must be `cigcompile-program`, and with `--allowed-signers` the signer must be in that file (`--identity` names which signer there, default `*`); without one, only the signature's integrity is checked (`-Y check-novalidate`) and that part is reported `unchecked`. Each part is `ok`, `DIFFERS` or `unchecked`, and the exit is `1` when one differs |
-| `cigcompile reduce <script> [-o out] [-- command...]` | cuts a script down to the smallest one that is still interesting, for a bug report. By default, interesting means its program differs from it, as `cigcompile test` finds; at stage A that never happens, and it says so. With a command after `--`, interesting means the command exits 0 on the candidate (`{}` is its path, else it goes last). Lines go in ever smaller runs (delta debugging), every candidate must still pass `cig check`, and the result goes to `<name>.reduced.cig` |
-
-- **Where programs go.** One script builds to `./<name>`; a folder builds to `<folder>/bin/<name>`, and `<folder>/bin/<target>/` for another machine. `-o` says otherwise.
-- **The write.** A program is written beside its place and renamed over it, so a build that stops halfway leaves the old program or none.
-- **Clean.** It removes a file at one of a build's output paths only when that file is a program made from a script of the same name.
-- **No-op rebuilds.** A rebuild that changes nothing touches nothing, not even the time, and takes about a millisecond: the build index in `<cig home>/cache/compile` remembers what each program was built from.
-- **Reproducible.** The same script, compiler and runtime give the same bytes on any machine.
-  - A program records its script's file name, never the path it was built from, and no time.
-  - The runtime for another machine is cig's release, so builds for it agree everywhere. Builds for this machine agree too when its `cig` was installed from the release.
-  - A `cig` built from source is the same version with bytes of its own, and so are the programs built on it.
-  - CI builds one script for all six machines on five runners and checks that the bytes are identical.
-- **Errors.** They are cig's, in the four kinds of no: the compiler's are `E1000` to `E1007`, the programs' `E1050` to `E1053`. `cig explain E1001` has the page.
-- **Exit codes.** `0` ok, `1` a difference (`test`, `bench`), `2` a script that does not check, `3` usage.
-
-## Building it
-
-```sh
-cargo build --release          # target/release/cigcompile and target/release/cig-runtime
-cargo test                     # unit and end-to-end tests
-CIGSCRIPT_SRC=../CigScript cargo test --release --test differential   # the differential suite
-```
-
-On Linux a plain `cargo build` links `cigcompile` and `cig-runtime` to this machine's glibc. That is fine for the compiler; its programs fetch cig's static release instead (`cigcompile fetch` does it ahead of time). For a `cig-runtime` that is static itself, build for this machine's musl target: `cargo build --release --target x86_64-unknown-linux-musl`.
-
-The differential suite reads its scripts from a CigScript checkout of the pinned version: the examples, the error corpus, `tests/scripts`, and the `cig` fences in the docs. It runs each under `cig run` and as a program, in a real run, a dry run, and with `--json` and `--plain`. It fails on any difference in output, exit code, the files left behind, or a real run's journal. It also holds every explain page a program shows to `cig explain`'s, in each output mode, and CI runs CigScript's portability probe twice, through cig and with every script built into a program (`ci/cig-compiled.sh`), and fails if any scenario differs.
-
-Programs nobody wrote run too. `DIFF_RANDOM=<seed>:<count>` adds that many generated programs (`tests/differential/gen.rs`): functions, declarations, loops, `try`/`ashtray`/`finally`, pipelines, and burns under `out/` that now and then cough and roll back. A program that differs is shrunk to the fewest statements that still differ and printed with its seed, so `DIFF_RANDOM=<seed>:1` replays it; `DIFF_FILTER=random/` runs those alone. Every pull request runs 100 from a fixed seed, and every night `differential-random.yml` runs a thousand from a new one on Linux, macOS and Windows.
-
-## Fuzzing
-
-The compiler is the first reader of code that may come from someone else, so its front end is fuzzed (#16). The four targets live in `src/fuzz.rs`:
-- `parse`: any text into the parser;
-- `check`: a parsed program into the checker;
-- `lower`: a program the checker accepts must lower to IR that verifies through every pass;
-- `program`: any bytes as a program's trailer.
-
-`fuzz/` holds them for cargo-fuzz, and `.github/workflows/fuzz.yml` runs each for five minutes every night, seeded with CigScript's own scripts. `tests/fuzz_smoke.rs` drives the same bodies on stable over a fixed sample on every test run, nesting past the parser's ceilings included. Each target runs on cig's 256 MB stack, as the compiler does: a script nested deeper than the parser allows is refused (E208), never a stack overflow.
-
-```sh
-cargo +nightly fuzz run lower fuzz/corpus/lower -- -max_total_time=60
-```
-
-## Status
-
-Phase one, stage A. The plan, and what is left of it, is in the issues: #1 (the crate split), #3 (the IR), #10 (cross-compiling and signing), #12 (the window) and on.
+CigCompile compiles CigScript, the language at
+[otmof-ops/cig-script](https://github.com/otmof-ops/cig-script), and it is
+built on it: it reads, checks and lowers a script through the `cigscript`
+library of the version it pins, and the programs it makes are cig of that
+version with the script inside. The lexicon, the rules the kernel keeps and
+the payload format a program carries ([PROGRAMS.md](https://github.com/otmof-ops/cig-script/blob/main/docs/PROGRAMS.md))
+are there. Later, CigarScript will compile here too.
 
 ## Licensing
 

@@ -1,0 +1,14 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A problem in CigScript itself
+    url: https://github.com/otmof-ops/cig-script/issues
+    about: The language, the runtime, the kernel or a diagnostic a compiled program carries belongs in CigScript's own issues.
+  - name: A problem in cig-orchestrator
+    url: https://github.com/otmof-ops/cig-orchestrator/issues
+    about: A task runner for CigScript projects; its own issues are there.
+  - name: A security problem
+    url: https://github.com/otmof-ops/cig-compile/blob/main/SECURITY.md
+    about: Please don't open a public issue for a vulnerability; SECURITY.md says where to send it.
+  - name: The guides
+    url: https://github.com/otmof-ops/cig-compile/tree/main/docs
+    about: Getting started, commands, shipping, how it works, troubleshooting.

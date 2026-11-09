@@ -1,0 +1,47 @@
+name: Something another compiler does better
+description: A quality-of-life feature from another language or compiler that cigcompile is missing.
+title: "qol: "
+labels: ["qol", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If another compiler saves you time or catches a mistake in a way this doesn't, I want to know.
+        These requests are read and answered, and the good ones land.
+  - type: input
+    id: source
+    attributes:
+      label: The compiler or tool that does it
+      placeholder: "rustc, GHC, V8's Turbofan, Go's compiler, LLVM..."
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What it does
+      description: How you use it, with a command, a diagnostic, or a snippet if you have one.
+    validations:
+      required: true
+  - type: textarea
+    id: saves
+    attributes:
+      label: What it saves you
+      description: Time, a step, a mistake you no longer make.
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where it would belong
+      options:
+        - cigcompile, the compiler
+        - A compiled program (the runtime cig carries)
+        - CigScript, the language
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: shape
+    attributes:
+      label: How you'd want it to look here
+      description: A command, a flag, a diagnostic, an IR. Rough is fine.

@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="432" viewBox="0 0 820 432" role="img" aria-label="How a program is made: the script is checked, then appended to cig of the version this compiler pins, the runtime held to its sha256; the one file runs on every machine cig is released for. Stage A, the bundle, is shipped; stage B, a bytecode VM, is next; stage C, native code through Cranelift, and stage D, types, are planned.">
+  <title>One script in, one program out</title>
+  <defs>
+    <marker id="hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#f97316"/>
+    </marker>
+  </defs>
+  <style>
+    .h { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700; fill: #f97316; }
+    .k { font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 12.5px; fill: #9ca3af; }
+    .n { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; font-weight: 700; fill: #6b7280; }
+    .t { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10.5px; fill: #9ca3af; }
+    .st { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; font-weight: 700; }
+    .cell { fill: none; stroke: #d1d5db; stroke-width: 1.2; }
+    .chip { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; fill: #6b7280; }
+    .flow { stroke: #f97316; stroke-width: 2; fill: none; }
+  </style>
+  <text x="24" y="34" class="h">one script in, one program out</text>
+  <text x="24" y="54" class="k">a program is cig of the version this compiler pins, with the checked script appended; at start-up</text>
+  <text x="24" y="72" class="k">cig finds the script at its own end and runs it as cig run does: the same burns, plan, journal and rollback</text>
+
+  <!-- the script -->
+  <rect x="24" y="100" width="168" height="72" rx="8" class="cell"/>
+  <text x="40" y="128" class="n">tidy-downloads.cig</text>
+  <text x="40" y="148" class="t">your script, as you</text>
+  <text x="40" y="162" class="t">wrote it for cig run</text>
+
+  <!-- checked, then built -->
+  <path d="M 196 136 L 254 136" class="flow" marker-end="url(#hot)"/>
+  <text x="225" y="126" text-anchor="middle" class="t">cig check</text>
+
+  <!-- the program: the runtime, the script, the trailer -->
+  <rect x="262" y="92" width="534" height="88" rx="10" class="cell"/>
+  <rect x="272" y="102" width="336" height="68" rx="6" fill="#f97316" opacity="0.07"/>
+  <text x="286" y="126" class="n">cig, the pinned runtime</text>
+  <text x="286" y="146" class="t">cig's own release for the machine, held to</text>
+  <text x="286" y="160" class="t">the sha256 this compiler was built knowing</text>
+  <rect x="614" y="102" width="118" height="68" rx="6" fill="#f97316" opacity="0.18"/>
+  <text x="626" y="126" class="n">the script</text>
+  <text x="626" y="146" class="t">checked, and</text>
+  <text x="626" y="160" class="t">byte for byte</text>
+  <rect x="738" y="102" width="48" height="68" rx="6" fill="#9ca3af" opacity="0.14"/>
+  <text x="762" y="140" text-anchor="middle" class="t">trailer</text>
+
+  <!-- every machine -->
+  <path d="M 529 184 L 529 214" class="flow" marker-end="url(#hot)"/>
+  <text x="541" y="203" class="t">--target</text>
+  <g>
+    <rect x="148" y="222" width="104" height="26" rx="13" class="cell"/><text x="200" y="239" text-anchor="middle" class="chip">linux x86_64</text>
+    <rect x="260" y="222" width="110" height="26" rx="13" class="cell"/><text x="315" y="239" text-anchor="middle" class="chip">linux aarch64</text>
+    <rect x="378" y="222" width="86" height="26" rx="13" class="cell"/><text x="421" y="239" text-anchor="middle" class="chip">linux arm</text>
+    <rect x="472" y="222" width="122" height="26" rx="13" class="cell"/><text x="533" y="239" text-anchor="middle" class="chip">macos universal</text>
+    <rect x="602" y="222" width="122" height="26" rx="13" class="cell"/><text x="663" y="239" text-anchor="middle" class="chip">windows x86_64</text>
+    <rect x="148" y="254" width="128" height="26" rx="13" class="cell"/><text x="212" y="271" text-anchor="middle" class="chip">windows aarch64</text>
+    <rect x="284" y="254" width="122" height="26" rx="13" class="cell"/><text x="345" y="271" text-anchor="middle" class="chip">freebsd x86_64</text>
+    <rect x="414" y="254" width="122" height="26" rx="13" class="cell"/><text x="475" y="271" text-anchor="middle" class="chip">macos aarch64</text>
+    <rect x="544" y="254" width="116" height="26" rx="13" class="cell"/><text x="602" y="271" text-anchor="middle" class="chip">macos x86_64</text>
+  </g>
+  <text x="24" y="241" class="k">runs on</text>
+  <text x="24" y="273" class="k">no cig needed</text>
+
+  <!-- the stages -->
+  <text x="24" y="318" class="h">the stages</text>
+  <rect x="24" y="332" width="182" height="86" rx="8" fill="none" stroke="#f97316" stroke-width="1.6"/>
+  <text x="38" y="354" class="n">A  the bundle</text>
+  <text x="38" y="372" class="t">cig's runtime, with</text>
+  <text x="38" y="386" class="t">the script appended</text>
+  <text x="38" y="406" class="st" fill="#f97316">shipped</text>
+  <rect x="220" y="332" width="182" height="86" rx="8" class="cell"/>
+  <text x="234" y="354" class="n">B  a bytecode VM</text>
+  <text x="234" y="372" class="t">a register bytecode</text>
+  <text x="234" y="386" class="t">through the same kernel</text>
+  <text x="234" y="406" class="st" fill="#6b7280">next  #31</text>
+  <rect x="416" y="332" width="182" height="86" rx="8" class="cell"/>
+  <text x="430" y="354" class="n">C  native code</text>
+  <text x="430" y="372" class="t">through Cranelift,</text>
+  <text x="430" y="386" class="t">ahead of time</text>
+  <text x="430" y="406" class="st" fill="#9ca3af">planned  #32</text>
+  <rect x="612" y="332" width="184" height="86" rx="8" class="cell"/>
+  <text x="626" y="354" class="n">D  types for speed</text>
+  <text x="626" y="372" class="t">inferred, or declared</text>
+  <text x="626" y="386" class="t">in CigarScript</text>
+  <text x="626" y="406" class="st" fill="#9ca3af">planned  #34</text>
+  <path d="M 208 375 L 216 375 M 404 375 L 412 375 M 600 375 L 608 375" stroke="#d1d5db" stroke-width="1.2"/>
+</svg>
