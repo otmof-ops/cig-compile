@@ -5,6 +5,20 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **`build --sign` is all-or-nothing** (#66). A build with `--sign`
+  checks the signer up front (`ssh-keygen` on this machine, the key file
+  readable, E1004 before anything is written) and writes each output
+  (program, `.sig`, SBOM, `.cdx.json.sig`, OCI image, `.deb`) to a
+  staging folder beside `--out`. The files move into place only once
+  every step has succeeded. A failing sign, SBOM or emit leaves `--out`
+  exactly as it was, including an earlier signed program and its `.sig`
+  byte for byte, and the error names what is still there (`nothing was
+  written: out/fib is still the program from before (signed)`). The
+  same rule holds for `--sbom` and `--emit oci`/`deb` without `--sign`.
+  A program and its signature always match: a build that does not sign
+  and replaces a program takes away the `.sig` (and the SBOM's) beside
+  it, which signed the program from before.
+
 - **Ten more benchmarks for #30.** `regex-ish`, `json-deep`, `strbuild`,
   `richards`, `deltablue`, `burn-mixed`, `orchestrate` and `startup-0`,
   `startup-1`, `startup-10` join the set, each with its `.expect` output

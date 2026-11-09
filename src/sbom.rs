@@ -73,8 +73,16 @@ pub fn document(
     Ok(serde_json::to_string_pretty(&doc).expect("an SBOM serialises") + "\n")
 }
 
-/// Write the SBOM beside the program (unchanged bytes are left alone).
-pub fn write(job: &Job, source: &str, program_sha: &str, runtime: &Runtime) -> std::io::Result<()> {
+/// Write the SBOM beside `beside` (unchanged bytes are left alone).
+/// `beside` is the program's path, the final one or a staging path during
+/// the staged step of a `--sign`/`--sbom`/`--emit` build (#66).
+pub fn write(
+    job: &Job,
+    source: &str,
+    program_sha: &str,
+    runtime: &Runtime,
+    beside: &std::path::Path,
+) -> std::io::Result<()> {
     let text = document(job, source, program_sha, runtime)?;
-    crate::build::write_if_changed(&path_for(&job.out), text.as_bytes()).map(|_| ())
+    crate::build::write_if_changed(&path_for(beside), text.as_bytes()).map(|_| ())
 }

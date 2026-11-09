@@ -143,6 +143,15 @@ pub fn program_bytes(job: &Job, source: &str, runtime: &Runtime) -> std::io::Res
 
 /// Build every job; the first failure stops the build (a later script is
 /// not built from a project that is not whole).
+///
+/// `stage_to`, when passed, redirects where the program (and the SBOM)
+/// is written for each job: a staging folder beside `job.out` on the
+/// same filesystem. The job's `.out` stays the final path (what the
+/// compiler says and what the cache keys on), and a later commit step
+/// (`crate::stage::commit`) moves each staged file into place, so a
+/// failed sign or emit leaves `--out` as it was (#66). When `stage_to`
+/// is set, the fresh-cache fast path is bypassed: a staged file is new,
+/// and the up-to-date optimisation would not apply anyway.
 pub fn build(
     ctx: &Ctx,
     jobs: &[Job],
@@ -150,7 +159,11 @@ pub fn build(
     runtime: Option<&Runtime>,
     index: &mut crate::cache::Index,
     sbom: bool,
+    stage_to: Option<&[std::path::PathBuf]>,
 ) -> Result<Vec<Built>, i32> {
+    if let Some(s) = stage_to {
+        assert_eq!(s.len(), jobs.len(), "stage_to must be parallel to jobs");
+    }
     use crate::timings::{phase, progress};
     progress(
         serde_json::json!({"event": "start", "scripts": jobs.len(), "check_only": runtime.is_none()}),
@@ -190,38 +203,50 @@ pub fn build(
             &job.name,
             &hex::encode(Sha256::digest(source.as_bytes())),
         ]);
+        // Where the program (and the SBOM) is written. With staging, a
+        // path in the staging folder beside `job.out`; without, `job.out`
+        // itself.
+        let write_to: &std::path::Path = stage_to.map(|s| s[n].as_path()).unwrap_or(&job.out);
         // Unchanged since it was built: say the warnings again, check the
         // pin (a .cig-version may have come or gone), and touch nothing.
-        if let Some((sha256, warnings)) = phase(&job.file, "index", || index.fresh(&job.out, &key))
-        {
-            say_warnings(ctx, &warnings);
-            if let Err(d) = pin_holds(job, &source, &runtime.version) {
-                cigscript::cli::report(ctx, &d, None, None);
-                return Err(exit::USAGE);
-            }
-            let built = Built {
-                job: job.clone(),
-                sha256,
-                bytes: crate::cache::FileId::of(&job.out)
-                    .map(|i| i.len)
-                    .unwrap_or(0),
-                written: false,
-            };
-            if sbom {
-                if let Err(e) = crate::sbom::write(job, &source, &built.sha256, runtime) {
-                    let d = usage(format!("cannot write the SBOM beside the program: {e}"))
-                        .code("E1004")
-                        .with_hint("write it somewhere you can with -o");
+        // The fresh-cache fast path is bypassed with staging: the staged
+        // path is a new empty folder, and the up-to-date optimisation
+        // would not apply there.
+        if stage_to.is_none() {
+            if let Some((sha256, warnings)) =
+                phase(&job.file, "index", || index.fresh(&job.out, &key))
+            {
+                say_warnings(ctx, &warnings);
+                if let Err(d) = pin_holds(job, &source, &runtime.version) {
                     cigscript::cli::report(ctx, &d, None, None);
                     return Err(exit::USAGE);
                 }
+                let built = Built {
+                    job: job.clone(),
+                    sha256,
+                    bytes: crate::cache::FileId::of(&job.out)
+                        .map(|i| i.len)
+                        .unwrap_or(0),
+                    written: false,
+                };
+                if sbom {
+                    if let Err(e) =
+                        crate::sbom::write(job, &source, &built.sha256, runtime, &job.out)
+                    {
+                        let d = usage(format!("cannot write the SBOM beside the program: {e}"))
+                            .code("E1004")
+                            .with_hint("write it somewhere you can with -o");
+                        cigscript::cli::report(ctx, &d, None, None);
+                        return Err(exit::USAGE);
+                    }
+                }
+                say(ctx, &built, target, runtime);
+                progress(
+                    serde_json::json!({"event": "built", "script": job.file, "program": job.out.to_string_lossy(), "written": false}),
+                );
+                out.push(built);
+                continue;
             }
-            say(ctx, &built, target, runtime);
-            progress(
-                serde_json::json!({"event": "built", "script": job.file, "program": job.out.to_string_lossy(), "written": false}),
-            );
-            out.push(built);
-            continue;
         }
         let warnings =
             phase(&job.file, "check", || check(ctx, job, &source)).inspect_err(|_| {
@@ -250,12 +275,15 @@ pub fn build(
         })
         .map_err(|e| cannot_write(e, &format!("read the runtime {}", runtime.path.display())))?;
         let sha256 = phase(&job.file, "hash", || hex::encode(Sha256::digest(&bytes)));
-        let written = phase(&job.file, "write", || write_if_changed(&job.out, &bytes))
-            .map_err(|e| cannot_write(e, &format!("write {}", job.out.display())))?;
+        let written = phase(&job.file, "write", || write_if_changed(write_to, &bytes))
+            .map_err(|e| cannot_write(e, &format!("write {}", write_to.display())))?;
+        // The cache keys on the final path, not the staged one: a later
+        // build sees the final file (the commit step is what puts it
+        // there) and the sha256 noted here still matches.
         index.note_program(&job.out, &key, &sha256, &warnings);
         if sbom {
             phase(&job.file, "sbom", || {
-                crate::sbom::write(job, &source, &sha256, runtime)
+                crate::sbom::write(job, &source, &sha256, runtime, write_to)
             })
             .map_err(|e| cannot_write(e, "write the SBOM beside the program"))?;
         }
