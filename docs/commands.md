@@ -33,6 +33,13 @@ A build names the machine by its target triple
 `cigcompile targets` lists them. With no `--target` a build goes to
 this machine.
 
+## Installing, updating and removing
+
+cigcompile has no commands for these; [ciginstaller](https://github.com/otmof-ops/cig-installer#install)
+does them: `ciginstaller install pack builder`, `ciginstaller update` and
+`ciginstaller uninstall cigcompile`. `ciginstaller doctor --tools` shows
+what cigcompile makes of its own runtime and caches.
+
 ## Building
 
 ### `cigcompile build`

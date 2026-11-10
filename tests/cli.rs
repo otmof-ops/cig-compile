@@ -2251,3 +2251,258 @@ fn a_program_pass_names_who_built_the_program() {
     assert!(out.contains("it named the program from before"), "{out}");
     assert!(!pass.exists());
 }
+
+// ---- `cigcompile __doctor`, and the installer in the docs ----
+
+impl Sandbox {
+    /// `cigcompile __doctor --json` with `tweak` applied to the command.
+    fn doctor_with(&self, args: &[&str], tweak: impl FnOnce(&mut Command)) -> Output {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_cigcompile"));
+        self.env(&mut c);
+        tweak(&mut c);
+        c.arg("__doctor").args(args).output().expect("run __doctor")
+    }
+}
+
+fn findings_of(o: &Output) -> serde_json::Value {
+    let v: serde_json::Value =
+        serde_json::from_slice(&o.stdout).expect("__doctor --json prints one JSON document");
+    v
+}
+
+fn finding<'a>(doc: &'a serde_json::Value, check: &str) -> &'a serde_json::Value {
+    doc["findings"]
+        .as_array()
+        .expect("findings is a list")
+        .iter()
+        .find(|f| f["check"] == check)
+        .unwrap_or_else(|| panic!("no finding for {check}: {doc}"))
+}
+
+#[test]
+fn doctor_json_has_the_installer_finding_shape() {
+    let sb = Sandbox::new();
+    let o = sb.doctor_with(&["--json"], |_| {});
+    assert_eq!(o.status.code(), Some(0));
+    let doc = findings_of(&o);
+    assert_eq!(doc["tool"], "cigcompile");
+    assert_eq!(doc["version"], env!("CARGO_PKG_VERSION"));
+    let list = doc["findings"].as_array().expect("a list");
+    assert!(!list.is_empty());
+    for f in list {
+        let keys: Vec<&str> = f.as_object().unwrap().keys().map(String::as_str).collect();
+        for k in ["check", "severity", "found", "because", "fix"] {
+            assert!(keys.contains(&k), "{f} lacks {k}");
+        }
+        assert_eq!(keys.len(), 5, "{f}");
+        assert!(f["check"].is_string() && f["found"].is_string() && f["because"].is_string());
+        assert!(
+            matches!(f["severity"].as_str(), Some("ok" | "note" | "action")),
+            "{f}"
+        );
+        assert!(f["fix"].is_null() || f["fix"].is_string(), "{f}");
+    }
+    for check in [
+        "runtime",
+        "runtime-pin",
+        "cache",
+        "humidor",
+        "fetched-runtimes",
+        "openssh",
+    ] {
+        finding(&doc, check);
+    }
+}
+
+#[test]
+fn doctor_finds_the_runtime_it_would_use_and_agrees_with_the_pin() {
+    let sb = Sandbox::new();
+    let doc = findings_of(&sb.doctor_with(&["--json"], |_| {}));
+    let rt = finding(&doc, "runtime");
+    assert_eq!(rt["severity"], "ok", "{rt}");
+    assert!(rt["found"].as_str().unwrap().contains("CIGCOMPILE_RUNTIME"));
+    let pin = finding(&doc, "runtime-pin");
+    assert_eq!(pin["severity"], "ok", "{pin}");
+    let version = sb.cc(&["--version"]);
+    let version = String::from_utf8_lossy(&version.stdout);
+    let says = version.trim().split("makes programs for ").nth(1).unwrap();
+    let cig = says.trim_end_matches(')');
+    assert!(pin["found"].as_str().unwrap().contains(cig), "{pin}");
+}
+
+#[test]
+fn doctor_says_when_the_runtime_is_not_usable_and_still_exits_zero() {
+    let sb = Sandbox::new();
+    let missing = sb.path().join("no-such-cig");
+    let o = sb.doctor_with(&["--json"], |c| {
+        c.env("CIGCOMPILE_RUNTIME", &missing);
+    });
+    assert_eq!(o.status.code(), Some(0));
+    let doc = findings_of(&o);
+    let rt = finding(&doc, "runtime");
+    assert_eq!(rt["severity"], "action", "{rt}");
+    assert!(rt["fix"].as_str().unwrap().contains("--runtime"), "{rt}");
+    assert_eq!(finding(&doc, "runtime-pin")["severity"], "note");
+}
+
+#[test]
+fn doctor_counts_what_is_kept_with_sizes() {
+    let sb = Sandbox::new();
+    let home = sb.path().join("home");
+    let fetched = home
+        .join("cigcompile")
+        .join("runtimes")
+        .join("0.0.1")
+        .join("linux-x86_64");
+    fs::create_dir_all(&fetched).unwrap();
+    fs::write(fetched.join("cig"), vec![0u8; 2048]).unwrap();
+    fs::create_dir_all(home.join("cache").join("compile")).unwrap();
+    fs::write(
+        home.join("cache").join("compile").join("index.json"),
+        br#"{"format":1,"runtimes":{},"programs":{}}"#,
+    )
+    .unwrap();
+    let doc = findings_of(&sb.doctor_with(&["--json"], |_| {}));
+    let f = finding(&doc, "fetched-runtimes");
+    assert_eq!(f["severity"], "note", "{f}");
+    assert!(f["found"].as_str().unwrap().contains("2.0 KiB"), "{f}");
+    assert!(f["found"].as_str().unwrap().contains("0.0.1"), "{f}");
+    assert_eq!(finding(&doc, "cache")["severity"], "ok");
+    assert!(finding(&doc, "cache")["found"]
+        .as_str()
+        .unwrap()
+        .contains("B"));
+    // A damaged build index is a note: it is only a shortcut.
+    fs::write(home.join("cache").join("compile").join("index.json"), b"{").unwrap();
+    let doc = findings_of(&sb.doctor_with(&["--json"], |_| {}));
+    assert_eq!(finding(&doc, "cache")["severity"], "note");
+}
+
+#[test]
+fn doctor_notes_a_missing_openssh_only_as_a_note() {
+    let sb = Sandbox::new();
+    let empty = sb.path().join("empty-path");
+    fs::create_dir_all(&empty).unwrap();
+    let doc = findings_of(&sb.doctor_with(&["--json"], |c| {
+        c.env("PATH", &empty);
+    }));
+    let f = finding(&doc, "openssh");
+    assert_eq!(f["severity"], "note", "{f}");
+    assert!(f["found"].as_str().unwrap().contains("ssh-keygen"), "{f}");
+}
+
+#[test]
+fn doctor_writes_nothing() {
+    let sb = Sandbox::new();
+    let before: Vec<_> = fs::read_dir(sb.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    let o = sb.doctor_with(&["--json"], |_| {});
+    assert_eq!(o.status.code(), Some(0));
+    let after: Vec<_> = fs::read_dir(sb.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert_eq!(
+        before, after,
+        "the home and the build index are not created"
+    );
+    assert!(!sb.path().join("home").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_never_calls_the_installer() {
+    use std::os::unix::fs::PermissionsExt;
+    let sb = Sandbox::new();
+    let bin = sb.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let marker = sb.path().join("installer-was-called");
+    let fake = bin.join("ciginstaller");
+    fs::write(
+        &fake,
+        format!("#!/bin/sh\ntouch '{}'\nexit 9\n", marker.display()),
+    )
+    .unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    let o = sb.doctor_with(&["--json"], |c| {
+        c.env("PATH", &path)
+            .env("CIGSCRIPT_HOME", sb.path().join("home"));
+    });
+    assert_eq!(o.status.code(), Some(0));
+    assert!(!marker.exists(), "__doctor called ciginstaller");
+}
+
+#[test]
+fn doctor_text_exits_zero_and_is_hidden_from_help() {
+    let sb = Sandbox::new();
+    let o = sb.doctor_with(&[], |_| {});
+    assert_eq!(o.status.code(), Some(0));
+    let text = String::from_utf8_lossy(&o.stdout);
+    assert!(text.contains("runtime:"), "{text}");
+    let help = String::from_utf8_lossy(&sb.cc(&["--help"]).stdout).to_string();
+    assert!(!help.contains("__doctor"), "{help}");
+}
+
+/// A file of the repository, read as the docs a reader sees.
+fn repo_text(rel: &str) -> String {
+    fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(rel))
+        .unwrap_or_else(|e| panic!("{rel}: {e}"))
+}
+
+#[test]
+fn the_docs_install_through_ciginstaller_and_teach_no_manual_recipe() {
+    for rel in ["README.md", "docs/getting-started.md"] {
+        let t = repo_text(rel);
+        for gone in [
+            "gh attestation verify",
+            "sha256sum -c",
+            "shasum -a 256 -c",
+            "install -m 755",
+            "curl -LO",
+            "curl -fsSLO",
+            "base=https://github.com",
+        ] {
+            assert!(!t.contains(gone), "{rel} still teaches `{gone}`");
+        }
+        assert!(t.contains("ciginstaller install pack builder"), "{rel}");
+        assert!(t.contains("ciginstaller install carton"), "{rel}");
+        assert!(
+            t.contains("https://github.com/otmof-ops/cig-installer#install"),
+            "{rel}"
+        );
+    }
+}
+
+#[test]
+fn the_docs_name_the_installers_update_uninstall_and_bug_commands() {
+    let support = repo_text("SUPPORT.md");
+    assert!(support.contains("ciginstaller update"));
+    assert!(support.contains("ciginstaller uninstall cigcompile"));
+    assert!(support.contains("ciginstaller bug cigcompile"));
+    assert!(support.contains("cigcompile reduce"));
+    for rel in ["docs/README.md", "docs/troubleshooting.md"] {
+        assert!(repo_text(rel).contains("ciginstaller"), "{rel}");
+    }
+    assert!(repo_text("docs/README.md").contains("ciginstaller uninstall cigcompile"));
+    let bug = repo_text(".github/ISSUE_TEMPLATE/bug-report.yml");
+    assert!(bug.contains("ciginstaller bug cigcompile"));
+    assert!(bug.contains("cigcompile reduce"));
+    assert!(bug.contains("ciginstaller status"));
+}
+
+#[test]
+fn cigcompile_has_no_update_or_uninstall_commands() {
+    let sb = Sandbox::new();
+    for sub in ["update", "uninstall", "doctor"] {
+        let o = sb.cc(&[sub]);
+        assert_eq!(o.status.code(), Some(3), "{sub} is not a command");
+    }
+}

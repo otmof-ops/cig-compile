@@ -3,6 +3,20 @@
 All notable changes to CigCompile. The format follows Keep a Changelog; the
 project follows semantic versioning.
 
+## Unreleased
+
+- **Installed by ciginstaller.** The README and getting-started guide no
+  longer teach a manual download, checksum and install; they name
+  `ciginstaller install pack builder` (or `install carton`), `ciginstaller
+  update` and `ciginstaller uninstall cigcompile`. Releases, asset names
+  and checksums are unchanged.
+- **`cigcompile __doctor [--json]`** (hidden): the checks only cigcompile
+  can make, for `ciginstaller doctor --tools`. It is read-only, runs
+  nothing, always exits 0, and reports the pinned cig runtime, the build
+  index, the humidor, fetched runtimes and OpenSSH.
+- **Bugs** go to `ciginstaller bug cigcompile` once the installer has it;
+  the bug template and SUPPORT.md say so, and suggest `cigcompile reduce`.
+
 ## 0.3.0 — 2026-11-09
 
 Programs for cig 1.20.0; program passes; a signed build that writes

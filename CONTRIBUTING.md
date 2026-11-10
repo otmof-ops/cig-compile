@@ -11,6 +11,11 @@ cargo test                     # unit and end-to-end tests
 CIGSCRIPT_SRC=../cig-script cargo test --release --test differential   # the differential suite
 ```
 
+To use a checkout's build in place of an installed cigcompile, run
+`target/release/cigcompile`; it finds the `cig-runtime` beside it first.
+People who are not developing cigcompile install it with
+[ciginstaller](https://github.com/otmof-ops/cig-installer#install).
+
 The differential suite needs a checkout of CigScript at the version this
 compiler pins (`Cargo.toml`). CI runs formatting, clippy, the tests, the
 differential suite and the budgets on five machines. A program that says or

@@ -8,11 +8,14 @@ body:
       value: |
         Nobody's on trial. Four things make a report easy to fix; the rest is optional.
         Take anything secret out of what you paste.
+
+        Once your ciginstaller has it, `ciginstaller bug cigcompile` gathers this for you
+        and files it here. Until then, fill in the form below.
   - type: textarea
     id: script
     attributes:
       label: The script
-      description: The .cig file, or the smallest one that still shows the problem. `cigcompile reduce <script>` cuts a differing script down for you.
+      description: The .cig file, or the smallest one that still shows the problem. Run `cigcompile reduce <script>` first: it cuts a differing script down to the smallest one that still shows it.
       render: text
     validations:
       required: true
@@ -41,7 +44,7 @@ body:
     id: versions
     attributes:
       label: Versions and platform
-      description: "`cigcompile --version`, `cig --version`, and your operating system."
+      description: "`cigcompile --version`, `cig --version`, `ciginstaller status`, and your operating system."
       placeholder: cigcompile 0.3.0 (makes programs for cig 1.20.0), cig 1.20.0, Linux x86_64
     validations:
       required: true
