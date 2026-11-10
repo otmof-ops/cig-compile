@@ -85,7 +85,7 @@ pub fn run(what: &str, args: &[String]) -> i32 {
         eprintln!("{}", missing_message(what, command.trim_end()));
         return MISSING;
     };
-    match Command::new(&exe).args(args).status() {
+    match status_retry(Command::new(&exe).args(args)) {
         Ok(status) => match status.code() {
             Some(code) => code,
             None => {
@@ -113,6 +113,22 @@ pub fn report(args: &[String]) -> i32 {
     let mut full = vec!["bug".to_string(), "cigcompile".to_string()];
     full.extend(args.iter().cloned());
     run("cigcompile report", &full)
+}
+
+/// `Command::status`, tried again for a moment while the program file is still held open by
+/// whoever just wrote it: Linux and macOS answer "text file busy" (ETXTBSY) right after an
+/// installer is written, as by `ciginstaller self update`.
+fn status_retry(cmd: &mut Command) -> std::io::Result<std::process::ExitStatus> {
+    let mut tries = 0;
+    loop {
+        match cmd.status() {
+            Err(e) if cfg!(unix) && e.raw_os_error() == Some(26) && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            r => return r,
+        }
+    }
 }
 
 #[cfg(test)]
