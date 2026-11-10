@@ -36,8 +36,10 @@ is the first of:
 3. `cig` on `PATH` or in the humidor, when its version matches;
 4. cig's static release, fetched once.
 
-With none of the four, install cig of the pinned version (`cig
-update`, or the release), or pass one with `--runtime`.
+With none of the four, let a build fetch cig's release, or pass a cig
+of the pinned version with `--runtime`. `ciginstaller doctor --tools`
+shows which of the four this machine would use, and
+`ciginstaller update` brings cigcompile and the cig it pins up together.
 
 For another machine, the runtime is always cig's release asset for
 it. `CIGCOMPILE_OFFLINE=1` forbids the fetch; `cigcompile fetch
@@ -52,7 +54,8 @@ error[E1002 usage]: /home/you/old/cig is cig 1.16.1; this cigcompile makes progr
 
 A cig given with `--runtime` must be the version this compiler pins
 (`cigcompile --version` says which). Pass a cig of that version, or
-install the cigcompile for the cig you have.
+get the cigcompile for the cig you have (`ciginstaller update` moves
+both to a tested pair).
 
 ### `E1003 the script's pin is not met`
 

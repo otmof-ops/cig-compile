@@ -6,27 +6,20 @@ check what came out.
 
 ## 1. Install cigcompile
 
-Pick the release you want. These guides use `$v` for the version so you
-can paste along; set it to a release that exists on the
-[releases page](https://github.com/otmof-ops/cig-compile/releases):
+[ciginstaller](https://github.com/otmof-ops/cig-installer) installs it,
+and checks the download against the release's sha256 and attestation
+first:
 
 ```sh
-v=v0.3.0                                                 # the release to install
-asset=linux-x86_64                                       # or linux-aarch64, linux-arm,
-                                                         # macos-aarch64, macos-x86_64,
-                                                         # freebsd-x86_64
-base=https://github.com/otmof-ops/cig-compile/releases/download/$v
-curl -fsSLO "$base/cigcompile-$v-$asset" -fsSLO "$base/cigcompile-$v-$asset.sha256"
-sha256sum -c "cigcompile-$v-$asset.sha256"               # shasum -a 256 -c on macOS
-gh attestation verify "cigcompile-$v-$asset" -R otmof-ops/cig-compile
-install -m 755 "cigcompile-$v-$asset" ~/.local/bin/cigcompile
+ciginstaller install pack builder      # cigcompile with the builder's other tools
+# or: ciginstaller install carton      # the whole family at one tested version
 cigcompile --version
 ```
 
-The checksum rejects a download that isn't the published binary; the
-attestation says the GitHub Actions workflow in this repository built it.
-On Windows the asset is `cigcompile-$v-windows-x86_64.exe` or
-`-windows-aarch64.exe`.
+No ciginstaller yet? [How to get it today](https://github.com/otmof-ops/cig-installer#install)
+is in its README; once it has a release, that page shows its bootstrap
+script. To update cigcompile later, run `ciginstaller update`; to remove
+it, `ciginstaller uninstall cigcompile`.
 
 cigcompile needs nothing else installed. A build for this machine uses the
 `cig` of the pinned version when it's here, and fetches cig's release the

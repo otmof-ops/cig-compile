@@ -100,24 +100,32 @@ and puts everything back, with no cig on the machine:
 
 ## Install
 
-Each release has an asset for every machine cig is released for, with its
-sha256 and a build provenance attestation:
+cigcompile is installed by [ciginstaller](https://github.com/otmof-ops/cig-installer),
+which checks every download against the release's published sha256 and
+attestation before it puts anything on your machine:
 
 ```sh
-v=v0.3.0 asset=linux-x86_64     # the latest release; or linux-aarch64, linux-arm, macos-aarch64, macos-x86_64, freebsd-x86_64
-base=https://github.com/otmof-ops/cig-compile/releases/download/$v
-curl -LO "$base/cigcompile-$v-$asset" -LO "$base/cigcompile-$v-$asset.sha256"
-sha256sum -c "cigcompile-$v-$asset.sha256"                       # shasum -a 256 -c on macOS
-gh attestation verify "cigcompile-$v-$asset" -R otmof-ops/cig-compile
-install -m 755 "cigcompile-$v-$asset" ~/.local/bin/cigcompile
+ciginstaller install pack builder     # cigcompile with the rest of the builder's tools
+ciginstaller install carton           # or the whole carton, the family at one tested version
+cigcompile --version
 ```
 
-On Windows the assets are `cigcompile-<version>-windows-x86_64.exe` and
-`-windows-aarch64.exe`. The compiler needs nothing else: the first build
-for a machine fetches cig's release for it, once, and holds it to the
-sha256 this compiler was built knowing. `cigcompile fetch --all` does that
-ahead of time, for a machine that builds offline. The `LICENSE`, `NOTICE`,
-`THIRD-PARTY-NOTICES.md` and the SBOM are beside the assets.
+No ciginstaller yet? [How to get it](https://github.com/otmof-ops/cig-installer#install)
+is at the top of its README; once it has a release, that page shows its
+bootstrap script. Keeping cigcompile current and removing it are the
+installer's too: `ciginstaller update`, and `ciginstaller uninstall
+cigcompile`. `ciginstaller doctor --tools` checks this machine, and
+includes what cigcompile can see of its own state.
+
+To build cigcompile from a checkout instead, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+The compiler needs nothing else: the first build for a machine fetches
+cig's release for it, once, and holds it to the sha256 this compiler was
+built knowing. `cigcompile fetch --all` does that ahead of time, for a
+machine that builds offline. Releases keep their assets (`cigcompile-<version>-<machine>`,
+each with a `.sha256`), the `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES.md`
+and the SBOM beside them; they are what the installer reads.
 
 ## Where it runs
 

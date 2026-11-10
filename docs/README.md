@@ -5,9 +5,11 @@ or an error code.
 
 **Learn it**
 
-- [Getting started](getting-started.md): install cigcompile, build your
-  first program, run it on a machine with no cig, then build one for
-  another machine and verify what came out.
+- [Getting started](getting-started.md): install cigcompile with
+  ciginstaller, build your first program, run it on a machine with no
+  cig, then build one for another machine and verify what came out.
+  Updating and removing cigcompile are ciginstaller's too:
+  `ciginstaller update` and `ciginstaller uninstall cigcompile`.
 
 **Look it up**
 

@@ -11,6 +11,7 @@ mod build;
 mod cache;
 mod deb;
 mod digests;
+mod doctor;
 mod fat;
 mod fetch;
 mod gzip;
@@ -78,6 +79,9 @@ enum Command {
     Reduce(ReduceArgs),
     /// Generate a Homebrew formula or a Scoop manifest for a release, pointing at its release assets by URL and sha256. Nothing is built.
     Package(PackageArgs),
+    /// The checks only cigcompile can make, for `ciginstaller doctor --tools` (read-only; --json for the findings).
+    #[command(name = "__doctor", hide = true)]
+    Doctor,
 }
 
 #[derive(Args)]
@@ -360,6 +364,7 @@ fn run() -> i32 {
             },
         ),
         Some(Command::Package(a)) => package_cmd(&ctx, &a),
+        Some(Command::Doctor) => doctor::run(&ctx),
         Some(Command::Bench(a)) => {
             let mut index = cache::Index::load();
             let found = runtime::find(runtime::host(), a.runtime.as_deref(), &mut index);
