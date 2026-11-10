@@ -15,6 +15,7 @@ cigcompile audit <program>
 cigcompile verify <program> [--script s.cig] [--runtime cig]
                             [--signature <sig>] [--allowed-signers <file>] [--identity <id>]
                             [--pass <program>.pass]
+cigcompile report [ciginstaller bug options]
 cigcompile reduce <script> [-o out] [--runtime cig] [-- command...]
 cigcompile package --brew|--scoop [--manifest FILE]
                    [--name N --version V --homepage URL --license SPDX --description TEXT]
@@ -32,6 +33,17 @@ A build names the machine by its target triple
 (`x86_64-unknown-linux-musl`, `aarch64-apple-darwin`...), as
 `cigcompile targets` lists them. With no `--target` a build goes to
 this machine.
+
+### `cigcompile report`
+
+`cigcompile report [options]` is the short way in to
+`ciginstaller bug cigcompile`: it runs that with your options, shows what
+it prints and exits with its exit code. Run `cigcompile reduce` first, so the
+report carries the smallest script that still shows the problem. With no
+ciginstaller on `PATH`, in `$CIGSCRIPT_HOME/bin` or in `~/.cigscript/bin` it
+says so, prints how to get one and exits `127`. Until your ciginstaller has
+`bug`, file [a bug report](https://github.com/otmof-ops/cig-compile/issues/new?template=bug-report.yml).
+Messages that ask you to report a bug name the same two commands.
 
 ## Installing, updating and removing
 

@@ -9,8 +9,8 @@ body:
         Nobody's on trial. Four things make a report easy to fix; the rest is optional.
         Take anything secret out of what you paste.
 
-        Once your ciginstaller has it, `ciginstaller bug cigcompile` gathers this for you
-        and files it here. Until then, fill in the form below.
+        Once your ciginstaller has it, `ciginstaller bug cigcompile` (or `cigcompile report`,
+        which runs it) gathers this for you and files it here. Until then, fill in the form below.
   - type: textarea
     id: script
     attributes:

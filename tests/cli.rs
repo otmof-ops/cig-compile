@@ -2506,3 +2506,84 @@ fn cigcompile_has_no_update_or_uninstall_commands() {
         assert_eq!(o.status.code(), Some(3), "{sub} is not a command");
     }
 }
+
+/// A fake `ciginstaller` in `bin` that records its arguments and exits `code`.
+#[cfg(unix)]
+fn fake_installer(sb: &Sandbox, code: i32) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = sb.path().join("fakebin");
+    fs::create_dir_all(&bin).unwrap();
+    let log = sb.path().join("installer-args");
+    let fake = bin.join("ciginstaller");
+    fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done > '{}'\necho from-the-installer\nexit {code}\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    (bin, log)
+}
+
+#[cfg(unix)]
+#[test]
+fn report_hands_over_to_ciginstaller_bug_and_passes_the_exit_code_through() {
+    let sb = Sandbox::new();
+    let (bin, log) = fake_installer(&sb, 7);
+    let mut c = Command::new(env!("CARGO_BIN_EXE_cigcompile"));
+    sb.env(&mut c);
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    let o = c
+        .env("PATH", path)
+        .args(["report", "--last", "--help", "x y"])
+        .output()
+        .expect("run cigcompile");
+    assert_eq!(o.status.code(), Some(7));
+    assert!(text(&o.stdout).contains("from-the-installer"));
+    assert_eq!(
+        fs::read_to_string(log).unwrap(),
+        "bug\ncigcompile\n--last\n--help\nx y\n"
+    );
+}
+
+#[test]
+fn report_without_ciginstaller_says_whose_job_it_is_and_exits_127() {
+    let sb = Sandbox::new();
+    let mut c = Command::new(env!("CARGO_BIN_EXE_cigcompile"));
+    sb.env(&mut c);
+    let o = c
+        .env("PATH", "")
+        .env("HOME", sb.path().join("nohome"))
+        .args(["report"])
+        .output()
+        .expect("run cigcompile");
+    assert_eq!(o.status.code(), Some(127));
+    let err = text(&o.stderr);
+    let mut lines = err.lines();
+    assert_eq!(
+        lines.next(),
+        Some("cigcompile report is ciginstaller's job now: ciginstaller bug cigcompile")
+    );
+    assert_eq!(
+        lines.next(),
+        Some("get ciginstaller: https://github.com/otmof-ops/cig-installer#install")
+    );
+}
+
+#[test]
+fn the_docs_name_cigcompile_report_beside_the_installers_bug() {
+    for rel in [
+        "SUPPORT.md",
+        "docs/commands.md",
+        ".github/ISSUE_TEMPLATE/bug-report.yml",
+    ] {
+        let t = repo_text(rel);
+        assert!(t.contains("cigcompile report"), "{rel}");
+        assert!(t.contains("ciginstaller bug cigcompile"), "{rel}");
+    }
+}

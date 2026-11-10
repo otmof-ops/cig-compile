@@ -114,7 +114,10 @@ pub fn fetch(t: &Target, say: bool) -> Result<PathBuf, Diagnostic> {
         let _ = std::fs::remove_file(&tmp);
         return Err(no(
             format!("{name} as fetched has sha256 {got}; this cigcompile accepts only {want}"),
-            "nothing was kept; fetch again, and report it if it persists".to_string(),
+            format!(
+                "nothing was kept; fetch again, and if it persists {}",
+                crate::installer::please_report()
+            ),
         ));
     }
     #[cfg(unix)]

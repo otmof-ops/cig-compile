@@ -15,6 +15,7 @@ mod doctor;
 mod fat;
 mod fetch;
 mod gzip;
+mod installer;
 mod oci;
 mod pass;
 mod pkg;
@@ -79,6 +80,13 @@ enum Command {
     Reduce(ReduceArgs),
     /// Generate a Homebrew formula or a Scoop manifest for a release, pointing at its release assets by URL and sha256. Nothing is built.
     Package(PackageArgs),
+    /// Report a bug: hands over to `ciginstaller bug cigcompile`, with whatever follows.
+    #[command(disable_help_flag = true)]
+    Report {
+        /// Passed to `ciginstaller bug cigcompile` as given.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
+        args: Vec<String>,
+    },
     /// The checks only cigcompile can make, for `ciginstaller doctor --tools` (read-only; --json for the findings).
     #[command(name = "__doctor", hide = true)]
     Doctor,
@@ -365,6 +373,7 @@ fn run() -> i32 {
         ),
         Some(Command::Package(a)) => package_cmd(&ctx, &a),
         Some(Command::Doctor) => doctor::run(&ctx),
+        Some(Command::Report { args }) => installer::report(&args),
         Some(Command::Bench(a)) => {
             let mut index = cache::Index::load();
             let found = runtime::find(runtime::host(), a.runtime.as_deref(), &mut index);
@@ -1133,6 +1142,7 @@ fn emit_cir(
             Err(EmitError::Lower(LowerError::Internal(e))) => {
                 let d = cigscript::diagnostics::internal(format!("lowering {}: {e}", job.file));
                 cigscript::cli::report(ctx, &d, None, None);
+                eprintln!("{}", installer::please_report());
                 return Err(70);
             }
             Err(EmitError::Verify(e)) => {
@@ -1144,6 +1154,7 @@ fn emit_cir(
                     lines.join("; ")
                 ));
                 cigscript::cli::report(ctx, &d, None, None);
+                eprintln!("{}", installer::please_report());
                 return Err(70);
             }
         }
@@ -1182,6 +1193,7 @@ fn remark_only(
                         lines.join("; ")
                     ));
                     cigscript::cli::report(ctx, &d, None, None);
+                    eprintln!("{}", installer::please_report());
                     return Err(70);
                 }
             },
@@ -1192,6 +1204,7 @@ fn remark_only(
             Err(LowerError::Internal(e)) => {
                 let d = cigscript::diagnostics::internal(format!("lowering {}: {e}", job.file));
                 cigscript::cli::report(ctx, &d, None, None);
+                eprintln!("{}", installer::please_report());
                 return Err(70);
             }
         }
