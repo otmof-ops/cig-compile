@@ -16,6 +16,11 @@ project follows semantic versioning.
   index, the humidor, fetched runtimes and OpenSSH.
 - **Bugs** go to `ciginstaller bug cigcompile` once the installer has it;
   the bug template and SUPPORT.md say so, and suggest `cigcompile reduce`.
+- **`cigcompile report [args]`** is the short way in to `ciginstaller bug
+  cigcompile`: it runs it with the arguments, stdio inherited, and passes
+  its exit code through. With no ciginstaller it says so and exits 127.
+  Messages that ask for a bug report name `ciginstaller bug cigcompile` (or
+  `cigcompile report`), with the issues link as the fallback.
 
 ## 0.3.0 — 2026-11-09
 
