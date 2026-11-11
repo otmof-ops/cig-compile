@@ -10,6 +10,7 @@ mod bench;
 mod benchgate;
 mod build;
 mod cache;
+mod crash;
 mod deb;
 mod digests;
 mod doctor;
@@ -323,7 +324,27 @@ struct CleanArgs {
     force: bool,
 }
 
+/// The words a command line may say in a crash report: the parser's own subcommands and flags.
+fn cli_words() -> Vec<String> {
+    use clap::CommandFactory;
+    fn walk(c: &clap::Command, out: &mut Vec<String>) {
+        out.push(c.get_name().to_string());
+        for a in c.get_arguments() {
+            out.extend(a.get_long().map(|l| format!("--{l}")));
+            out.extend(a.get_short().map(|s| format!("-{s}")));
+        }
+        for s in c.get_subcommands() {
+            walk(s, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(&Cli::command(), &mut out);
+    out
+}
+
 fn main() {
+    // A crash joins the family's one queue (cig-installer#10); the hook is the first thing set.
+    crash::install(cli_words());
     // The same stack cig gives its parser and checker: their depth limits
     // (E208) are sized for it, and a deeply nested script must be refused,
     // not overflow the main thread's stack.
