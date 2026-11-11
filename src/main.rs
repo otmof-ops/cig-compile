@@ -29,6 +29,7 @@ mod stage;
 mod tar;
 mod test;
 mod timings;
+mod trial;
 mod verify;
 
 use build::exit;
@@ -65,6 +66,8 @@ enum Command {
     Build(BuildArgs),
     /// Build, then run each program and its script with --dry-run and compare them.
     Test(BuildArgs),
+    /// Before a project trusts a newer cigcompile: this one and that one both build the project and run its tests, and what differs is said first. The installer says where the new one is; nothing is pinned.
+    Trial(TrialArgs),
     /// Remove the programs a build of this path wrote.
     Clean(CleanArgs),
     /// The machines cig is released for, and the runtime for this one.
@@ -91,6 +94,18 @@ enum Command {
     /// The checks only cigcompile can make, for `ciginstaller doctor --tools` (read-only; --json for the findings).
     #[command(name = "__doctor", hide = true)]
     Doctor,
+}
+
+#[derive(Args)]
+struct TrialArgs {
+    /// The carton to try, as `ciginstaller pin carton` takes it (`0.2`, `0.2.0`); it must be installed (`ciginstaller install carton --carton <new>`).
+    new: String,
+    /// The project: a folder of scripts (default: this folder). It is copied; yours is not touched.
+    #[arg(long, value_name = "DIR", default_value = ".")]
+    project: PathBuf,
+    /// A folder of scripts (a differential suite) that both build and really run, stdout and exit compared, when nothing codegen-relevant differs between them.
+    #[arg(long, value_name = "DIR")]
+    differential: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -365,6 +380,14 @@ fn run() -> i32 {
             Ok(None) => exit::OK,
             Err(c) => c,
         },
+        Some(Command::Trial(a)) => trial::trial(
+            &ctx,
+            &trial::Opts {
+                new: &a.new,
+                project: &a.project,
+                differential: a.differential.as_deref(),
+            },
+        ),
         Some(Command::Clean(a)) => clean(&ctx, &a),
         Some(Command::Targets) => targets(&ctx),
         Some(Command::Fetch(a)) => fetch_cmd(&ctx, &a),

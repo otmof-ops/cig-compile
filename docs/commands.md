@@ -53,6 +53,12 @@ does them: `ciginstaller install pack builder`, `ciginstaller update` and
 `ciginstaller uninstall cigcompile`. `ciginstaller doctor --tools` shows
 what cigcompile makes of its own runtime and caches.
 
+Pins are the installer's too. `cigar = "1.0"` in `cigar.toml` (or a
+`.cigar-version`) makes the installer run the cigcompile of the carton that
+holds that cigar, so a project pinned to 1.0 keeps building with 1.0 after 1.1
+is installed. cigcompile never reads a pin; [decision 0003](decisions/0003-pins-and-trial.md)
+says why, and `cigcompile trial` is how to see what a newer one changes first.
+
 ## Building
 
 ### `cigcompile build`
@@ -153,6 +159,25 @@ At stage A a program *is* the interpreter, so a difference is a bug in
 the compiler, or in the runtime it fetched. Keep its output and
 `cigcompile reduce` cuts the script down to the smallest one that still
 shows the problem.
+
+### `cigcompile trial`
+
+`cigcompile trial <new> [--project <dir>] [--differential <dir>]` is for before
+a project trusts a newer cigcompile. `<new>` is a carton, as `ciginstaller pin
+carton` takes it (`0.2`), and it must be installed already. cigcompile asks the
+installer where that carton's cigcompile is, then this one and that one both
+build a scratch copy of the project (yours is not written to) and run its
+tests. Compared: the output and exit of `test`, and the plan of each program
+run with `--dry-run`. With `--differential <dir>`, the scripts in that folder
+are built and really run by both and compared too, when `--target`, `-O`,
+`--passes`, `--strength` and `--emit` read the same on both; if one differs the
+trial says which and skips it.
+
+The differences print first, each as a diff, then a summary, then the command
+that would trust the new version (`ciginstaller pin carton <new>`). The trial
+pins nothing. Exit `0` when nothing differs, `1` when something does, `3` when
+it could not run (no such carton, no scripts), `127` with no ciginstaller.
+`--json` prints one object: `same`, `checks`, `differences`, `notes`.
 
 ### `cigcompile clean`
 
@@ -331,9 +356,10 @@ cigcompile shares cig's exit codes for the same things:
 | code | meaning |
 |---|---|
 | `0` | ok |
-| `1` | a difference (`test` found one, `verify` found one, `bench` missed a budget) |
+| `1` | a difference (`test` found one, `verify` found one, `trial` found one, `bench` missed a budget) |
 | `2` | a script did not check |
-| `3` | a usage error (a flag, a path, a missing runtime) |
+| `3` | a usage error (a flag, a path, a missing runtime, a carton `trial` cannot find) |
+| `127` | `report` or `trial` found no ciginstaller |
 
 A deeper fault (a panic the thread wrapper catches) exits `70`.
 

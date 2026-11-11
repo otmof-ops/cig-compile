@@ -224,6 +224,20 @@ fn a_folder_builds_every_script_into_bin_and_clean_takes_only_those_out() {
     // it was built from (#9).
     let info = text(&s.prog(&a, &["--cig-program", "--json"]).stdout);
     assert!(info.contains("\"file\":\"a.cig\""), "{info}");
+    // It says which compiler made it and which cig it embeds (#6, #15): the two versions a
+    // trial of a newer cigcompile tells apart.
+    let info: serde_json::Value = serde_json::from_str(info.trim()).expect("program info is JSON");
+    assert_eq!(
+        info["compiler"],
+        format!("cigcompile {}", env!("CARGO_PKG_VERSION")),
+        "{info}"
+    );
+    let cig = text(&s.cig(&["--version"]).stdout);
+    assert_eq!(
+        format!("cig {}", info["cig"].as_str().unwrap_or("?")),
+        cig.trim(),
+        "the program embeds the cig it was built on: {info}"
+    );
     ok(&s.cc(&["clean", "proj"]));
     assert!(!s.path().join(&a).exists());
     assert!(
