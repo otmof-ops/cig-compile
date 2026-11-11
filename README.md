@@ -71,6 +71,20 @@ and puts everything back, with no cig on the machine:
 | a look inside | `--emit cir` prints the verified IR, `--remarks` says what each pass did, and `--timings` where the build's time went |
 | the numbers | `cigcompile bench` runs 29 programs interpreted and compiled, beside Python, Node and Rust ([BENCHMARKS.md](docs/BENCHMARKS.md)) |
 
+## Measuring
+
+`cigcompile bench` times the 29 programs of the set, interpreted and compiled, from fresh folders: output first (a wrong one gets no time), then the median, p10, p90 and CV of each side, and `--ref` beside Python, Node and Rust, each named with its version or said to be not installed.
+
+```sh
+cigcompile bench --ref --markdown              # the table, references and all
+cigcompile bench --json > main.json            # keep a result (it carries every sample)
+cigcompile bench --alloc ./cig-runtime-alloc   # allocation counts, from a runtime built with --features alloc-count
+cigcompile bench --against main.json           # the regression gate: exit 1 on a real slowdown
+cigcompile bench --trend history               # the nightly trend gate over a folder of dated results
+```
+
+A pull request fails on a non-noisy benchmark more than 5% slower than `main`'s, the set's geometric mean more than 2% slower, or peak memory or allocations more than 10% over; each by a Mann-Whitney test, so noise does not fail it. The nightly keeps the trend and fails after five slower nights. [BENCHMARKS.md](docs/BENCHMARKS.md#the-gates) has the rules and the tests.
+
 ## Guides
 
 | guide | read it when you want to |

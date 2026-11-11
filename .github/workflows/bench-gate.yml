@@ -1,0 +1,97 @@
+name: bench-gate
+
+# #30: a pull request against main. The fast set runs on main's build and on
+# the pull request's, round by round (main, pull request, main, pull request,
+# ...), so a runner that drifts drifts under both; the rounds are pooled and
+# `bench --against` decides: a non-noisy benchmark more than 5% slower, the
+# set's geometric mean more than 2% slower, or peak memory or allocations more
+# than 10% over main's, each by a Mann-Whitney test of the samples. The heavy
+# suites, the references and the trend are nightly (bench.yml).
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: bench-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # The fast set: each runs in well under half a second at stage A.
+  FAST: "hello,loop,fib,strings,maps,lists,json,csv,closures,dispatch,words,regex-ish,json-deep,strbuild,startup-0,startup-1,startup-10"
+  ROUNDS: "3"
+
+jobs:
+  gate:
+    name: the fast set against main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: main-src
+      - uses: dtolnay/rust-toolchain@stable
+      - name: build this pull request
+        run: |
+          cargo build --release --bin cigcompile
+          cargo build --release --bin cig-runtime --features alloc-count --target-dir target-alloc
+      - name: build main
+        id: main
+        shell: bash
+        run: |
+          cargo build --release --manifest-path main-src/Cargo.toml --target-dir main-src/target --bin cigcompile
+          # Before this gate landed, main has no `--against`: there is
+          # nothing to compare with, and the job says so rather than pass.
+          if main-src/target/release/cigcompile bench --help | grep -q -- '--against'; then
+            echo "gated=1" >> "$GITHUB_OUTPUT"
+            cargo build --release --manifest-path main-src/Cargo.toml --target-dir main-src/target-alloc --bin cig-runtime --features alloc-count
+          else
+            echo "::notice::main has no bench gate yet, so there is nothing to compare this pull request with"
+            echo "gated=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: interleaved rounds
+        if: steps.main.outputs.gated == '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir rounds
+          for r in $(seq 1 "$ROUNDS"); do
+            # Allocation counts do not vary: one round has them.
+            if [ "$r" = 1 ]; then
+              main_alloc="--alloc main-src/target-alloc/release/cig-runtime"
+              pr_alloc="--alloc target-alloc/release/cig-runtime"
+            else
+              main_alloc=""; pr_alloc=""
+            fi
+            # shellcheck disable=SC2086
+            main-src/target/release/cigcompile bench --only "$FAST" --runs 5 --json $main_alloc > "rounds/main-$r.json"
+            # shellcheck disable=SC2086
+            target/release/cigcompile bench --only "$FAST" --runs 5 --json $pr_alloc > "rounds/pr-$r.json"
+          done
+      - name: the gate
+        if: steps.main.outputs.gated == '1'
+        shell: bash
+        run: |
+          args=()
+          for r in $(seq 1 "$ROUNDS"); do
+            args+=(--against "rounds/main-$r.json" --current "rounds/pr-$r.json")
+          done
+          set +e
+          target/release/cigcompile bench "${args[@]}" --markdown > gate.md
+          status=$?
+          set -e
+          cat gate.md >> "$GITHUB_STEP_SUMMARY"
+          cat gate.md
+          exit "$status"
+      - name: the table, on the pull request
+        if: always() && steps.main.outputs.gated == '1' && github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file gate.md

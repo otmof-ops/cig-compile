@@ -18,6 +18,7 @@
 //! The budgets are held to the stage that exists: one that stage A cannot
 //! meet is said as "not yet", never as passed.
 
+use crate::benchgate;
 use crate::build::exit;
 use crate::runtime::Runtime;
 use cigscript::cli::Ctx;
@@ -203,6 +204,13 @@ pub struct Opts<'a> {
     /// One user script to bench on its own: its expected output is what
     /// `cig run <script>` prints with no arguments. Overrides the set.
     pub script: Option<&'a Path>,
+    /// A runtime built with `--features alloc-count`: one run of each
+    /// benchmark under it gives the allocation counts.
+    pub alloc: Option<&'a Path>,
+    /// Only these benchmarks of the set (the pull request job's fast set).
+    pub only: &'a [String],
+    /// `main`'s saved results to gate against (`--against`).
+    pub against: &'a [PathBuf],
 }
 
 /// How long one side may take, unless it has not got three samples yet.
@@ -221,6 +229,8 @@ pub struct Stats {
     /// Peak resident set of the largest sample, in bytes, where the system
     /// says it.
     pub rss: Option<u64>,
+    /// Every sample, in ms, for the gates' Mann-Whitney test (#30).
+    pub raw: Vec<f64>,
 }
 
 impl Stats {
@@ -240,6 +250,7 @@ impl Stats {
             cv: if mean > 0.0 { var.sqrt() / mean } else { 0.0 },
             samples: v.len(),
             rss,
+            raw: ms.to_vec(),
         }
     }
 
@@ -279,6 +290,9 @@ struct Row {
     compiled_5x: Option<Side>,
     refs: Vec<(&'static str, Side)>,
     refs_5x: Vec<(&'static str, Side)>,
+    /// Allocations and bytes allocated by one interpreted run under the
+    /// counting runtime (`--alloc`).
+    allocs: Option<(u64, u64)>,
 }
 
 /// One benchmark the harness measures: its source, its 1x expected output,
@@ -402,6 +416,19 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
             return exit::USAGE;
         }
     };
+    let set: Vec<Loaded> = if o.only.is_empty() {
+        set
+    } else {
+        for n in o.only {
+            if !set.iter().any(|b| b.name == *n) {
+                eprintln!("bench: --only {n}: no such benchmark");
+                return exit::USAGE;
+            }
+        }
+        set.into_iter()
+            .filter(|b| o.only.contains(&b.name))
+            .collect()
+    };
     let me = std::env::current_exe().expect("this program's path");
     let root = std::env::temp_dir().join(format!("cigcompile-bench-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -492,6 +519,9 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
                 (Some(five), Some(fivec))
             }
         };
+        let allocs = o
+            .alloc
+            .and_then(|rt| count_allocs(rt, &env, fresh("a", 0), name, expect, args));
         let refs: Vec<(&'static str, Side)> = LANGS
             .iter()
             .filter(|_| o.refs)
@@ -514,6 +544,7 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
             compiled_5x,
             refs,
             refs_5x,
+            allocs,
         });
     }
     // A rebuild of the first benchmark that changes nothing.
@@ -561,13 +592,31 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
         .map(|r| r.name.as_str())
         .collect();
     let missed = checks.iter().filter(|c| c.3 && !c.4).count();
-    let conditions = Conditions::here(runtime);
+    let mut conditions = Conditions::here(runtime);
+    if o.refs {
+        conditions.refs = tools.versions();
+    }
     if ctx.json {
         print_json(o, &rows, &checks, &conditions, runtime);
     } else if o.markdown {
         print_markdown(o, &rows, &checks, &conditions);
     } else {
         print_table(o, &rows, &checks, &conditions);
+    }
+    let mut gate_failed = false;
+    if !o.against.is_empty() {
+        let report = benchgate::Results::load(o.against).and_then(|base| {
+            let mut cur = benchgate::Results::default();
+            cur.add(&json_value(o, &rows, &checks, &conditions, runtime))?;
+            Ok(benchgate::compare(&base, &cur))
+        });
+        match report {
+            Ok(r) => gate_failed = print_gate(ctx.json, o.markdown, &r),
+            Err(e) => {
+                eprintln!("bench: --against: {e}");
+                return exit::USAGE;
+            }
+        }
     }
     for r in &rows {
         for (what, s) in [("interpreted", &r.interpreted), ("compiled", &r.compiled)]
@@ -588,10 +637,106 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
             eprintln!("bench: {} (compiled): {why}", r.name);
         }
     }
-    if !wrong.is_empty() || (o.budgets && missed > 0) {
+    if !wrong.is_empty() || (o.budgets && missed > 0) || gate_failed {
         exit::DIFFERS
     } else {
         exit::OK
+    }
+}
+
+/// One interpreted run of a benchmark under the counting runtime: how many
+/// allocations it made and how many bytes it asked for. The runtime writes
+/// its counts to `CIG_ALLOC_FILE` as it exits; a run whose output is wrong,
+/// or a runtime that was not built with `--features alloc-count`, gives
+/// nothing: never a zero.
+fn count_allocs(
+    runtime: &Path,
+    env: &dyn Fn(&mut Command),
+    work: PathBuf,
+    name: &str,
+    expect: &str,
+    args: &[String],
+) -> Option<(u64, u64)> {
+    let file = work.join("alloc-count.txt");
+    let mut c = Command::new(runtime);
+    env(&mut c);
+    c.current_dir(&work)
+        .env("CIG_ALLOC_FILE", &file)
+        .args(["run", &format!("{name}.cig")]);
+    if !args.is_empty() {
+        c.arg("--").args(args);
+    }
+    let m = measure(&mut c).ok()?;
+    if lines(&m.stdout) != lines(expect) {
+        return None;
+    }
+    let text = std::fs::read_to_string(&file).ok()?;
+    let mut parts = text.split_whitespace().map(|w| w.parse::<u64>().ok());
+    Some((parts.next()??, parts.next()??))
+}
+
+/// Say what the regression gate found; true when it fails the run. The
+/// table goes to stdout, or to stderr when stdout carries `--json`.
+fn print_gate(json: bool, markdown: bool, r: &benchgate::Report) -> bool {
+    let text = benchgate::render(r, markdown);
+    let failures = r.failures();
+    let verdict = if failures.is_empty() {
+        "the regression gate passes".to_string()
+    } else {
+        format!("the regression gate FAILS:\n  {}", failures.join("\n  "))
+    };
+    if json {
+        eprintln!("\n{text}\n{verdict}");
+    } else {
+        println!("\n{text}\n{verdict}");
+    }
+    !failures.is_empty()
+}
+
+/// `bench --current` and `bench --trend`: the gates over saved results,
+/// with nothing run and no runtime looked for.
+pub fn gate_only(
+    ctx: &Ctx,
+    trend: Option<&Path>,
+    against: &[PathBuf],
+    current: &[PathBuf],
+    markdown: bool,
+) -> i32 {
+    if let Some(dir) = trend {
+        return match benchgate::trend(dir) {
+            Ok(t) => {
+                println!("{}", benchgate::render_trend(&t));
+                if t.failed() {
+                    exit::DIFFERS
+                } else {
+                    exit::OK
+                }
+            }
+            Err(e) => {
+                eprintln!("bench: --trend: {e}");
+                exit::USAGE
+            }
+        };
+    }
+    match (
+        benchgate::Results::load(against),
+        benchgate::Results::load(current),
+    ) {
+        (Ok(base), Ok(cur)) => {
+            if print_gate(ctx.json, markdown, &benchgate::compare(&base, &cur)) {
+                exit::DIFFERS
+            } else {
+                exit::OK
+            }
+        }
+        (Err(e), _) => {
+            eprintln!("bench: --against: {e}");
+            exit::USAGE
+        }
+        (_, Err(e)) => {
+            eprintln!("bench: --current: {e}");
+            exit::USAGE
+        }
     }
 }
 
@@ -749,6 +894,38 @@ impl RefTools {
         }
     }
 
+    /// Each reference tool with its version, or `not installed`: a missing
+    /// tool is said, and its column has no numbers.
+    fn versions(&self) -> Vec<(&'static str, String)> {
+        let ask = |tool: &Option<PathBuf>, arg: &str| -> String {
+            let Some(t) = tool else {
+                return "not installed".into();
+            };
+            Command::new(t)
+                .arg(arg)
+                .stdin(Stdio::null())
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| {
+                    let text = String::from_utf8_lossy(if o.stdout.is_empty() {
+                        &o.stderr
+                    } else {
+                        &o.stdout
+                    })
+                    .to_string();
+                    text.lines().next().unwrap_or_default().trim().to_string()
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "installed, version unknown".into())
+        };
+        vec![
+            ("Python", ask(&self.python, "--version")),
+            ("Node", ask(&self.node, "--version")),
+            ("Rust", ask(&self.rustc, "--version")),
+        ]
+    }
+
     fn side(&self, name: &str, lang: &str, runs: usize, expect: &str, scale: usize) -> Side {
         let Some((_, _, source)) = REFS.iter().find(|(n, l, _)| *n == name && *l == lang) else {
             return Side::Absent("no reference".into());
@@ -820,6 +997,8 @@ struct Conditions {
     governor: Option<String>,
     seal_key: String,
     runtime_sha256: String,
+    /// The reference tools, each with its version or `not installed`.
+    refs: Vec<(&'static str, String)>,
 }
 
 impl Conditions {
@@ -865,7 +1044,16 @@ impl Conditions {
             governor: read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"),
             seal_key: "file".into(),
             runtime_sha256,
+            refs: Vec::new(),
         }
+    }
+
+    /// The reference tools and their versions, said with the report.
+    fn refs_line(&self) -> Option<String> {
+        (!self.refs.is_empty()).then(|| {
+            let parts: Vec<String> = self.refs.iter().map(|(l, v)| format!("{l}: {v}")).collect();
+            format!("references: {}", parts.join("; "))
+        })
     }
 
     fn line(&self, runtime_version: &str) -> String {
@@ -1000,6 +1188,11 @@ fn ratio(r: &Row, other: &Side) -> String {
     }
 }
 
+/// Allocation count as a cell: the number, or a dash where there is none.
+fn alloc_cell(a: Option<(u64, u64)>) -> String {
+    a.map(|(n, _)| n.to_string()).unwrap_or_else(|| "-".into())
+}
+
 fn rss_cell(s: &Side) -> String {
     s.stats()
         .and_then(|st| st.rss)
@@ -1014,11 +1207,17 @@ fn print_table(o: &Opts, rows: &[Row], checks: &[Check], c: &Conditions) {
         o.runs
     );
     println!("{}", c.line(version));
+    if let Some(l) = c.refs_line() {
+        println!("{l}");
+    }
     println!();
     let mut head = format!(
         "{:<11} {:>9} {:>8} {:>12} {:>10} {:>10} {:>6} {:>8}",
         "program", "build ms", "size MB", "interpreted", "compiled", "compute ms", "CV", "RSS MB"
     );
+    if o.alloc.is_some() {
+        head.push_str(&format!(" {:>10}", "allocs"));
+    }
     for (_, title) in LANGS.iter().filter(|_| o.refs) {
         head.push_str(&format!(" {title:>8}"));
     }
@@ -1043,6 +1242,9 @@ fn print_table(o: &Opts, rows: &[Row], checks: &[Check], c: &Conditions) {
             cv,
             rss_cell(&r.interpreted)
         );
+        if o.alloc.is_some() {
+            line.push_str(&format!(" {:>10}", alloc_cell(r.allocs)));
+        }
         for (_, s) in &r.refs {
             line.push_str(&format!(" {:>8}", cell(s)));
         }
@@ -1098,11 +1300,18 @@ fn medians_line(rows: &[Row]) -> String {
 
 fn print_markdown(o: &Opts, rows: &[Row], checks: &[Check], c: &Conditions) {
     println!("**cigcompile bench**: {}", c.line(cigscript::VERSION));
+    if let Some(l) = c.refs_line() {
+        println!("\n{l}");
+    }
     println!();
     let mut head =
         "| benchmark | stresses | interpreted ms | compiled ms | compute ms | p10 to p90 | CV | RSS MB |"
             .to_string();
     let mut rule = "|---|---|---:|---:|---:|---|---:|---:|".to_string();
+    if o.alloc.is_some() {
+        head.push_str(" allocations |");
+        rule.push_str("---:|");
+    }
     for (_, title) in LANGS.iter().filter(|_| o.refs) {
         head.push_str(&format!(" {title} ms |"));
         rule.push_str("---:|");
@@ -1132,6 +1341,9 @@ fn print_markdown(o: &Opts, rows: &[Row], checks: &[Check], c: &Conditions) {
             compute_cell(&r.interpreted, r.interpreted_5x.as_ref()),
             rss_cell(&r.interpreted)
         );
+        if o.alloc.is_some() {
+            line.push_str(&format!(" {} |", alloc_cell(r.allocs)));
+        }
         for (_, s) in &r.refs {
             line.push_str(&format!(" {} |", cell(s)));
         }
@@ -1161,6 +1373,7 @@ fn side_json(s: &Side) -> serde_json::Value {
         Side::Timed(st) => serde_json::json!({
             "median_ms": st.median, "p10_ms": st.p10, "p90_ms": st.p90, "cv": st.cv,
             "samples": st.samples, "noisy": st.noisy(), "rss_bytes": st.rss,
+            "samples_ms": st.raw,
         }),
         Side::Wrong(why) => serde_json::json!({"wrong": why}),
         Side::Absent(why) => serde_json::json!({"absent": why}),
@@ -1168,6 +1381,16 @@ fn side_json(s: &Side) -> serde_json::Value {
 }
 
 fn print_json(o: &Opts, rows: &[Row], checks: &[Check], c: &Conditions, runtime: &Runtime) {
+    println!("{}", json_value(o, rows, checks, c, runtime));
+}
+
+fn json_value(
+    o: &Opts,
+    rows: &[Row],
+    checks: &[Check],
+    c: &Conditions,
+    runtime: &Runtime,
+) -> serde_json::Value {
     let rows: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
@@ -1187,6 +1410,7 @@ fn print_json(o: &Opts, rows: &[Row], checks: &[Check], c: &Conditions, runtime:
                 "interpreted_5x": r.interpreted_5x.as_ref().map(side_json),
                 "compiled_5x": r.compiled_5x.as_ref().map(side_json),
                 "compute_ms": compute_ms(&r.interpreted, r.interpreted_5x.as_ref()),
+                "allocs": r.allocs.map(|(n, b)| serde_json::json!({"count": n, "bytes": b})),
                 "refs": refs, "refs_5x": refs_5x,
             })
         })
@@ -1195,15 +1419,15 @@ fn print_json(o: &Opts, rows: &[Row], checks: &[Check], c: &Conditions, runtime:
         .iter()
         .map(|c| serde_json::json!({"what": c.0, "budget": c.1, "measured": c.2, "applies": c.3, "met": c.4}))
         .collect();
-    println!(
-        "{}",
+    {
         serde_json::json!({
             "stage": "A", "runs": o.runs, "cig": runtime.version, "cigcompile": env!("CARGO_PKG_VERSION"),
             "conditions": {"cpu": c.cpu, "cores": c.cores, "kernel": c.kernel, "governor": c.governor,
                            "seal_key": c.seal_key, "runtime_sha256": c.runtime_sha256},
+            "references": c.refs.iter().map(|(l, v)| (l.to_string(), serde_json::Value::from(v.as_str()))).collect::<serde_json::Map<_, _>>(),
             "programs": rows, "budgets": checks,
         })
-    );
+    }
 }
 
 /// The path of a file given to `--orchestrate`, as it is.
@@ -1228,7 +1452,7 @@ mod tests {
     }
 
     #[test]
-    fn every_benchmark_has_its_expected_output_and_the_references_their_set() {
+    fn every_benchmark_has_an_expect_file() {
         for b in SET {
             assert!(!b.expect.is_empty(), "{}: an empty .expect", b.name);
             assert!(!b.stresses.is_empty());
