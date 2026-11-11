@@ -3,8 +3,8 @@
 //! `cigcompile trial <new>` (#15, ADR 0003): the new cigcompile is found through the installer,
 //! both build the project and run its tests, and what differs is said first. The installer here
 //! is a script that answers `which cigcompile --path`; the "new" compiler is a script that wraps
-//! this build and changes one line, so the difference is known. Every child runs under `timeout`,
-//! with a scratch HOME, CIGSCRIPT_HOME and XDG folders.
+//! this build and changes one line, so the difference is known. Every child runs under `timeout`
+//! (or `gtimeout`) where one is on PATH, with a scratch HOME, CIGSCRIPT_HOME and XDG folders.
 #![cfg(unix)]
 
 use std::fs;
@@ -19,11 +19,25 @@ struct Sandbox {
     dir: tempfile::TempDir,
 }
 
-fn timeout_exe() -> &'static str {
-    ["/usr/bin/timeout", "/bin/timeout"]
-        .into_iter()
-        .find(|p| Path::new(p).exists())
-        .expect("coreutils timeout")
+/// `program` under a hard limit of `secs` seconds, through `timeout` (GNU coreutils, the BSDs) or
+/// `gtimeout` (coreutils on a Mac) where one is on PATH; on a Mac with neither it runs as it is,
+/// under the CI job's own limit.
+fn guarded(secs: u32, program: &str) -> Command {
+    let limiter = std::env::var_os("PATH").and_then(|path| {
+        ["timeout", "gtimeout"].iter().find_map(|name| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join(name))
+                .find(|p| p.is_file())
+        })
+    });
+    match limiter {
+        Some(t) => {
+            let mut c = Command::new(t);
+            c.arg(secs.to_string()).arg(program);
+            c
+        }
+        None => Command::new(program),
+    }
 }
 
 impl Sandbox {
@@ -83,10 +97,8 @@ impl Sandbox {
     fn trial(&self, path_dirs: &str, args: &[&str]) -> Output {
         let home = self.path().join("home");
         fs::create_dir_all(&home).unwrap();
-        let mut c = Command::new(timeout_exe());
-        c.arg("300")
-            .arg(CC)
-            .arg("trial")
+        let mut c = guarded(300, CC);
+        c.arg("trial")
             .args(args)
             .current_dir(self.path().join("proj"))
             .env_clear()
