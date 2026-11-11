@@ -235,6 +235,25 @@ error[E1001 usage]: cig-v1.20.0-macos-aarch64 is not kept here, and CIGCOMPILE_O
 kept here already. Either unset it, run `cigcompile fetch` once with
 network, or pass the runtime by hand with `--runtime`.
 
+## When cigcompile itself crashes
+
+A bug in cigcompile (a panic, not an error code) is kept for you, not sent. It joins the family's
+one queue, cig's ashtray, as a report from `cig-compile`: with `cig` on this machine cigcompile
+hands it over (`cig crash submit --origin cig-compile`), the way `cigo` does; without one it
+writes the same report into `$CIGSCRIPT_HOME/ashtray` (`~/.cigscript/ashtray`). Nothing leaves
+the machine. Every path in it is a shape, and the command line keeps only the words
+cigcompile knows.
+
+```text
+ciginstaller crash list          # every tool's reports, together
+ciginstaller crash show <id>     # exactly what sending it would carry
+ciginstaller crash send <id>     # files it in otmof-ops/cig-compile
+```
+
+`reports = never` (`ciginstaller config set reports never`, `CIG_REPORTS=never`, or a setting
+your organization locks) means nothing is saved at all: cigcompile says so in one line and stops
+as it would have.
+
 ## Still stuck
 
 Open a [guidance

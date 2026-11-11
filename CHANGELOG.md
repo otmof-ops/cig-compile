@@ -5,6 +5,16 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **A crash in cigcompile joins the family's one queue (cig-installer#10).** A panic is written
+  into cig's ashtray as a report from `cig-compile`, handed over the way `cigo` does it (`cig
+  crash submit --origin cig-compile --repo otmof-ops/cig-compile`), or, with no `cig` on the
+  machine, written in the same schema (built with cig's own crash code, so the redaction is cig's:
+  every path a shape, the command line only the words cigcompile knows). `ciginstaller crash list`
+  shows it and `ciginstaller crash send` files it here. Nothing is sent by the crash itself, and
+  `reports = never` (the installer's setting, `CIG_REPORTS`, `CIGI_REPORTS`, cig's own config, or a
+  machine lock the installer reports) saves nothing. `src/crash.rs` has the tests: a deliberate
+  panic in a child of the test binary leaves one report with `origin` `cig-compile`, and every way
+  of saying `never` leaves none.
 - **Pins choose the compiler, and a trial checks a new one (#15).** A project pinned with
   `cigar = "1.0"` in `cigar.toml` or a `.cigar-version` builds with the cigcompile of the carton
   that holds that cigar, after 1.1 is installed too: the installer picks (the shim and
