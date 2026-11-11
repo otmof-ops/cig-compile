@@ -69,23 +69,21 @@ impl Sandbox {
 
     /// `cigcompile args`, under a hard timeout.
     fn cc(&self, args: &[&str]) -> Output {
-        let mut c = Command::new(timeout_bin());
-        c.arg("120").arg(env!("CARGO_BIN_EXE_cigcompile"));
+        let mut c = guarded(120, env!("CARGO_BIN_EXE_cigcompile"));
         self.env(&mut c);
         c.args(args).output().expect("run cigcompile")
     }
 
     /// `cig args` (this build's runtime as the interpreter).
     fn cig(&self, args: &[&str]) -> Output {
-        let mut c = Command::new(timeout_bin());
-        c.arg("120").arg(RT);
+        let mut c = guarded(120, RT);
         self.env(&mut c);
         c.args(args).output().expect("run cig")
     }
 
     fn prog(&self, name: &str) -> Output {
-        let mut c = Command::new(timeout_bin());
-        c.arg("120").arg(
+        let mut c = guarded(
+            120,
             self.work()
                 .join(format!("{name}{}", std::env::consts::EXE_SUFFIX)),
         );
@@ -103,12 +101,28 @@ impl Sandbox {
     }
 }
 
-/// `timeout` where there is one (Unix); the test binary's own wait otherwise.
-fn timeout_bin() -> &'static str {
-    if cfg!(unix) {
-        "timeout"
+/// `program` under a hard limit of `secs` seconds, through `timeout` (GNU coreutils, the BSDs) or
+/// `gtimeout` (coreutils on a Mac) where one is on PATH; on Windows, and on a Mac with neither, it
+/// runs as it is, under the CI job's own limit.
+fn guarded(secs: u32, program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let limiter = if cfg!(windows) {
+        None
     } else {
-        "cmd"
+        std::env::var_os("PATH").and_then(|path| {
+            ["timeout", "gtimeout"].iter().find_map(|name| {
+                std::env::split_paths(&path)
+                    .map(|dir| dir.join(name))
+                    .find(|p| p.is_file())
+            })
+        })
+    };
+    match limiter {
+        Some(t) => {
+            let mut c = Command::new(t);
+            c.arg(secs.to_string()).arg(program);
+            c
+        }
+        None => Command::new(program),
     }
 }
 
