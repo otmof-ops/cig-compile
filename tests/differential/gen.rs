@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! A seeded generator of well-formed CigScript programs, for the
 //! differential suite's random cases (#7): the interpreter and the program
 //! must agree on every one. A program is a list of top-level statements, so

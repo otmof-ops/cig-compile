@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! A unified line diff, for `--passes-diff` (#33): what a pass changed in
 //! the printed IR. The lines both sides share at the start and the end are
 //! set aside first, so a pass that touches a few lines of a long function

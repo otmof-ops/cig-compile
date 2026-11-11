@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! `build --emit deb` (#41): beside the program, a `.deb` that installs it
 //! to `/usr/bin/<name>`. The archive is written in pure Rust (ar + tar + gzip,
 //! reusing the tar writer `--emit oci` already has): a Debian package is an

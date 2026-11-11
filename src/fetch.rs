@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! Runtimes for other machines (#10). Since cig 1.15.0 every cig is a
 //! runtime, so the runtime for a target is cig's own release asset for it,
 //! of the version this compiler pins: fetched once into

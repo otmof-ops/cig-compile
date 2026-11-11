@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 # A `cig` that runs scripts as programs, for CigScript's portability probe
 # (#7). `cig run [flags] <script> [-- args]` builds the script with
 # cigcompile and runs the program with the same flags and arguments; every

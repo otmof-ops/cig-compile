@@ -5,7 +5,7 @@
 name = "cigcompile-fuzz"
 version = "0.0.0"
 edition = "2021"
-license = "Apache-2.0"
+license = "FSL-1.1-ALv2"
 publish = false
 
 [package.metadata]

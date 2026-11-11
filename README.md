@@ -12,7 +12,7 @@
   <a href="https://github.com/otmof-ops/cig-compile/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/otmof-ops/cig-compile?color=f97316&label=release"></a>
   <a href="docs/commands.md#cigcompile-targets"><img alt="9 machines" src="https://img.shields.io/badge/machines-9-6b7280"></a>
   <a href="docs/roadmap.md"><img alt="stage A shipped" src="https://img.shields.io/badge/stage-A%20shipped-6b7280"></a>
-  <a href="LICENSE"><img alt="license Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-6b7280"></a>
+  <a href="LICENSE"><img alt="license FSL-1.1-ALv2" src="https://img.shields.io/badge/license-FSL--1.1--ALv2-6b7280"></a>
   <img alt="installs needed: 0" src="https://img.shields.io/badge/installs%20needed-0-2ea44f">
 </p>
 
@@ -166,29 +166,41 @@ are there. Later, CigarScript will compile here too.
 
 ## Licensing
 
-- **Code** (`src/`, `tests/`, `bench/`, `ci/`, `fuzz/`): [Apache-2.0](LICENSE),
-  the same license as CigScript. In plain words: use, copy, change, sell and
-  embed cigcompile freely, including in closed products; keep the copyright
-  notice and the [NOTICE](NOTICE) file with any copy; you get a patent license
-  from every contributor; and you can't use the name to endorse your
-  derivative.
+- **Code** (`src/`, `tests/`, `bench/`, `ci/`, `fuzz/`): **source-available, not open source.** Under the
+  [Functional Source License, version 1.1, with an Apache-2.0 future license
+  (FSL-1.1-ALv2)](LICENSE). The Open Source Initiative does not count it as an
+  open source license, and this project does not call it one.
+  - *What you may do.* Use it, including inside a company for its own work;
+    read it, study it, change it and share it with the license attached; and
+    help others use it. The source is here for all of that.
+  - *What you may not do.* Make it available to others in a commercial product
+    or service that substitutes for it or does the same job. Selling it, or
+    selling access to it, is the clear case.
+  - *It becomes Apache-2.0.* Each version converts to
+    [Apache-2.0](LICENSES/Apache-2.0.txt) two years after it is made
+    available.
+  - *Earlier releases.* Every release through v0.3.0 was made under Apache-2.0 and stays under it. [LICENSING.md](LICENSING.md)
+    lists which versions carry which license.
 - **Documentation** (`docs/`, this README and the other guides at the root):
   [CC BY 4.0](LICENSES/CC-BY-4.0.txt). Reuse and adapt with credit.
 - **The programs it makes.** A program is cig with your script appended. Your
-  script stays yours, under whatever license you give it. cig is CigScript's,
-  under Apache-2.0, so whoever passes a program on gives the recipient a copy
-  of that license and CigScript's
-  [NOTICE](https://github.com/otmof-ops/cig-script/blob/main/NOTICE), as its
-  section 4 asks of any copy of cig.
+  script stays yours, under whatever license you give it, and nothing in this
+  repository's license reaches it. The cig inside the program is CigScript's:
+  Apache-2.0 for cig releases through v1.20.0, FSL-1.1-ALv2 after that. Whoever
+  passes a program on gives the recipient the LICENSE and
+  [NOTICE](https://github.com/otmof-ops/cig-script/blob/main/NOTICE) of the cig
+  version it embeds, as that license asks of any copy. Whether a given program
+  is a Competing Use of cig is decided by the License's own text; this README
+  does not change it. [docs/shipping.md](docs/shipping.md) has the details.
 - **The name.** CigCompile and cigcompile are trademarks of Jay Taylor, as
   CigScript is. A fork needs a name of its own;
   [TRADEMARKS.md](TRADEMARKS.md) says what is free to do and what to ask about
   first.
 
 Crates compiled into cigcompile are listed in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), all under permissive
-licenses compatible with Apache-2.0. [REUSE.toml](REUSE.toml) maps every path
-to its license. Contributions are accepted under the same terms, signed off
-under the DCO; see [CONTRIBUTING.md](CONTRIBUTING.md). Security reports:
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), each under its own
+permissive license. [REUSE.toml](REUSE.toml) maps every path to its license.
+Contributions come in under the contributor agreement; see
+[CONTRIBUTING.md](CONTRIBUTING.md). Security reports:
 [SECURITY.md](SECURITY.md).
 

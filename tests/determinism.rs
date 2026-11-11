@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! Determinism checks (#39): floats print what IEEE-754 says, and maps keep
 //! insertion order through every operation. Each case has an expected output
 //! written down from the arithmetic (not from running cig), and both the

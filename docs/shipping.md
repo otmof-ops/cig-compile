@@ -293,32 +293,40 @@ millisecond.
 
 ## The license a program carries
 
-A compiled program is cig with the script appended. Cig itself is
-Apache-2.0 (CigScript's LICENSE), so a program passed on to someone
-else carries the Apache-2.0 obligations for that runtime:
+A compiled program is cig with the script appended. The cig inside is
+CigScript's, and its license depends on the release: Apache-2.0 for cig
+releases through v1.20.0, and FSL-1.1-ALv2 (the Functional Source License 1.1,
+Apache-2.0 future license) for releases after that. A program passed on to
+someone else carries the terms of the cig release it embeds:
 
-- Keep a copy of the Apache-2.0 LICENSE and the NOTICE file with the
-  program (CigScript's
-  [NOTICE](https://github.com/otmof-ops/cig-script/blob/main/NOTICE),
-  as section 4 asks of any copy of cig).
-- The script itself stays under the license you give it: your code,
-  your choice. The program carries your script's license alongside
-  cig's.
+- Keep a copy of that release's LICENSE and the NOTICE file with the program
+  (CigScript's
+  [NOTICE](https://github.com/otmof-ops/cig-script/blob/main/NOTICE)). For an
+  Apache-2.0 cig that is what its section 4 asks of any copy; for an
+  FSL-1.1-ALv2 cig it is the License's Redistribution clause.
+- The script itself stays under the license you give it: your code, your
+  choice. Nothing in cig's or cigcompile's license reaches it. The program
+  carries your script's license alongside cig's.
+- FSL-1.1-ALv2 allows any purpose other than a Competing Use. Whether a given
+  program is one is decided by the License's own text, which this page does
+  not change or interpret for you; read it
+  ([LICENSE](https://github.com/otmof-ops/cig-script/blob/main/LICENSE)) before
+  you rely on it for a program you sell.
 
 The SBOM (`--sbom`) names cig's release asset by version and sha256,
-so a downstream consumer can look up its own licence information from
+so a downstream consumer can look up its own license information from
 CigScript's release page.
 
-### Picking up Apache-2.0 for downstream
+### Picking up the license for downstream
 
 A compiled program that will be redistributed should ship with:
 
 - **The program's own license** (your script's), named in the file the
   program is distributed under or in the release's `LICENSE`.
-- **CigScript's LICENSE and NOTICE**, as above.
-- **cigcompile's own LICENSE and NOTICE** (Apache-2.0), when
-  cigcompile itself ships alongside the program — not required for a
-  program made with it.
+- **CigScript's LICENSE and NOTICE** for the embedded cig release, as above.
+- **cigcompile's own LICENSE and NOTICE** (FSL-1.1-ALv2 after v0.3.0;
+  Apache-2.0 for releases through v0.3.0), when cigcompile itself ships
+  alongside the program; not required for a program made with it.
 
 The `--sbom` output gives a machine-readable hand-off: the runtime's
 component carries its sha256 and the release it came from, which is

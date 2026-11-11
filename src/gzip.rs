@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! gzip for `--emit deb`'s tars, through flate2, which the runtime already
 //! compiles in. The header carries no time and no name and names no
 //! operating system, so the same build of cigcompile writes the same bytes;

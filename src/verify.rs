@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! `cigcompile verify <program>` (#40): is this program what a build makes?
 //! It reads the program's three parts and checks each on its own: the
 //! runtime against the sha256 of every release asset this compiler pins

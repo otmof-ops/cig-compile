@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! Metamorphic testing (#39): a generated program and a variant of it that
 //! must mean the same (its variables renamed, its integer constants split
 //! into sums, dead declarations between its statements) say the same and

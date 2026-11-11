@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! A build: each script checked as `cig check` checks it, its pin held to
 //! the runtime, and the program written beside where it goes and moved into
 //! place whole. A program whose bytes are already there is not touched,

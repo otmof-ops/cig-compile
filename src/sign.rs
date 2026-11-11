@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! `build --sign <key>` (#10): a detached SSH signature beside a built
 //! program, `<program>.sig`, and beside the SBOM, `<program>.cdx.json.sig`.
 //! `verify --signature <sig> --allowed-signers <file>` checks it. The

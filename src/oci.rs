@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! `build --emit oci` (#41): a static Linux program as an OCI image, a
 //! scratch image of one file. The image is an OCI image layout in a tar,
 //! with Docker's `manifest.json` beside its index as `docker save` writes

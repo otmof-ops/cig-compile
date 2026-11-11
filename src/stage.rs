@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! Staging for `cigcompile build` (#66). A build that writes more than
 //! one file (`--sign`, `--sbom`, `--emit oci`, `--emit deb`) assembles
 //! each in a folder beside `--out`, on the same filesystem, so the final

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! The runtime: `cig`, exactly as `src/main.rs` in CigScript starts it.
 //! A program is this binary with its script appended; with none appended,
 //! this is `cig` of the version cigcompile pins.

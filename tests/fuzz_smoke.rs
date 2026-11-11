@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! The fuzz targets on stable, over a fixed sample made here, so a crash
 //! the nightly fuzzer would find on these inputs fails a pull request.
 //! The seeds are CigScript's own scripts (when `CIGSCRIPT_SRC` names a

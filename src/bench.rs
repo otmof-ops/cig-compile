@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! `cigcompile bench` (#14, #30): the benchmark set, each program built, then
 //! run interpreted (`cig run`) and compiled, from fresh folders.
 //!
