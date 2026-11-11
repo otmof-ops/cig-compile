@@ -446,9 +446,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cigarscript"
+version = "0.1.0"
+source = "git+https://github.com/otmof-ops/cigar-script?rev=8275562f576b18ba568471b51028a9ee648371ae#8275562f576b18ba568471b51028a9ee648371ae"
+dependencies = [
+ "cigscript",
+ "clap",
+ "serde_json",
+]
+
+[[package]]
 name = "cigcompile"
 version = "0.3.0"
 dependencies = [
+ "cigarscript",
  "cigscript",
  "clap",
  "flate2",

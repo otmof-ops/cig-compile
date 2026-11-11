@@ -65,6 +65,33 @@ top level. The default output path is `./<name>` for one script, and
 Where other machines' programs go when a folder builds for another
 target: `<folder>/bin/<triple>/<name>`.
 
+#### `.cigar` files and `--strength`
+
+`cigcompile build x.cigar` takes a CigarScript file
+([cigar-script](https://github.com/otmof-ops/cigar-script)). The file is
+checked by the `cigarscript` crate, at the strength it declares on its first
+line (`strength mild | medium | full`; none is mild), and the program carries
+the CigScript it lowers to, so it runs on the same cig as any other program.
+A `.cig` path builds exactly as before. A folder build takes both kinds.
+
+- `--strength` overrides the declaration. Turning **up** never breaks a file:
+  every CigScript script is mild CigarScript, and builds the same at `medium`
+  and `full`. Turning **down** is checked: `cigcompile build m.cigar
+  --strength mild` on a file that uses a record lists every use above mild,
+  each with its line and column (`E1101`), and exits `2`.
+- A mild file may `use` a medium or full module. The module is checked at its
+  own strength, and the program stops with `E1210`, naming the parameter, when
+  a value the mild file passes does not fit a typed parameter.
+- **`strength full` asks once per project.** The first build of a full file in
+  a project explains what full asks of the writer and asks whether to go on. A
+  yes is remembered in the person's state (`$XDG_STATE_HOME/cigar/full-warning`),
+  keyed by the project's root, never in the project; a no stops the build and is
+  not remembered. A build with no terminal never asks: it goes on, says once that
+  it did not ask, and remembers nothing. `strength_full_warning = off` in
+  `$XDG_CONFIG_HOME/cigar/config` turns the notice off. `--check` never asks.
+- The program records the file's name (`x.cigar`) and carries the lowered
+  CigScript; `--sbom` names the file as written, by sha256.
+
 Flags:
 
 | flag | does |
@@ -72,6 +99,7 @@ Flags:
 | `-o, --out <path>` | one script's program path, or the folder for a folder build |
 | `--target <triple>` | the machine the program is for; `cigcompile targets` lists them |
 | `--runtime <path>` | the cig to append to, instead of the one found |
+| `--strength mild \| medium \| full` | for a `.cigar` file, check it as if it declared this strength; see [`.cigar` files](#cigar-files-and---strength). A `.cig` script is always mild and ignores it |
 | `--check` | parse and check; write nothing, need no runtime |
 | `--emit cir \| cir-opt` | the verified IR instead of a program; see [IR and passes](#ir-and-passes) |
 | `--emit oci` | the program, and beside it an OCI image of it; Linux targets only |
@@ -321,7 +349,7 @@ message.
 
 | code | when |
 |---|---|
-| `E1000` | nothing to compile: the path holds no `.cig` script, or it cannot be read |
+| `E1000` | nothing to compile: the path holds no `.cig` or `.cigar` script, or it cannot be read |
 | `E1001` | no runtime for the target: no cig of the pinned version was found here, and none was fetched |
 | `E1002` | the runtime is another cig: a `--runtime` that isn't the version this compiler pins |
 | `E1003` | the script's pin is not met: its `# cig` line, or `.cig-version`, asks for a cig the runtime does not satisfy |

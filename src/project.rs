@@ -23,8 +23,17 @@ pub struct Job {
     pub out: PathBuf,
 }
 
-/// The jobs for `path` (a `.cig` file, or a folder of them; the current
-/// folder when none is given). `out` is the program's path for one script,
+/// Is this a `.cigar` file (cigar-script#7)? Everything else is CigScript.
+pub fn is_cigar(script: &Path) -> bool {
+    script.extension().is_some_and(|x| x == "cigar")
+}
+
+fn is_script(p: &Path) -> bool {
+    p.extension().is_some_and(|x| x == "cig" || x == "cigar")
+}
+
+/// The jobs for `path` (a `.cig` or `.cigar` file, or a folder of them; the
+/// current folder when none is given). `out` is the program's path for one script,
 /// the folder the programs go to for a folder (default `<folder>/bin`, and
 /// `<folder>/bin/<target>` for another machine).
 pub fn jobs(
@@ -35,7 +44,7 @@ pub fn jobs(
     let path = path.unwrap_or(Path::new("."));
     let nothing = |why: String| {
         usage(why).code("E1000").with_hint(
-            "name a .cig script, or a folder that holds them: cigcompile build tools/tidy.cig",
+            "name a .cig script or a .cigar file, or a folder that holds them: cigcompile build tools/tidy.cig",
         )
     };
     if path.is_dir() {
@@ -43,11 +52,14 @@ pub fn jobs(
             .map_err(|e| nothing(format!("cannot read {}: {e}", path.display())))?
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "cig"))
+            .filter(|p| p.is_file() && is_script(p))
             .collect();
         scripts.sort();
         if scripts.is_empty() {
-            return Err(nothing(format!("{} holds no .cig script", shown(path))));
+            return Err(nothing(format!(
+                "{} holds no .cig or .cigar script",
+                shown(path)
+            )));
         }
         let dir = match out {
             Some(o) => o.to_path_buf(),

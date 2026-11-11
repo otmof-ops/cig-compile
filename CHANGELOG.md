@@ -5,6 +5,18 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **`.cigar` files and `--strength` (cigar-script#7).** `cigcompile build x.cigar` checks
+  the file with the `cigarscript` crate (a git dependency on cigar-script, pinned as cigscript
+  is) at the strength it declares, and compiles the CigScript it lowers to; `--strength mild |
+  medium | full` overrides the declaration (turning down lists every use above the strength,
+  `E1101`, exit 2). A `.cig` script builds as before and ignores `--strength`; a folder build
+  takes both kinds. A mild file may `use` a medium module, and a wrong-typed value at that
+  boundary stops the program with `E1210`. `strength full` asks once per project (the answer is
+  kept in the person's state folder, never in the project); a build with no terminal never asks
+  and says so once; `strength_full_warning = off` in the person's config turns it off.
+  `tests/cigar.rs` has the cases, `every_cigscript_script_builds_as_mild_unchanged` over the
+  `CIGSCRIPT_SRC` corpus; `DIFF_AS=cigar` runs the differential suite on every script as a
+  `.cigar` file.
 - **The benchmark programme's gates (#30).** `cigcompile bench --against <main.json>` is the
   regression gate: exit 1 when a non-noisy benchmark is more than 5% slower than `main`'s, the
   set's geometric mean more than 2%, or peak memory or allocations more than 10% over, each by a

@@ -11,6 +11,7 @@ use cigscript::cli::Ctx;
 use cigscript::diagnostics::{usage, Diagnostic};
 use cigscript::program::{self, Program};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::io::Write as _;
 use std::path::Path;
 
@@ -32,7 +33,7 @@ pub struct Built {
     pub written: bool,
 }
 
-fn read_script(ctx: &Ctx, job: &Job) -> Result<String, i32> {
+pub fn read_script(ctx: &Ctx, job: &Job) -> Result<String, i32> {
     // A program records its script's name and prints it; cig refuses to run
     // one whose name holds a control or invisible character (E1050), so
     // none is made (otmof-ops/cig-script#137).
@@ -50,10 +51,77 @@ fn read_script(ctx: &Ctx, job: &Job) -> Result<String, i32> {
     std::fs::read_to_string(&job.script).map_err(|e| {
         let d = usage(format!("cannot read {}: {e}", job.file))
             .code("E1000")
-            .with_hint("name a .cig script you can read");
+            .with_hint("name a .cig or .cigar script you can read");
         cigscript::cli::report(ctx, &d, None, None);
         exit::USAGE
     })
+}
+
+/// What a build does besides compile: the SBOM, and the strength a
+/// `.cigar` script is held to (`--strength`; a `.cig` script is always mild).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Options {
+    pub sbom: bool,
+    pub strength: Option<cigarscript::features::Strength>,
+}
+
+/// A `.cigar` script, checked at its strength by `cigar`'s own checker and
+/// lowered to the CigScript the program carries. A `.cig` script is
+/// untouched. Errors are said here. Returns the script to compile, its
+/// warnings (cigar's, kept to say again like cig's) and, for `.cigar`, the
+/// strength it was checked at.
+pub fn lower_cigar(
+    ctx: &Ctx,
+    job: &Job,
+    text: &str,
+    strength: Option<cigarscript::features::Strength>,
+) -> Result<Option<cigarscript::prepare::Prepared>, i32> {
+    if !crate::project::is_cigar(&job.script) {
+        return Ok(None);
+    }
+    let render = cigarscript::prepare::Render {
+        json: ctx.json,
+        plain: ctx.plain,
+        color: ctx.color,
+    };
+    cigarscript::prepare::prepare(&job.script, &job.file, text, strength, render)
+        .map(Some)
+        .map_err(|()| exit::CHECK)
+}
+
+/// The script as the IR emitters read it: a `.cigar` script's lowering,
+/// anything else as written.
+pub fn read_for_ir(
+    ctx: &Ctx,
+    job: &Job,
+    strength: Option<cigarscript::features::Strength>,
+) -> Result<String, i32> {
+    let text = read_script(ctx, job)?;
+    Ok(lower_cigar(ctx, job, &text, strength)?
+        .map(|p| p.source)
+        .unwrap_or(text))
+}
+
+/// The experience warning for `strength full` (cigar-script#7): asked once
+/// per project, remembered in the person's state, never asked of a run
+/// nobody can answer. `Err` when the person says no.
+fn experience_asked(job: &Job, asked: &mut BTreeSet<std::path::PathBuf>) -> Result<(), i32> {
+    use cigarscript::experience as ex;
+    let root = ex::project_root(&job.script);
+    if !asked.insert(root.clone()) {
+        return Ok(());
+    }
+    let said = ex::confirm_full(
+        &ex::Dirs::from_env(),
+        &root,
+        ex::interactive(),
+        &mut std::io::stdin().lock(),
+        &mut std::io::stderr(),
+    );
+    if said == ex::Outcome::Declined {
+        return Err(exit::USAGE);
+    }
+    Ok(())
 }
 
 /// Check a script: parse, then the checker, as `cig check` does. The
@@ -158,7 +226,7 @@ pub fn build(
     target: &Target,
     runtime: Option<&Runtime>,
     index: &mut crate::cache::Index,
-    sbom: bool,
+    opts: Options,
     stage_to: Option<&[std::path::PathBuf]>,
 ) -> Result<Vec<Built>, i32> {
     if let Some(s) = stage_to {
@@ -168,6 +236,8 @@ pub fn build(
     progress(
         serde_json::json!({"event": "start", "scripts": jobs.len(), "check_only": runtime.is_none()}),
     );
+    let sbom = opts.sbom;
+    let mut asked: BTreeSet<std::path::PathBuf> = BTreeSet::new();
     let mut out = Vec::new();
     for (n, job) in jobs.iter().enumerate() {
         progress(
@@ -176,6 +246,32 @@ pub fn build(
         let source = phase(&job.file, "read", || read_script(ctx, job)).inspect_err(|_| {
             progress(serde_json::json!({"event": "failed", "script": job.file}));
         })?;
+        // A `.cigar` script is checked by cigar and compiled as what it
+        // lowers to; `as_written` is the file as it is, for the SBOM.
+        let as_written = source;
+        let lowered = phase(&job.file, "lower", || {
+            lower_cigar(ctx, job, &as_written, opts.strength)
+        })
+        .inspect_err(|_| {
+            progress(serde_json::json!({"event": "failed", "script": job.file}));
+        })?;
+        let (source, cigar_warnings) = match lowered {
+            Some(p) => {
+                if runtime.is_some() && p.strength == cigarscript::features::Strength::Full {
+                    experience_asked(job, &mut asked)?;
+                }
+                (p.source, Some(p.warnings))
+            }
+            None => (as_written.clone(), None),
+        };
+        let check = |ctx: &Ctx, job: &Job, source: &str| match &cigar_warnings {
+            // cigar's check read the lowered text through cig's own already.
+            Some(w) => {
+                say_warnings(ctx, w);
+                Ok(w.clone())
+            }
+            None => check(ctx, job, source),
+        };
         let Some(runtime) = runtime else {
             phase(&job.file, "check", || check(ctx, job, &source)).inspect_err(|_| {
                 progress(serde_json::json!({"event": "failed", "script": job.file}));
@@ -231,7 +327,7 @@ pub fn build(
                 };
                 if sbom {
                     if let Err(e) =
-                        crate::sbom::write(job, &source, &built.sha256, runtime, &job.out)
+                        crate::sbom::write(job, &as_written, &built.sha256, runtime, &job.out)
                     {
                         let d = usage(format!("cannot write the SBOM beside the program: {e}"))
                             .code("E1004")
@@ -283,7 +379,7 @@ pub fn build(
         index.note_program(&job.out, &key, &sha256, &warnings);
         if sbom {
             phase(&job.file, "sbom", || {
-                crate::sbom::write(job, &source, &sha256, runtime, write_to)
+                crate::sbom::write(job, &as_written, &sha256, runtime, write_to)
             })
             .map_err(|e| cannot_write(e, "write the SBOM beside the program"))?;
         }

@@ -197,8 +197,11 @@ struct BenchArgs {
 
 #[derive(Args)]
 struct BuildArgs {
-    /// A .cig script, or a folder of them (default: this folder).
+    /// A .cig script or a .cigar file, or a folder of them (default: this folder).
     path: Option<PathBuf>,
+    /// For a .cigar file: check it as if it declared this strength (`mild`, `medium` or `full`). Turning down is checked: a medium file built at mild lists everything above mild. A .cig script is always mild and ignores it.
+    #[arg(long, value_name = "mild|medium|full")]
+    strength: Option<String>,
     /// Where the program goes; for a folder, the folder the programs go to (default <folder>/bin).
     #[arg(short, long)]
     out: Option<PathBuf>,
@@ -493,20 +496,21 @@ fn build_cmd(
         exit::USAGE
     };
     let target = runtime::target(a.target.as_deref()).map_err(fail)?;
+    let strength = strength_of(a).map_err(fail)?;
     let jobs = project::jobs(a.path.as_deref(), a.out.as_deref(), target).map_err(fail)?;
     let passes = passes_of(a).map_err(fail)?;
     // `cir` and `cir-opt` print the same IR at stage A: both are shaped by
     // `-O`/`--passes`, and `cir-opt` is the explicit "after-passes" name
     // reserved so that stage B can split the two without a flag change.
     if matches!(a.emit.as_deref(), Some("cir") | Some("cir-opt")) {
-        emit_cir(ctx, &jobs, &passes, a.passes_diff, a.remarks)?;
+        emit_cir(ctx, &jobs, &passes, a.passes_diff, a.remarks, strength)?;
         return Ok(None);
     }
     if a.remarks {
         // `--remarks` on a plain build: run the pass pipeline once per
         // script so each pass can say what it did or left, then let the
         // build go on. The IR is not kept and nothing else changes.
-        remark_only(ctx, &jobs, &passes)?;
+        remark_only(ctx, &jobs, &passes, strength)?;
     }
     let oci = a.emit.as_deref() == Some("oci");
     let deb = a.emit.as_deref() == Some("deb");
@@ -544,7 +548,19 @@ fn build_cmd(
     };
     let mut index = cache::Index::load();
     if a.check {
-        let checked = build::build(ctx, &jobs, target, None, &mut index, false, None).map(|_| ());
+        let checked = build::build(
+            ctx,
+            &jobs,
+            target,
+            None,
+            &mut index,
+            build::Options {
+                sbom: false,
+                strength,
+            },
+            None,
+        )
+        .map(|_| ());
         finish(&checked);
         checked?;
         return Ok(None);
@@ -592,7 +608,18 @@ fn build_cmd(
     } else {
         None
     };
-    let built = build::build(ctx, &jobs, target, Some(&rt), &mut index, a.sbom, stage_to);
+    let built = build::build(
+        ctx,
+        &jobs,
+        target,
+        Some(&rt),
+        &mut index,
+        build::Options {
+            sbom: a.sbom,
+            strength,
+        },
+        stage_to,
+    );
     index.save();
     finish(&built.as_ref().map(|_| ()).map_err(|c| *c));
     let built = match built {
@@ -1092,6 +1119,24 @@ fn warn_linkage(ctx: &Ctx, target: &runtime::Target, rt: &runtime::Runtime) {
 }
 
 /// The passes `-O` or `--passes` asks for; `-O1` when neither is given.
+/// `--strength`, read: for a `.cigar` file (cigar-script#7).
+fn strength_of(
+    a: &BuildArgs,
+) -> Result<Option<cigarscript::features::Strength>, cigscript::diagnostics::Diagnostic> {
+    match a.strength.as_deref() {
+        None => Ok(None),
+        Some(s) => cigarscript::features::Strength::parse(s)
+            .map(Some)
+            .ok_or_else(|| {
+                cigscript::diagnostics::usage(format!(
+                    "--strength is `{s}`, want `mild`, `medium` or `full`"
+                ))
+                .code("E800")
+                .with_hint("cigcompile build x.cigar --strength mild, medium or full")
+            }),
+    }
+}
+
 fn passes_of(
     a: &BuildArgs,
 ) -> Result<Vec<&'static dyn cigcompile::cir::pass::Pass>, cigscript::diagnostics::Diagnostic> {
@@ -1126,16 +1171,11 @@ fn emit_cir(
     passes: &[&'static dyn cigcompile::cir::pass::Pass],
     diffs: bool,
     remarks: bool,
+    strength: Option<cigarscript::features::Strength>,
 ) -> Result<(), i32> {
     use cigcompile::cir::{emit_with, EmitError, LowerError};
     for job in jobs {
-        let source = std::fs::read_to_string(&job.script).map_err(|e| {
-            let d = cigscript::diagnostics::usage(format!("cannot read {}: {e}", job.file))
-                .code("E1000")
-                .with_hint("name a .cig script you can read");
-            cigscript::cli::report(ctx, &d, None, None);
-            exit::USAGE
-        })?;
+        let source = build::read_for_ir(ctx, job, strength)?;
         match emit_with(&source, &job.file, passes, diffs, remarks) {
             Ok(e) => {
                 // V6: an effectful pull called outside every burn, which
@@ -1192,17 +1232,12 @@ fn remark_only(
     ctx: &Ctx,
     jobs: &[project::Job],
     passes: &[&'static dyn cigcompile::cir::pass::Pass],
+    strength: Option<cigarscript::features::Strength>,
 ) -> Result<(), i32> {
     use cigcompile::cir::pass::run_passes_with_remarks;
     use cigcompile::cir::{lower_source, LowerError};
     for job in jobs {
-        let source = std::fs::read_to_string(&job.script).map_err(|e| {
-            let d = cigscript::diagnostics::usage(format!("cannot read {}: {e}", job.file))
-                .code("E1000")
-                .with_hint("name a .cig script you can read");
-            cigscript::cli::report(ctx, &d, None, None);
-            exit::USAGE
-        })?;
+        let source = build::read_for_ir(ctx, job, strength)?;
         match lower_source(&source, &job.file) {
             Ok(mut m) => match run_passes_with_remarks(&mut m, passes) {
                 Ok((_, remarks)) => print_remarks(ctx, &job.file, &remarks),
