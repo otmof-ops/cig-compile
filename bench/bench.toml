@@ -1,0 +1,518 @@
+# SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+# The benchmark manifest for cigcompile (#68), in the shape cig-script's
+# docs/BENCH.md defines. `cigcompile bench --manifest bench/bench.toml` is a
+# front end of it; so is `cig bench bench/bench.toml` with `cigcompile` and the
+# runtime on the PATH. Run it from the repository root:
+#
+#     cigcompile bench --manifest bench/bench.toml --group programs
+#     cigcompile bench --manifest bench/bench.toml --timings
+#     cigcompile bench --manifest bench/bench.toml --group programs --syscalls
+#
+# What is measured, by group (the issue's six):
+#
+#   build      `build` of hello, of the whole set, an incremental rebuild with
+#              nothing changed, and -O0, -O1, -O2: wall, rss and, with
+#              `--timings`, the phases (read, index, check, pin, runtime,
+#              assemble, hash, write) from CIG_TIMINGS_FD
+#   programs   each program of the set, interpreted (`cig run`) and compiled,
+#              the two on the same runtime (set.sha256, prep-program.sh): wall,
+#              rss and, with `--syscalls`, the calls: a gap that is the
+#              allocator's is named `allocator, not the compiler`
+#   start-up   a compiled hello, and the interpreter's
+#   size       the file a build writes, for hello, a small program and cigo-sized
+#              script work (`file:`), reported against #14's 4 MB budget, not gated
+#   artefacts  `--sbom`, `--sign`, `--emit oci`, `--emit deb`, `verify`, `audit`
+#   passes     each pass alone, on a generated 10,000-line script (`--passes`)
+#
+# The set is cig's `bench/compute`, copied by set.sh after every file's sha256
+# is held to set.sha256 (the pinned cig's own); it is not kept here. Timings are
+# reported, never gated (DECISIONS 1); #14's budgets stay in `cigcompile bench
+# --budgets`.
+#
+# Not here yet:
+#
+#   build --watch reacting to one change   a case cannot wait on a process that
+#                                          never ends; `cigcompile bench --watch`
+#                                          (cig bench --watch) is the live mode
+#   build of orchestrate.cig (#14, 10 s)   needs a cig-orchestrator checkout;
+#                                          `cigcompile bench --orchestrate` keeps it
+#   a program refusing (E1050 to E1055)    waits on a fixture per refusal
+#   the IR's size before and after a pass  waits on a `cig bench` measure for it;
+#                                          `build --emit cir` prints the IR
+#   size gated at 4 MB                     waits on stage B (#31) trimming the runtime
+
+format = 1
+
+[bench]
+product = "cigcompile"
+version = ["cigcompile", "--version"]
+home    = "isolated"
+build   = ["cargo", "build", "--release", "--locked", "--bins"]
+binary  = "target/release/cigcompile"
+watch   = ["src/**", "Cargo.toml", "bench/**"]
+
+[defaults]
+samples = 5
+per     = 1
+warmup  = 1
+# The harness starts every case from an empty environment, so the pinned cig's
+# checkout is named here, relative to this folder (the sibling `../../CigScript`
+# is where CI puts it).
+env     = { NO_COLOR = "1", CIG_DOCTOR = "0", CIG_SEAL_KEY = "file", CIGSCRIPT_SRC = "../../CigScript" }
+
+# ----- build ------------------------------------------------------------------
+
+[[case]]
+name  = "build: hello"
+group = "build"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["cigcompile", "build", "generated/set/hello.cig", "-o", "generated/out/hello"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "build: the set"
+group = "build"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["cigcompile", "build", "generated/set", "-o", "generated/out/all"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "build: nothing changed since the last build"
+group = "build"
+setup = ["sh", "set.sh", "generated/set"]
+before = ["cigcompile", "build", "generated/set/fib.cig", "-o", "generated/out/again"]
+run   = ["cigcompile", "build", "generated/set/fib.cig", "-o", "generated/out/again"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "build: fib at -O0"
+group = "build"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["cigcompile", "build", "generated/set/fib.cig", "-O0", "-o", "generated/out/o0"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "build: fib at -O1"
+group = "build"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["cigcompile", "build", "generated/set/fib.cig", "-O1", "-o", "generated/out/o1"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "build: fib at -O2"
+group = "build"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["cigcompile", "build", "generated/set/fib.cig", "-O2", "-o", "generated/out/o2"]
+expect = { exit = 0 }
+
+# ----- programs: each compiled against the same script interpreted -------------
+# Both sides run the runtime in set.sha256's cig-compatible build: the program
+# is built on the `cig` first on the PATH and `prep-program.sh` refuses unless
+# `cigcompile verify` finds those exact bytes in it. same.sh holds each side's
+# output to cig's own .expect file.
+
+[[case]]
+name  = "interpreted: closures"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "closures"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: closures"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh closures generated/prog"]
+run   = ["sh", "same.sh", "compiled", "closures"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: csv"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "csv"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: csv"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh csv generated/prog"]
+run   = ["sh", "same.sh", "compiled", "csv"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: deltablue"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "deltablue"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: deltablue"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh deltablue generated/prog"]
+run   = ["sh", "same.sh", "compiled", "deltablue"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: dispatch"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "dispatch"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: dispatch"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh dispatch generated/prog"]
+run   = ["sh", "same.sh", "compiled", "dispatch"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: fannkuch"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "fannkuch"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: fannkuch"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh fannkuch generated/prog"]
+run   = ["sh", "same.sh", "compiled", "fannkuch"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: fib"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "fib"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: fib"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh fib generated/prog"]
+run   = ["sh", "same.sh", "compiled", "fib"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: json-deep"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "json-deep"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: json-deep"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh json-deep generated/prog"]
+run   = ["sh", "same.sh", "compiled", "json-deep"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: json"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "json"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: json"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh json generated/prog"]
+run   = ["sh", "same.sh", "compiled", "json"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: lists"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "lists"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: lists"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh lists generated/prog"]
+run   = ["sh", "same.sh", "compiled", "lists"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: loop"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "loop"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: loop"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh loop generated/prog"]
+run   = ["sh", "same.sh", "compiled", "loop"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: mandel"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "mandel"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: mandel"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh mandel generated/prog"]
+run   = ["sh", "same.sh", "compiled", "mandel"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: maps"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "maps"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: maps"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh maps generated/prog"]
+run   = ["sh", "same.sh", "compiled", "maps"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: nbody"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "nbody"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: nbody"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh nbody generated/prog"]
+run   = ["sh", "same.sh", "compiled", "nbody"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: regex-ish"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "regex-ish"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: regex-ish"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh regex-ish generated/prog"]
+run   = ["sh", "same.sh", "compiled", "regex-ish"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: richards"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "richards"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: richards"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh richards generated/prog"]
+run   = ["sh", "same.sh", "compiled", "richards"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: sieve"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "sieve"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: sieve"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh sieve generated/prog"]
+run   = ["sh", "same.sh", "compiled", "sieve"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: spectral"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "spectral"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: spectral"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh spectral generated/prog"]
+run   = ["sh", "same.sh", "compiled", "spectral"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: strbuild"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "strbuild"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: strbuild"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh strbuild generated/prog"]
+run   = ["sh", "same.sh", "compiled", "strbuild"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: strings"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "strings"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: strings"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh strings generated/prog"]
+run   = ["sh", "same.sh", "compiled", "strings"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: trees"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "trees"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: trees"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh trees generated/prog"]
+run   = ["sh", "same.sh", "compiled", "trees"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: words"
+group = "programs"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["sh", "same.sh", "interpreted", "words"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "compiled: words"
+group = "programs"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh words generated/prog"]
+run   = ["sh", "same.sh", "compiled", "words"]
+expect = { exit = 0 }
+
+# ----- start-up ---------------------------------------------------------------
+
+[[case]]
+name  = "compiled: hello, start-up"
+group = "start-up"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh hello generated/prog"]
+run   = ["generated/prog/hello"]
+per   = 20
+expect = { exit = 0 }
+
+[[case]]
+name  = "interpreted: hello, start-up"
+group = "start-up"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["cig", "run", "generated/set/hello.cig"]
+per   = 20
+expect = { exit = 0 }
+
+# ----- size: the file a build writes (reported; #14's 4 MB waits on stage B) ---
+
+[[case]]
+name  = "size: hello"
+group = "size"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["cigcompile", "build", "generated/set/hello.cig", "-o", "generated/size/hello"]
+measure = ["wall", "file:generated/size/hello"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "size: nbody"
+group = "size"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["cigcompile", "build", "generated/set/nbody.cig", "-o", "generated/size/nbody"]
+measure = ["wall", "file:generated/size/nbody"]
+expect = { exit = 0 }
+
+# ----- artefacts --------------------------------------------------------------
+
+[[case]]
+name  = "artefacts: --sbom"
+group = "artefacts"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["cigcompile", "build", "generated/set/hello.cig", "--sbom", "-o", "generated/art/sbom"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "artefacts: --sign"
+group = "artefacts"
+setup = ["sh", "-c", "sh set.sh generated/set && mkdir -p generated/art && rm -f generated/art/key generated/art/key.pub && ssh-keygen -q -t ed25519 -N '' -f generated/art/key"]
+run   = ["cigcompile", "build", "generated/set/hello.cig", "--sign", "generated/art/key", "-o", "generated/art/signed"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "artefacts: --emit oci"
+group = "artefacts"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["cigcompile", "build", "generated/set/hello.cig", "--emit", "oci", "-o", "generated/art/oci"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "artefacts: --emit deb"
+group = "artefacts"
+setup = ["sh", "set.sh", "generated/set"]
+run   = ["cigcompile", "build", "generated/set/hello.cig", "--emit", "deb", "-o", "generated/art/deb"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "artefacts: verify"
+group = "artefacts"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh hello generated/prog"]
+run   = ["sh", "-c", "cigcompile verify generated/prog/hello --script generated/set/hello.cig --runtime \"$(command -v cig)\""]
+expect = { exit = 0 }
+
+[[case]]
+name  = "artefacts: audit"
+group = "artefacts"
+setup = ["sh", "-c", "sh set.sh generated/set && sh prep-program.sh hello generated/prog"]
+run   = ["cigcompile", "audit", "generated/prog/hello"]
+expect = { exit = 0 }
+
+# ----- passes: each alone on a generated 10,000-line script --------------------
+
+[[case]]
+name  = "pass: fold-consts alone"
+group = "passes"
+setup = ["sh", "gen-script.sh", "10000", "generated/passes/ten-thousand.cig"]
+run   = ["cigcompile", "build", "generated/passes/ten-thousand.cig", "--emit", "cir", "--passes", "fold-consts", "-o", "generated/passes/fold-consts"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "pass: copy-prop alone"
+group = "passes"
+setup = ["sh", "gen-script.sh", "10000", "generated/passes/ten-thousand.cig"]
+run   = ["cigcompile", "build", "generated/passes/ten-thousand.cig", "--emit", "cir", "--passes", "copy-prop", "-o", "generated/passes/copy-prop"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "pass: sccp alone"
+group = "passes"
+setup = ["sh", "gen-script.sh", "10000", "generated/passes/ten-thousand.cig"]
+run   = ["cigcompile", "build", "generated/passes/ten-thousand.cig", "--emit", "cir", "--passes", "sccp", "-o", "generated/passes/sccp"]
+expect = { exit = 0 }
+
+[[case]]
+name  = "pass: dead-pure alone"
+group = "passes"
+setup = ["sh", "gen-script.sh", "10000", "generated/passes/ten-thousand.cig"]
+run   = ["cigcompile", "build", "generated/passes/ten-thousand.cig", "--emit", "cir", "--passes", "dead-pure", "-o", "generated/passes/dead-pure"]
+expect = { exit = 0 }

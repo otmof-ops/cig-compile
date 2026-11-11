@@ -5,6 +5,22 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **`cigcompile bench` on the family's harness (#68).** `bench/bench.toml` measures
+  build, programs (each of 21 compiled and interpreted, on one runtime), start-up, size,
+  artefacts and passes, and `cigcompile bench` is a front end of `cig bench` for
+  `--manifest`, `--watch`, `--timings`, `--stats`, `--syscalls`, `--group`, `--cig` and
+  `--against <ref>`; every flag it had still runs the set harness unchanged (`--against` of
+  a saved `.json`, `--current` and `--trend` stay the regression gate). The set is read from
+  the pinned cig's `bench/compute`, each file held to `bench/set.sha256` (`bench/set.sh`);
+  `bench/prep-program.sh` builds each program on the `cig` the interpreted side runs and
+  refuses unless `cigcompile verify` finds those exact bytes in it; `--syscalls` names a
+  compiled-against-interpreted gap that is the allocator's `allocator, not the compiler`
+  (cig-script#153); a build writes its phases to `CIG_TIMINGS_FD` as v1 lines. A nightly run on
+  cig-script's reusable workflow (`bench-nightly.yml`) keeps the history on `bench-history`.
+  Timings are reported, never gated. `tests/bench_front.rs` and `src/bench.rs` have
+  `cigcompile_bench_flags_still_work`, `set_comes_from_the_pinned_cig`,
+  `same_runtime_for_both_sides`, `allocator_gap_is_named` and `build_phases_on_the_fd`
+  (docs/BENCHMARKS.md, "On the family's harness").
 - **A crash in cigcompile joins the family's one queue (cig-installer#10).** A panic is written
   into cig's ashtray as a report from `cig-compile`, handed over the way `cigo` does it (`cig
   crash submit --origin cig-compile --repo otmof-ops/cig-compile`), or, with no `cig` on the

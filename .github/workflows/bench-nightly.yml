@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+# SPDX-License-Identifier: FSL-1.1-ALv2
+#
+# The nightly run of bench/bench.toml (#68) on cig-script's reusable workflow:
+# build, programs, start-up, size, artefacts and passes, results appended to
+# the `bench-history` branch, which `cig bench history` reads. Pull requests do
+# not run it (the heavy suites are nightly, DECISIONS 11; bench-gate.yml keeps
+# the pull request's fast set). Timings are reported, never gated; a case whose
+# output is WRONG fails the run. bench.yml, the older nightly of the set against
+# its Python, Node and Rust references, is unchanged.
+name: bench-nightly
+
+on:
+  schedule:
+    - cron: "47 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  bench:
+    uses: otmof-ops/cig-script/.github/workflows/bench.yml@main
+    with:
+      mode: nightly
+      # The cig the suite is measured with, sha256 checked: the one cigcompile pins.
+      cig-version: "1.20.0"
+      # What the suite needs beside cig: the checkout the program set is read
+      # from (../CigScript; set.sh holds every file to bench/set.sha256) and
+      # this repository's cigcompile and runtime. `main` until a cig release
+      # carries bench/compute; then the pinned tag.
+      prepare: |
+        set -eu
+        git clone --depth 1 https://github.com/otmof-ops/cig-script ../CigScript
+        cargo build --release --locked --bins
+        echo "$PWD/target/release" >> "$GITHUB_PATH"
+    permissions:
+      contents: write       # the nightly appends to the bench-history branch
+      pull-requests: write

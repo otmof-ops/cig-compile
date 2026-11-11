@@ -122,6 +122,51 @@ A benchmark whose CV is over 5% on either side is **noisy**: it is in the table,
 
 The gate tests plant their slowdowns in saved results, because at stage A both sides of a pull request are the pinned cig and no program gets faster or slower; stage B (#31) is what gives the gates a real change to see.
 
+## On the family's harness: `bench/bench.toml`
+
+`cigcompile bench` is a front end of `cig bench` ([docs/BENCH.md](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCH.md) in cig-script), the one benchmark tool of the family. This repository's manifest, `bench/bench.toml`, measures what only a compiler has:
+
+| group | cases | measures |
+|---|---|---|
+| `build` | `build` of hello and of the whole set, a rebuild with nothing changed, `-O0`, `-O1`, `-O2` | wall, rss, and with `--timings` the phases |
+| `programs` | each of 21 programs of the set, interpreted (`cig run`) and compiled | wall, rss, and with `--syscalls` the calls |
+| `start-up` | a compiled hello, and the interpreter's | wall |
+| `size` | the file a build writes, for hello and nbody | `file:` bytes, reported, not gated (#14's 4 MB waits on stage B) |
+| `artefacts` | `--sbom`, `--sign`, `--emit oci`, `--emit deb`, `verify`, `audit` | wall |
+| `passes` | each pass alone on a generated 10,000-line script | wall |
+
+```sh
+cigcompile bench --manifest bench/bench.toml                  # every case
+cigcompile bench --manifest bench/bench.toml --group programs # one group
+cigcompile bench --group programs --syscalls                  # where the calls went
+cigcompile bench --timings                                    # the build's phases
+cigcompile bench --watch                                      # rebuild and rerun on a change
+cigcompile bench --against origin/main                        # A/B against a ref, a release or a binary
+```
+
+Asking for any of `--watch`, `--timings`, `--stats`, `--syscalls`, `--manifest`, `--group`, or `--against` with a ref, a release or a binary (not a saved `.json`) runs the manifest through `cig bench`, with its statistics, its A/B and its live mode. `--runs` is its `--samples`, and `--only`, `--markdown` and `--json` are its own. **The flags the set harness had keep working, on the set harness, unchanged:** `--runs`, `--ref`, `--markdown`, `--json`, `--set`, `--runtime`, `--budgets`, `--orchestrate`, `--alloc`, `--only`, and `--against` with `--current` or `--trend` (the regression gate on saved results). `--cig PATH` names a cig that has `cig bench`; by default it is the runtime programs are built on. A cig without `bench` is said, with the flags that need no cig, and exits 3.
+
+**The set is the pinned cig's.** The 21 programs and their expected output are cig's `bench/compute`; `bench/set.sh` copies them from `$CIGSCRIPT_SRC/bench/compute` (the manifest sets it to `../../CigScript`, where CI checks cig out) after holding every file to its sha256 in `bench/set.sha256`. A file that differs, or is missing, is a refusal naming it (exit 3). The `bench/*.cig` files the set harness reads are unchanged for now.
+
+**Both sides run one runtime.** The front end puts the runtime first on the `PATH` as `cig`, so `cig run x.cig` runs the bytes a program built here carries; `bench/prep-program.sh` builds each program on that `cig` and refuses unless `cigcompile verify --runtime` finds exactly those bytes at its front. A gap between a program and its script is then the compiler's work and nothing else.
+
+**The allocator is named.** `--syscalls` runs one extra run of each case under `strace`. A compiled-against-interpreted pair where one side maps and unmaps at least ten times as much as the other (and 100 pairs more) is reported as `allocator, not the compiler`: both sides run one runtime, so the program is not what is faster (cig-script#153's nbody: 400,507 mmap/munmap calls against 78). It is a sentence, never a failure.
+
+**Phases.** A build writes the phases `--timings` prints (read, index, check, pin, runtime, assemble, hash, write, sbom) to the descriptor `CIG_TIMINGS_FD` names, as v1 lines (`{"v":1,"product":"cigcompile","phase":"check","ms":0.5}`), summed over the scripts. The descriptor alone is enough; with neither it nor `--timings` nothing is written. Time outside those phases (loading the runtime, mostly) is the reader's `other`.
+
+**Not in the manifest yet:** `build --watch` reacting to one change (a case cannot wait on a process that never ends: use `cigcompile bench --watch`), the build of `orchestrate.cig` (`--orchestrate` keeps it), a program refusing with E1050 to E1055, the IR's size before and after a pass, and the 4 MB gate. The set harness is the default for a bare `cigcompile bench` until a cig with `cig bench` is the pin.
+
+The nightly run is `.github/workflows/bench-nightly.yml`, on cig-script's reusable workflow, with the results on the `bench-history` branch. Timings are reported, never gated.
+
+| test | what it holds |
+|---|---|
+| `cigcompile_bench_flags_still_work` | every flag of today's `--help` is still there and runs the set harness, none of them reaching `cig` |
+| `the_new_flags_are_handed_to_cig_bench` | the new flags reach `cig bench` as written, with the runtime first on the `PATH` |
+| `set_comes_from_the_pinned_cig` | the manifest's 21 programs are in `set.sha256`; the pinned cig's files match it; a changed byte or a missing file is refused |
+| `same_runtime_for_both_sides` | the program carries the sha256 of the runtime `cig` is; another runtime is not accepted |
+| `allocator_gap_is_named` | a planted mmap thrash on one side is reported as the allocator's, and a quiet pair is not |
+| `build_phases_on_the_fd` | `CIG_TIMINGS_FD` gets the rows `--timings` prints, with the same times |
+
 ## What the later stages must reach
 
 The full table is in #30 and #42. In short:
