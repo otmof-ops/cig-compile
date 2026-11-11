@@ -3,6 +3,11 @@ name: bench
 # #30: every night the whole set runs interpreted, compiled, and as its
 # Python, Node and Rust references, and the table goes to the run's summary.
 # A benchmark whose output is wrong fails the run before it is timed.
+#
+# The trend (#30): each night's `bench --json` joins the history kept as the
+# `bench-history` artifact, and `bench --trend` fails the run when the set
+# has been slower five nights in a row. The heavy suites run here; a pull
+# request runs the fast set (bench-gate.yml).
 on:
   schedule:
     - cron: "23 5 * * *"
@@ -10,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   bench:
@@ -25,10 +31,49 @@ jobs:
         with:
           python-version: "3.13"
       - run: cargo build --release
+      - run: cargo build --release --bin cig-runtime --features alloc-count --target-dir target-alloc
       - name: bench --ref
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
-          ./target/release/cigcompile bench --ref --markdown | tee -a "$GITHUB_STEP_SUMMARY"
+          ./target/release/cigcompile bench --ref --markdown --alloc target-alloc/release/cig-runtime | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: tonight's numbers, as JSON
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p history
+          ./target/release/cigcompile bench --runs 10 --alloc target-alloc/release/cig-runtime --json > "history/$(date -u +%F).json"
+      - name: the history so far
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The last run that kept a history; the first night has none.
+          prev=$(gh run list --workflow bench.yml --status completed --limit 20 --json databaseId --jq '.[].databaseId' |
+            while read -r id; do
+              if gh run download "$id" --name bench-history --dir history-prev 2>/dev/null; then echo "$id"; break; fi
+            done)
+          if [ -n "$prev" ]; then
+            echo "history from run $prev"
+            # Tonight's file wins over a re-run's of the same date.
+            cp -n history-prev/*.json history/ || true
+          else
+            echo "no earlier history: this is the first night"
+          fi
+          # Thirty nights are kept.
+          ls history/*.json | sort | head -n -30 | xargs -r rm -f
+      - name: the history, as an artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-history
+          path: history/*.json
+          retention-days: 90
+      - name: the trend gate
+        shell: bash
+        run: |
+          set -o pipefail
+          ./target/release/cigcompile bench --trend history | tee -a "$GITHUB_STEP_SUMMARY"

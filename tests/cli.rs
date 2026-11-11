@@ -464,7 +464,7 @@ fn clean_with_no_build_index_keeps_and_says_force() {
 /// A benchmark whose output is not its `.expect` file is WRONG and gets no
 /// time: a fast wrong answer is a bug, not a result (#30).
 #[test]
-fn a_wrong_benchmark_output_fails_before_it_is_timed() {
+fn a_wrong_output_fails_before_timing() {
     let s = Sandbox::new();
     s.write("set/x.cig", "exhale 0\n");
     s.write("set/x.expect", "1\n");
@@ -481,7 +481,7 @@ fn a_wrong_benchmark_output_fails_before_it_is_timed() {
 
 /// The report for a pull request comment is a Markdown table (#30).
 #[test]
-fn the_markdown_bench_report_renders() {
+fn the_markdown_report_renders() {
     let s = Sandbox::new();
     s.write("set/one.cig", "exhale 1\n");
     s.write("set/one.expect", "1\n");
@@ -2586,4 +2586,185 @@ fn the_docs_name_cigcompile_report_beside_the_installers_bug() {
         assert!(t.contains("cigcompile report"), "{rel}");
         assert!(t.contains("ciginstaller bug cigcompile"), "{rel}");
     }
+}
+
+/// A saved `bench --json` result of one benchmark: `n` samples about `ms`,
+/// as the gates read them.
+fn saved_result(name: &str, ms: f64, jitter: f64) -> String {
+    let samples: Vec<f64> = (0..10)
+        .map(|i| ms * (1.0 + jitter * ((i as f64) / 9.0 - 0.5)))
+        .collect();
+    let mut sorted = samples.clone();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let mean = samples.iter().sum::<f64>() / 10.0;
+    let var = samples.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / 10.0;
+    serde_json::json!({"programs": [{
+        "name": name,
+        "interpreted": {"median_ms": sorted[5], "cv": var.sqrt() / mean,
+                        "samples_ms": samples, "rss_bytes": 10_000_000},
+    }]})
+    .to_string()
+}
+
+/// The regression gate (#30): a saved baseline against a saved result, on
+/// the command line. A planted 10% slowdown fails the run, a result within
+/// noise passes, and a noisy benchmark is said and never gated.
+#[test]
+fn the_regression_gate_trips_from_the_command_line() {
+    let s = Sandbox::new();
+    s.write("main.json", &saved_result("x", 100.0, 0.02));
+    s.write("slow.json", &saved_result("x", 110.0, 0.02));
+    s.write("same.json", &saved_result("x", 100.5, 0.02));
+    s.write("noisy-main.json", &saved_result("x", 100.0, 0.6));
+    s.write("noisy-slow.json", &saved_result("x", 125.0, 0.6));
+    let o = s.cc(&["bench", "--against", "main.json", "--current", "slow.json"]);
+    let out = text(&o.stdout);
+    assert_eq!(o.status.code(), Some(1), "{out}{}", text(&o.stderr));
+    assert!(
+        out.contains("SLOWER") && out.contains("x (interpreted)"),
+        "{out}"
+    );
+    let o = s.cc(&["bench", "--against", "main.json", "--current", "same.json"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stdout));
+    let o = s.cc(&[
+        "bench",
+        "--against",
+        "noisy-main.json",
+        "--current",
+        "noisy-slow.json",
+        "--markdown",
+    ]);
+    let out = text(&o.stdout);
+    assert_eq!(o.status.code(), Some(0), "{out}");
+    assert!(out.contains("noisy, not gated"), "{out}");
+    assert!(out.contains("| benchmark | main ms |"), "{out}");
+    // Rounds pool: two files for a side are one side.
+    let o = s.cc(&[
+        "bench",
+        "--against",
+        "main.json",
+        "--against",
+        "same.json",
+        "--current",
+        "slow.json",
+        "--current",
+        "slow.json",
+    ]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o.stdout));
+    // A file that is not a bench result is a usage error, not a pass.
+    s.write("junk.json", "{}");
+    let o = s.cc(&["bench", "--against", "junk.json", "--current", "main.json"]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o.stderr));
+}
+
+/// The nightly trend gate (#30): five slower nights in a row fail.
+#[test]
+fn the_nightly_trend_fails_after_five_slower_nights() {
+    let s = Sandbox::new();
+    for (i, ms) in [100.0, 101.0, 102.5, 104.0, 105.5, 107.0]
+        .iter()
+        .enumerate()
+    {
+        s.write(
+            &format!("history/2026-11-0{}.json", i + 1),
+            &saved_result("x", *ms, 0.01),
+        );
+    }
+    let o = s.cc(&["bench", "--trend", "history"]);
+    let out = text(&o.stdout);
+    assert_eq!(o.status.code(), Some(1), "{out}");
+    assert!(out.contains("5 night(s) in a row"), "{out}");
+    s.write("history/2026-11-07.json", &saved_result("x", 100.0, 0.01));
+    let o = s.cc(&["bench", "--trend", "history"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stdout));
+}
+
+/// `--only` runs part of the set; a name that is not in it is a usage error.
+#[test]
+fn bench_only_runs_the_named_benchmarks() {
+    let s = Sandbox::new();
+    s.write("set/a.cig", "exhale 1\n");
+    s.write("set/a.expect", "1\n");
+    s.write("set/b.cig", "exhale 2\n");
+    s.write("set/b.expect", "2\n");
+    let out = ok(&s.cc(&["bench", "--set", "set", "--runs", "2", "--only", "b"]));
+    assert!(out.lines().any(|l| l.starts_with("b ")), "{out}");
+    assert!(!out.lines().any(|l| l.starts_with("a ")), "{out}");
+    let o = s.cc(&["bench", "--set", "set", "--only", "nope"]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o.stderr));
+}
+
+/// `--alloc` with a runtime that does not count says nothing for the
+/// column: a dash, and a null in the JSON, never a zero.
+#[test]
+fn a_runtime_that_does_not_count_gives_no_allocation_numbers() {
+    let s = Sandbox::new();
+    s.write("set/one.cig", "exhale 1\n");
+    s.write("set/one.expect", "1\n");
+    let v: serde_json::Value = serde_json::from_str(
+        ok(&s.cc(&[
+            "bench", "--set", "set", "--runs", "2", "--alloc", RT, "--json",
+        ]))
+        .trim(),
+    )
+    .unwrap();
+    let counting = cfg!(feature = "alloc-count");
+    assert_eq!(v["programs"][0]["allocs"].is_object(), counting, "{v}");
+    if counting {
+        assert!(v["programs"][0]["allocs"]["count"].as_u64().unwrap() > 0);
+        assert!(v["programs"][0]["allocs"]["bytes"].as_u64().unwrap() > 0);
+    }
+}
+
+/// The references are said with their versions, or as not installed, and
+/// never as a row of invented numbers (#30).
+#[test]
+fn the_references_are_said_with_their_versions() {
+    let s = Sandbox::new();
+    s.write("set/one.cig", "exhale 1\n");
+    s.write("set/one.expect", "1\n");
+    let v: serde_json::Value = serde_json::from_str(
+        ok(&s.cc(&["bench", "--set", "set", "--runs", "2", "--ref", "--json"])).trim(),
+    )
+    .unwrap();
+    for lang in ["Python", "Node", "Rust"] {
+        assert!(v["references"][lang].is_string(), "{lang}: {v}");
+    }
+    // `one` has no reference source, so no reference time exists for it.
+    assert!(v["programs"][0]["refs"]["py"]["median_ms"].is_null(), "{v}");
+}
+
+/// Python, Node and Rust print what the `.expect` files say (#30). Needs
+/// those tools, so it is the nightly's (`cargo test --release --test cli --
+/// --ignored references_agree`): a tool that is not installed is said, and
+/// its column is empty; a reference that prints something else is WRONG and
+/// fails here.
+#[test]
+#[ignore = "needs python3, node and rustc: the nightly runs it"]
+fn references_agree_with_the_expect_files() {
+    let s = Sandbox::new();
+    let o = s.cc(&["bench", "--ref", "--runs", "1", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim())
+        .unwrap_or_else(|e| panic!("{e}\n{}\n{}", text(&o.stdout), text(&o.stderr)));
+    let mut checked = 0;
+    for p in v["programs"].as_array().unwrap() {
+        for (lang, side) in p["refs"].as_object().unwrap() {
+            assert!(
+                side.get("wrong").is_none(),
+                "{} ({lang}): {}",
+                p["name"],
+                side["wrong"]
+            );
+            checked += usize::from(side.get("median_ms").is_some());
+        }
+    }
+    let have_any = v["references"]
+        .as_object()
+        .unwrap()
+        .values()
+        .any(|x| x != "not installed");
+    assert!(
+        !have_any || checked > 0,
+        "tools installed, no reference ran"
+    );
 }

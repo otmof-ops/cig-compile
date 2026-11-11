@@ -10,7 +10,7 @@
 4. **Conditions.** Every report starts with the CPU, cores, kernel, CPU governor, the cig and cigcompile versions, `CIG_SEAL_KEY` and the runtime's sha256.
 5. **References.** `--ref` runs the Python, Node and Rust versions in `bench/ref/` too, where `python3`, `node` and `rustc` are installed (`rustc -O`), and gives cig's ratio to each. Each reference is held to the same `.expect` file.
 
-`--json` is for tools and `--markdown` for a pull request comment. `--set DIR` measures a folder of `<name>.cig` and `<name>.expect` instead of the set. CI runs the set on five machines on every pull request; a WRONG output there fails the build. A nightly run (`.github/workflows/bench.yml`) adds the references and posts the table to its summary.
+`--json` is for tools (it carries every raw sample, which the gates read) and `--markdown` for a pull request comment. `--set DIR` measures a folder of `<name>.cig` and `<name>.expect` instead of the set. CI runs the set on five machines on every pull request; a WRONG output there fails the build. A nightly run (`.github/workflows/bench.yml`) adds the references, posts the table to its summary and keeps the trend ([the gates](#the-gates)).
 
 ## The set
 
@@ -48,6 +48,12 @@
 
 The first ten are I/O, the journal and the standard library, where a compiler must not regress. The next nine are the classic compute benchmarks that steer stages B to D; the last ten are what the "still to add" set in #30 names (#45 and this issue): bulk string work, deep JSON, the quadratic strbuild trap, the Richards and DeltaBlue classics, a many-burn stress, the biggest real CigScript program, and start-up with zero, one and ten stdlib modules touched.
 
+Every report names the references it ran: each of Python, Node and Rust with its version, or `not installed`. A tool that is not there leaves its column empty (a dash): a row is never made up.
+
+### Allocation counts: `--alloc`
+
+`cargo build --release --bin cig-runtime --features alloc-count` makes a bench-only runtime whose global allocator counts every allocation and the bytes asked for (a `realloc` counts as one allocation of its new size), and writes the two numbers to `CIG_ALLOC_FILE` as the process exits. `cigcompile bench --alloc <that runtime>` runs each benchmark once interpreted under it, checks the output is still right, and adds an `allocs` column and an `allocs` object (`count`, `bytes`) to `--json`. The count does not vary from run to run, so one run is enough, and it is the number the memory gate trusts. A release build of the runtime has no counter.
+
 ### The 1x and 5x pass: compute time apart from start-up
 
 A benchmark marked `scaled` reads `args[0]` as a size and the harness runs it at two sizes (1 and 5): the slope between the medians, `(ms5 - ms1) / 4`, is reported as **compute ms** beside **wall ms**. A 1.6 ms process start then does not flatter Rust or hide a compiler's gains on small inputs. The slope reuses the existing `Stats` summary (no new statistics code), and a benchmark that does not declare `<name>.expect5x` is unchanged.
@@ -81,6 +87,41 @@ Two sizes differ from #30's table, on purpose. `strbuild` appends 10,000 times, 
 
 The tree-walking interpreter is 4.0× slower than CPython at the median of the eleven. It starts faster than both Python and Node. Compiled and interpreted are the same speed, as stage A must be: a program is the interpreter. (Node 18's start-up on this machine, about 150 ms, makes the Node column mostly start-up; #30's numbers were taken with Node 22.)
 
+## The gates
+
+Both sides of a gate are `--json` results; nothing in a gate runs a program.
+
+| gate | runs | trips when | exit |
+|---|---|---|---|
+| regression, per benchmark (`--against`) | every pull request, the fast set | a non-noisy benchmark's median is more than **5%** slower than `main`'s and a one-sided Mann-Whitney test of the samples says it is real (p under 0.05) | 1 |
+| regression, the set (`--against`) | every pull request | the geometric mean of the ratios, over the non-noisy rows, is more than **2%** slower and the same test over all their samples (each divided by its row's `main` median) says it is real | 1 |
+| memory (`--against`) | every pull request | a benchmark's peak resident set, or its allocation count where both sides have one, is more than **10%** over `main`'s (and over 1 MiB, or 1,000 allocations: a few KB on a tiny program is not a leak) | 1 |
+| trend (`--trend`) | nightly | the set's geometric mean is more than 0.5% slower than the night before, **five nights in a row** | 1 |
+
+A benchmark whose CV is over 5% on either side is **noisy**: it is in the table, marked `noisy, not gated`, and never fails a run. A slowdown the test cannot tell from the samples' own spread is `not significant`, and not gated. A side with fewer than five samples is gated on its medians alone.
+
+**Interleaved.** `bench-gate.yml` builds `main` and the pull request, runs the fast set on each in turn, three rounds (main, pull request, main, pull request, ...), and pools each side's rounds (`--against` and `--current` repeat). A runner that warms up, throttles or has a noisy neighbor does it under both. The table (Markdown) goes to the job summary and to the pull request. While `main` has no `--against` of its own, the job says there is nothing to compare with and does not pass by default.
+
+**Trend.** `bench.yml` runs nightly: the set against its references, then `bench --json` into `history/<date>.json`, joined with the last run's history, kept as the `bench-history` artifact (thirty nights, 90 days), and `bench --trend history` fails the run at five slower nights. The step is 0.5% and the length five because #30 says "five nightlies in a row each slower" and a night-to-night difference under the harness's own noise is the same night. The nightly also runs `references_agree_with_the_expect_files`.
+
+### Tests
+
+| test | what it holds |
+|---|---|
+| `every_benchmark_has_an_expect_file` | every benchmark has its output, and each reference a benchmark |
+| `a_wrong_output_fails_before_timing` | a benchmark that prints something else gets no time and fails the run |
+| `a_noisy_benchmark_is_not_gated` | a 25% slowdown on a benchmark with a CV over 5% is said, not failed |
+| `the_regression_gate_trips_at_five_percent` | a planted 8% slowdown in one of nineteen quiet benchmarks fails, 3% does not |
+| `the_geomean_gate_trips_at_two_percent` | every benchmark 3% slower fails the set, 1% does not |
+| `the_regression_gate_stays_quiet_on_noise` | 200 seeds of the same program measured twice: no failure |
+| `the_memory_gate_trips_over_ten_percent` | peak RSS and allocations |
+| `the_regression_gate_trips_from_the_command_line` | `--against` and `--current` exit codes, pooling, a file that is not a result |
+| `the_nightly_trend_fails_after_five_slower_nights` | five fail, four do not, a faster night ends the run |
+| `the_markdown_report_renders` | the pull request table |
+| `references_agree_with_the_expect_files` | Python, Node and Rust print the `.expect` output (nightly; `--ignored`) |
+
+The gate tests plant their slowdowns in saved results, because at stage A both sides of a pull request are the pinned cig and no program gets faster or slower; stage B (#31) is what gives the gates a real change to see.
+
 ## What the later stages must reach
 
 The full table is in #30 and #42. In short:
@@ -92,4 +133,4 @@ The full table is in #30 and #42. In short:
 | `hello` start-up, compiled | 5 ms | 3 ms | 2 ms |
 | `hello` size | 4 MB | 4 MB | 3 MB |
 
-At stage A a pull request cannot change how fast a program runs: both sides are the pinned cig. So the regression gate (a benchmark 5% slower than `main`) starts with stage B (#31), where the compiler makes the code that runs.
+At stage A a pull request cannot change how fast a program runs: both sides are the pinned cig. So the regression gate (a benchmark 5% slower than `main`) is proven on planted slowdowns now, and sees a real one from stage B (#31), where the compiler makes the code that runs.

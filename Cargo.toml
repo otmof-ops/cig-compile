@@ -23,6 +23,11 @@ path = "src/main.rs"
 name = "cig-runtime"
 path = "src/bin/cig-runtime.rs"
 
+[features]
+# A bench-only build of the runtime that counts allocations (#30):
+# `cargo build --release --bin cig-runtime --features alloc-count`.
+alloc-count = []
+
 [dependencies]
 cigscript = { git = "https://github.com/otmof-ops/cig-script", tag = "v1.20.0" }
 clap = { version = "4", features = ["derive"] }

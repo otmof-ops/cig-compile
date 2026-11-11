@@ -10,7 +10,8 @@ cigcompile test [path] ...    # same build flags; then runs the plan both sides 
 cigcompile clean [path] [-o out] [--target T] [--force]
 cigcompile targets
 cigcompile fetch [--target T]... [--all]
-cigcompile bench [script] [--set DIR] [--runs N] [--ref] [--markdown] [--runtime cig] [--budgets] [--orchestrate SCRIPT]
+cigcompile bench [script] [--set DIR] [--only NAMES] [--runs N] [--ref] [--markdown] [--runtime cig] [--budgets] [--orchestrate SCRIPT] [--alloc RUNTIME] [--against JSON]... [--current JSON]...
+cigcompile bench --trend DIR
 cigcompile audit <program>
 cigcompile verify <program> [--script s.cig] [--runtime cig]
                             [--signature <sig>] [--allowed-signers <file>] [--identity <id>]
@@ -192,10 +193,23 @@ Flags:
 | `--runtime <path>` | the cig to build and run with |
 | `--budgets` | exit `1` when a budget that applies to this stage is missed |
 | `--orchestrate <script>` | also time a full build of this script (#14's 10 s budget for `orchestrate.cig`) |
+| `--only a,b,c` | only these benchmarks of the set (the pull request job's fast set) |
+| `--alloc <runtime>` | allocation counts: one interpreted run of each benchmark under a runtime built with `--features alloc-count`, as an `allocs` column (a runtime that does not count gives a dash, never a zero) |
+| `--against <json>` | the regression gate: compare with a result saved from `main` by `--json`; repeat the flag to pool interleaved rounds. Exit `1` when it trips (below) |
+| `--current <json>` | with `--against`: this pull request's saved results instead of a run; nothing is run |
+| `--trend <dir>` | the nightly trend gate over a folder of dated `--json` files; exit `1` after five slower nights in a row. Nothing is run |
 
 A WRONG output fails the run: a side whose program's output differs
 from the `.expect` file is marked WRONG, gets no time and gives the run
 exit `1`.
+
+The gates are in [benchmarks](BENCHMARKS.md#the-gates): `--against`
+exits `1` when a non-noisy benchmark is more than 5% slower than
+`main`'s, the set's geometric mean more than 2%, or peak memory or
+allocations more than 10% (each by a Mann-Whitney test of the
+samples), and `--trend` when the set has been slower five nights in a
+row. A result file that is not `--json` output is a usage error (`3`),
+never a pass.
 
 ## Reading what a program carries
 

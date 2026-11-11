@@ -5,6 +5,20 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **The benchmark programme's gates (#30).** `cigcompile bench --against <main.json>` is the
+  regression gate: exit 1 when a non-noisy benchmark is more than 5% slower than `main`'s, the
+  set's geometric mean more than 2%, or peak memory or allocations more than 10% over, each by a
+  one-sided Mann-Whitney test of the raw samples (`--json` now carries them as `samples_ms`), so
+  noise does not trip it; `--current` compares two saved results without running, and `--against`
+  repeats to pool interleaved rounds. `bench-gate.yml` runs the fast set (`--only`) on `main` and
+  on the pull request round by round and comments the table; `bench.yml` keeps the nightly
+  history as the `bench-history` artifact and `bench --trend <dir>` fails after five slower nights
+  in a row. `--alloc <runtime>` adds allocation counts, from a bench-only runtime built with
+  `--features alloc-count` (a counting global allocator; a release build has none). Every report
+  names Python, Node and Rust with their versions, or says one is not installed. Renamed to the
+  issue's names: `a_wrong_output_fails_before_timing`, `every_benchmark_has_an_expect_file`,
+  `the_markdown_report_renders`; new: `the_regression_gate_trips_at_five_percent`,
+  `a_noisy_benchmark_is_not_gated` and the tests beside them (docs/BENCHMARKS.md, "The gates").
 - **License: FSL-1.1-ALv2 from the next release.** The code moves from Apache-2.0 to
   the Functional Source License 1.1 with an Apache-2.0 future license: free to
   use, study, change and share, not to sell or to offer in a competing

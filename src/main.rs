@@ -7,6 +7,7 @@
 
 mod audit;
 mod bench;
+mod benchgate;
 mod build;
 mod cache;
 mod deb;
@@ -177,6 +178,21 @@ struct BenchArgs {
     /// Also time a full build of this script (#14: orchestrate.cig under 10 s).
     #[arg(long, value_name = "SCRIPT")]
     orchestrate: Option<PathBuf>,
+    /// Allocation counts (#30): a runtime built with `cargo build --release --bin cig-runtime --features alloc-count`. One interpreted run of each benchmark under it adds an allocations column.
+    #[arg(long, value_name = "RUNTIME")]
+    alloc: Option<PathBuf>,
+    /// Only these benchmarks of the set (comma separated): the pull request job's fast set.
+    #[arg(long, value_delimiter = ',', value_name = "NAMES")]
+    only: Vec<String>,
+    /// The regression gate (#30): compare with a `main` result saved by `bench --json`; repeat to pool interleaved rounds. Exit 1 when a non-noisy benchmark is over 5% slower, the geometric mean over 2%, or peak memory or allocations over 10%, each by a Mann-Whitney test of the samples. With `--current` nothing is run.
+    #[arg(long, value_name = "JSON")]
+    against: Vec<PathBuf>,
+    /// This pull request's results, from `bench --json` (repeat to pool rounds), instead of running the set: the gate compares two saved results.
+    #[arg(long, value_name = "JSON", requires = "against")]
+    current: Vec<PathBuf>,
+    /// The nightly trend gate (#30): a folder of nightly `bench --json` files named by date; exit 1 when the set has been slower five nights in a row. Nothing is run.
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["against", "current"])]
+    trend: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -374,6 +390,9 @@ fn run() -> i32 {
         Some(Command::Package(a)) => package_cmd(&ctx, &a),
         Some(Command::Doctor) => doctor::run(&ctx),
         Some(Command::Report { args }) => installer::report(&args),
+        Some(Command::Bench(a)) if a.trend.is_some() || !a.current.is_empty() => {
+            bench::gate_only(&ctx, a.trend.as_deref(), &a.against, &a.current, a.markdown)
+        }
         Some(Command::Bench(a)) => {
             let mut index = cache::Index::load();
             let found = runtime::find(runtime::host(), a.runtime.as_deref(), &mut index);
@@ -390,6 +409,9 @@ fn run() -> i32 {
                         markdown: a.markdown,
                         set: a.set.as_deref(),
                         script: a.script.as_deref(),
+                        alloc: a.alloc.as_deref(),
+                        only: &a.only,
+                        against: &a.against,
                     },
                 ),
                 Err(d) => {
