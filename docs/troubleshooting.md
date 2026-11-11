@@ -14,10 +14,10 @@ message starts with the file and the kind of fault.
 
 ```
 error[E1000 usage]: no-such-file.cig is not there
-  = hint: name a .cig script, or a folder that holds them: cigcompile build tools/tidy.cig
+  = hint: name a .cig script or a .cigar file, or a folder that holds them: cigcompile build tools/tidy.cig
 ```
 
-The path is empty, not there, or holds no `.cig` script at its top
+The path is empty, not there, or holds no `.cig` or `.cigar` script at its top
 level. Name a `.cig` file, or `cd` into a folder whose top level has
 one, or pass a folder with `cigcompile build <folder>`.
 

@@ -10,6 +10,9 @@
 //! The interpreter is this build's `cig-runtime`: `cig` of that version.
 //! `DIFF_FILTER=<text>` runs only the cases whose name holds it.
 //! Without `CIGSCRIPT_SRC` the suite says so and passes: CI always sets it.
+//! `DIFF_AS=cigar` builds each script as a mild `.cigar` file (the same text,
+//! named `.cigar`, cigar-script#7) and holds the program to the same
+//! `cig run` of the `.cig`: every CigScript script compiles as mild unchanged.
 
 #[path = "differential/gen.rs"]
 mod gen;
@@ -338,6 +341,13 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
         .trim_end_matches("-cig")
         .to_string();
     let script_name = format!("{base}.cig");
+    // What the compiler is given: the script, or (DIFF_AS=cigar) its text
+    // as a `.cigar` file.
+    let build_name = if as_cigar() {
+        format!("{base}.cigar")
+    } else {
+        script_name.clone()
+    };
     let source = match &case.inline {
         Some(t) => t.clone(),
         None => std::fs::read_to_string(src.join(&case.script)).expect("the script"),
@@ -352,6 +362,7 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
         let _ = std::fs::remove_dir_all(sb.path().join("home"));
         std::fs::create_dir_all(&work).unwrap();
         std::fs::write(work.join(&script_name), &source).unwrap();
+        std::fs::write(work.join(&build_name), &source).unwrap();
         for (p, text) in &case.files {
             let f = work.join(p);
             std::fs::create_dir_all(f.parent().unwrap()).unwrap();
@@ -410,7 +421,7 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
     lay_out();
     let mut c = Command::new(&tools.cc);
     env(&mut c);
-    let built = run(c.args(["build", &script_name, "-o"]).arg(&prog));
+    let built = run(c.args(["build", &build_name, "-o"]).arg(&prog));
     if built.code != Some(0) {
         let mut r = Command::new(&tools.cig);
         env(&mut r);
@@ -875,6 +886,11 @@ fn run_folders(home: &Path) -> Vec<String> {
     v
 }
 
+fn as_cigar() -> bool {
+    static AS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AS.get_or_init(|| std::env::var("DIFF_AS").is_ok_and(|v| v == "cigar"))
+}
+
 fn normal(s: &str) -> String {
     let rules = [
         (r"\d{8}T\d{6}-[0-9a-f]{6}", "<run>"),
@@ -885,6 +901,10 @@ fn normal(s: &str) -> String {
         (r"\b\d+ ms\b", "<n> ms"),
     ];
     let mut out = s.replace("\r\n", "\n");
+    if as_cigar() {
+        // The same script under its other name.
+        out = out.replace(".cigar", ".cig");
+    }
     for (re, to) in rules {
         out = regex::Regex::new(re)
             .unwrap()

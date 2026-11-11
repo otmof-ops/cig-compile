@@ -30,6 +30,10 @@ alloc-count = []
 
 [dependencies]
 cigscript = { git = "https://github.com/otmof-ops/cig-script", tag = "v1.20.0" }
+# `.cigar` files and `--strength` (cigar-script#7): the checker and lowering
+# that `cigar check` is, pinned the way cigscript is, to a cigar-script commit
+# built on the same cigscript (v1.20.0).
+cigarscript = { git = "https://github.com/otmof-ops/cigar-script", rev = "8275562f576b18ba568471b51028a9ee648371ae" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
