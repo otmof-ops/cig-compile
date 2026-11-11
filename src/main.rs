@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! cigcompile: CigScript scripts as programs that run with nothing
 //! installed. Stage A (#2): a program is the `cig` of the version this
 //! compiler pins, with the checked script appended; it runs through the

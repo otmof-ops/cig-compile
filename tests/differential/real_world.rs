@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! The real-world corpus (#39): the cig-orchestrator scripts, as cases
 //! the differential runner can run safely. Every compile holds the whole
 //! program to parity between the interpreter's check and the compiler's,

@@ -1,6 +1,6 @@
 #!/usr/bin/env cig
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-orchestrator)
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 # The test suite for cig-orchestrator, written in CigScript. Every test copies
 # a fixture into .test-work/, runs the tool there as a child `cig` with its own
 # CIGSCRIPT_HOME (so nothing reaches your run history), and checks what it

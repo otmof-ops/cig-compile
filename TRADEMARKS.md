@@ -2,8 +2,8 @@
 
 **CigCompile** (the project, also written cig-compile, its repository's name,
 and cigcompile, its command) and the CigCompile logo are trademarks of Jay
-Taylor, as **CigScript** is. The code is Apache-2.0, and the Apache license
-says so itself in its section 6: it grants no trademark rights. This page says
+Taylor, as **CigScript** is. The code is under FSL-1.1-ALv2, and that license says so itself in its
+Trademarks section: it grants no trademark rights. This page says
 what that means in practice, so nobody has to guess.
 
 The short version: use the names to say what your thing is made of or works
@@ -18,8 +18,8 @@ with; do not use them to say what your thing *is*.
   as trademarks or as protected expression.
 - Use the names in articles, talks, tutorials, comparisons, reviews and
   criticism, including unflattering ones.
-- Distribute unmodified official releases under their names, with the NOTICE
-  file intact, as Apache-2.0 requires.
+- Distribute unmodified official releases under their names, with the LICENSE
+  and NOTICE files intact, as the license requires.
 - Name a package, plugin or repository in a way that describes its
   relationship truthfully, such as `cigcompile-action`, `cigcompile-vscode` or
   `awesome-cigcompile`, provided it is clear the project is not the official
@@ -29,7 +29,7 @@ with; do not use them to say what your thing *is*.
 
 - Naming a **fork, product, service, company or domain** "CigCompile",
   "cig-compile", "cigcompile" or a confusingly similar name (CigCompiler,
-  cig-compiler, cigcomp, cigcompile.dev). Forks are welcome under Apache-2.0;
+  cig-compiler, cigcomp, cigcompile.dev). Forks are possible under the license's terms;
   they need their own name once they differ from the official releases.
 - Using the **logo** anywhere other than to link to the official project.
 - Calling a build, distribution or service **official**, **certified**, or

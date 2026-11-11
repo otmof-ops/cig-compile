@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! The build index (#9): what each program was built from, so a rebuild
 //! that changes nothing reads neither the runtime nor the program, runs no
 //! check, and touches nothing. Kept at `<cig home>/cache/compile/index.json`

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! Where a build's time goes (`build --timings`, #37), and what it is doing
 //! as it goes (`build --json-progress`, #12: the data the window reads). Off,
 //! each phase costs one load of a flag.

@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-orchestrator)
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 # Touches a marker outside the project, undone by its own compensation.
 pack { "./out" }
 stick flag = "../nested-cig-marker/flag"

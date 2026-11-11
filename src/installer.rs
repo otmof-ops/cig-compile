@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! The seam to `ciginstaller`: `cigcompile report` is a short way in to
 //! `ciginstaller bug cigcompile`, which is the one way to report anything.
 //!

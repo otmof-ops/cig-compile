@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! `cigcompile __doctor [--json]`: the checks only cigcompile can make, for
 //! `ciginstaller doctor --tools` to show beside its own. Hidden, read-only
 //! and non-recursive: it writes nothing, fetches nothing, runs no other

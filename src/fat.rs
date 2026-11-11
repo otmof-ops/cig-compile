@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! A universal macOS binary (#10): the arm64 and x86_64 runtimes in one
 //! file, as lipo writes it. A big-endian fat header and its table come
 //! first, then each thin Mach-O at an offset aligned to 16 KiB. Each slice

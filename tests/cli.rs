@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! cigcompile end to end, with the `cig-runtime` this build made as the
 //! runtime (and, run as `cig-runtime run`, as the interpreter the programs
 //! are compared with).

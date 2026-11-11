@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! `cigcompile package` (#41): a Homebrew formula and a Scoop manifest for a
 //! released program, pointing at its release assets with their sha256. They
 //! install what a release already published, so nothing is built here: the

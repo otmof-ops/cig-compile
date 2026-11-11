@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! `build --sbom` (#40): a CycloneDX 1.5 file beside each program, naming
 //! what it is made of: the runtime (cig's release asset, by version and
 //! sha256), the script (by name and sha256) and the compiler. No time and
@@ -18,6 +18,20 @@ pub fn path_for(program: &std::path::Path) -> PathBuf {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "program".to_string());
     program.with_file_name(format!("{name}.cdx.json"))
+}
+
+/// The license a cig runtime was released under: every release up to and including v1.20.0
+/// is Apache-2.0, and later releases are FSL-1.1-ALv2. A version that does not read as
+/// `MAJOR.MINOR.PATCH` (a cig built from source) carries the current source's license.
+pub fn runtime_license(version: &str) -> &'static str {
+    let core = version.split(['-', '+']).next().unwrap_or("");
+    let parts: Vec<Option<u64>> = core.split('.').map(|p| p.parse().ok()).collect();
+    match parts.as_slice() {
+        [Some(major), Some(minor), Some(patch)] if (*major, *minor, *patch) <= (1, 20, 0) => {
+            "Apache-2.0"
+        }
+        _ => "FSL-1.1-ALv2",
+    }
 }
 
 /// The SBOM's text.
@@ -39,7 +53,7 @@ pub fn document(
         "version": runtime.version,
         "description": "the CigScript runtime the program runs on",
         "hashes": [{"alg": "SHA-256", "content": runtime_sha}],
-        "licenses": [{"license": {"id": "Apache-2.0"}}],
+        "licenses": [{"license": {"id": runtime_license(&runtime.version)}}],
         "externalReferences": [{"type": "distribution", "url": format!("https://github.com/otmof-ops/cig-script/releases/tag/v{}", runtime.version)}],
     });
     rt["properties"] = serde_json::json!([{
@@ -85,4 +99,19 @@ pub fn write(
 ) -> std::io::Result<()> {
     let text = document(job, source, program_sha, runtime)?;
     crate::build::write_if_changed(&path_for(beside), text.as_bytes()).map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_license;
+
+    #[test]
+    fn a_runtime_carries_the_license_it_was_released_under() {
+        assert_eq!(runtime_license("1.18.0"), "Apache-2.0");
+        assert_eq!(runtime_license("1.20.0"), "Apache-2.0");
+        assert_eq!(runtime_license("1.20.1"), "FSL-1.1-ALv2");
+        assert_eq!(runtime_license("1.21.0"), "FSL-1.1-ALv2");
+        assert_eq!(runtime_license("2.0.0-beta.1"), "FSL-1.1-ALv2");
+        assert_eq!(runtime_license("built-from-source"), "FSL-1.1-ALv2");
+    }
 }

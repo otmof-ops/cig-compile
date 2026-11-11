@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //! `cigcompile audit <program>` (#40): the hardening a program carries,
 //! read from its headers. A program is cig's runtime with a script
 //! appended, so these are cig's own build's mitigations: PIE, RELRO and
