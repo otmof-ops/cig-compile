@@ -5,6 +5,18 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **Pins choose the compiler, and a trial checks a new one (#15).** A project pinned with
+  `cigar = "1.0"` in `cigar.toml` or a `.cigar-version` builds with the cigcompile of the carton
+  that holds that cigar, after 1.1 is installed too: the installer picks (the shim and
+  `ciginstaller which` read the key), cigcompile never reads a pin
+  ([docs/decisions/0003-pins-and-trial.md](docs/decisions/0003-pins-and-trial.md)).
+  `cigcompile trial <new>` asks the installer where carton `<new>`'s cigcompile is, builds a
+  scratch copy of the project with both and runs its tests, and prints what differs first: the
+  output of `test`, the plan of every program (`--dry-run`), and, with `--differential <dir>`
+  and no codegen flag different, a corpus really run by both. It pins nothing and ends with
+  `ciginstaller pin carton <new>`; exit `0` the same, `1` differs, `3` it could not run, `127` no
+  installer. `tests/trial.rs` has the cases; a compiled program's `compiler` and `cig` fields are
+  asserted in `tests/cli.rs` (#6).
 - **`.cigar` files and `--strength` (cigar-script#7).** `cigcompile build x.cigar` checks
   the file with the `cigarscript` crate (a git dependency on cigar-script, pinned as cigscript
   is) at the strength it declares, and compiles the CigScript it lowers to; `--strength mild |
