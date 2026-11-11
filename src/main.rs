@@ -209,6 +209,27 @@ struct BenchArgs {
     /// The nightly trend gate (#30): a folder of nightly `bench --json` files named by date; exit 1 when the set has been slower five nights in a row. Nothing is run.
     #[arg(long, value_name = "DIR", conflicts_with_all = ["against", "current"])]
     trend: Option<PathBuf>,
+    /// The shared harness (#68): `bench/bench.toml` through `cig bench`, with its statistics and its output. Asking for any of `--watch`, `--timings`, `--stats`, `--syscalls`, `--manifest`, `--group`, or `--against` with a git ref, a release or a binary (not a saved `.json`) runs it; `--runs` is its `--samples`, `--only`, `--markdown` and `--json` its own. The flags above that belong to the set harness (`--ref`, `--budgets`, `--orchestrate`, `--alloc`, `--set`, `--current`, `--trend`) are not part of it.
+    #[arg(long, value_name = "FILE")]
+    manifest: Option<PathBuf>,
+    /// Rebuild and rerun the cases when a watched file changes (`cig bench --watch`).
+    #[arg(long)]
+    watch: bool,
+    /// Where each case's time went, by phase, from the descriptor `CIG_TIMINGS_FD` names: cigcompile's build phases and the interpreter's.
+    #[arg(long)]
+    timings: bool,
+    /// Each case's counters, from `CIG_STATS_FD`.
+    #[arg(long)]
+    stats: bool,
+    /// One extra run of each case under strace: its calls, an mmap/munmap thrash flagged, and a compiled-against-interpreted gap that comes from the allocator named `allocator, not the compiler`.
+    #[arg(long)]
+    syscalls: bool,
+    /// Only the cases of these groups (comma separated).
+    #[arg(long, value_delimiter = ',', value_name = "GROUPS")]
+    group: Vec<String>,
+    /// The cig that has `cig bench` (default: the runtime programs are built on, so both sides of a case run the same bytes).
+    #[arg(long, value_name = "CIG")]
+    cig: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -440,6 +461,40 @@ fn run() -> i32 {
         Some(Command::Bench(a)) if a.trend.is_some() || !a.current.is_empty() => {
             bench::gate_only(&ctx, a.trend.as_deref(), &a.against, &a.current, a.markdown)
         }
+        Some(Command::Bench(a)) if bench_is_shared(&a) => {
+            let cig = match &a.cig {
+                Some(p) => Ok(p.clone()),
+                None => {
+                    let mut index = cache::Index::load();
+                    let found = runtime::find(runtime::host(), a.runtime.as_deref(), &mut index);
+                    index.save();
+                    found.map(|rt| rt.path)
+                }
+            };
+            match cig {
+                Ok(cig) => bench::shared(
+                    &ctx,
+                    &bench::Shared {
+                        manifest: a.manifest.as_deref(),
+                        cig: &cig,
+                        samples: (a.runs != 10).then_some(a.runs.max(1)),
+                        only: &a.only,
+                        group: &a.group,
+                        markdown: a.markdown,
+                        json: ctx.json,
+                        watch: a.watch,
+                        against: a.against.first().and_then(|p| p.to_str()),
+                        timings: a.timings,
+                        stats: a.stats,
+                        syscalls: a.syscalls,
+                    },
+                ),
+                Err(d) => {
+                    cigscript::cli::report(&ctx, &d, None, None);
+                    exit::USAGE
+                }
+            }
+        }
         Some(Command::Bench(a)) => {
             let mut index = cache::Index::load();
             let found = runtime::find(runtime::host(), a.runtime.as_deref(), &mut index);
@@ -468,6 +523,24 @@ fn run() -> i32 {
             }
         }
     }
+}
+
+/// Does this `bench` run go through `cig bench` (the manifest) rather than the
+/// set harness? The flags only the shared harness has, or `--against` given a
+/// ref, a release or a binary instead of a saved `bench --json` result.
+fn bench_is_shared(a: &BenchArgs) -> bool {
+    let against_a_ref = !a.against.is_empty()
+        && a.current.is_empty()
+        && a.against
+            .iter()
+            .any(|p| p.extension().and_then(|e| e.to_str()) != Some("json"));
+    a.watch
+        || a.timings
+        || a.stats
+        || a.syscalls
+        || a.manifest.is_some()
+        || !a.group.is_empty()
+        || against_a_ref
 }
 
 /// What a watched build looks at: each script it would build, and what
@@ -580,6 +653,9 @@ fn build_cmd(
     let started = std::time::Instant::now();
     let finish = |built: &Result<_, i32>| {
         let total = started.elapsed().as_micros();
+        if built.is_ok() {
+            timings::write_fd();
+        }
         if a.timings.is_some() && built.is_ok() {
             timings::report(total);
             if let Some(Some(file)) = &a.timings {

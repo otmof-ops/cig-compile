@@ -1435,6 +1435,288 @@ pub fn path(p: &Option<PathBuf>) -> Option<&Path> {
     p.as_deref()
 }
 
+// ----- the front end of `cig bench` (#68) ---------------------------------------
+
+/// What `cigcompile bench` hands to `cig bench` when it is a front end of it:
+/// the manifest in `bench/bench.toml`, the shared statistics, the A/B, the live
+/// mode and the debugging flags. The old harness above stays behind the flags
+/// it has always had (`--ref`, `--budgets`, `--orchestrate`, `--alloc`,
+/// `--set`, the JSON gate); a run that asks for none of them and names one of
+/// the new ones comes here.
+pub struct Shared<'a> {
+    /// The manifest (default `bench/bench.toml`).
+    pub manifest: Option<&'a Path>,
+    /// The cig that has `bench`: the one given, else the runtime programs are
+    /// appended to, so the interpreted side of every case is the runtime the
+    /// compiled side carries.
+    pub cig: &'a Path,
+    /// `--runs`, as `cig bench --samples`.
+    pub samples: Option<usize>,
+    pub only: &'a [String],
+    pub group: &'a [String],
+    pub markdown: bool,
+    pub json: bool,
+    pub watch: bool,
+    /// A git ref, a release or a binary: `cig bench --against`.
+    pub against: Option<&'a str>,
+    pub timings: bool,
+    pub stats: bool,
+    pub syscalls: bool,
+}
+
+/// The arguments `cig` is run with for a front-end run.
+pub fn shared_argv(s: &Shared) -> Vec<String> {
+    let mut a: Vec<String> = Vec::new();
+    // `--json` is cig's global flag, so it goes before the subcommand.
+    if s.json || s.syscalls {
+        a.push("--json".into());
+    }
+    a.push("bench".into());
+    a.push(
+        s.manifest
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "bench/bench.toml".into()),
+    );
+    if let Some(n) = s.samples {
+        a.push("--samples".into());
+        a.push(n.to_string());
+    }
+    for o in s.only {
+        a.push("--only".into());
+        a.push(o.clone());
+    }
+    for g in s.group {
+        a.push("--group".into());
+        a.push(g.clone());
+    }
+    if s.markdown && !s.syscalls {
+        a.push("--markdown".into());
+    }
+    if let Some(x) = s.against {
+        a.push("--against".into());
+        a.push(x.to_string());
+    }
+    for (on, flag) in [
+        (s.watch, "--watch"),
+        (s.timings, "--timings"),
+        (s.stats, "--stats"),
+        (s.syscalls, "--syscalls"),
+    ] {
+        if on {
+            a.push(flag.into());
+        }
+    }
+    a
+}
+
+/// Does this `cig` have a `bench` command? (A cig older than the release that
+/// brought it says so; the front end says what to do instead of failing in a
+/// way that reads like a bad manifest.)
+pub fn cig_has_bench(cig: &Path) -> bool {
+    Command::new(cig)
+        .args(["bench", "--help"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// A folder to put first on the `PATH` of every case: it holds the runtime as
+/// `cig`, so a case that says `cig run` runs the exact bytes a program built
+/// here carries, and (through the `PATH` the harness keeps) `cigcompile`.
+fn shim_dir(cig: &Path) -> std::io::Result<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("cigcompile-bench-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        let _ = std::fs::remove_file(dir.join("cig"));
+        std::os::unix::fs::symlink(std::fs::canonicalize(cig)?, dir.join("cig"))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::copy(cig, dir.join("cig.exe"))?;
+    }
+    Ok(dir)
+}
+
+/// Run `cig bench` for a front-end run, and give its exit code.
+pub fn shared(ctx: &Ctx, s: &Shared) -> i32 {
+    if !cig_has_bench(s.cig) {
+        let d = cigscript::diagnostics::usage(format!(
+            "{} has no `bench` command, which `cigcompile bench` needs for {}",
+            s.cig.display(),
+            "--watch, --against <ref>, --timings, --stats, --syscalls and --manifest"
+        ))
+        .code("E1001")
+        .with_hint(
+            "give a cig that has `cig bench` with --cig, or use the flags the set harness has: --runs, --ref, --markdown, --json, --set, --runtime, --budgets, --orchestrate",
+        );
+        cigscript::cli::report(ctx, &d, None, None);
+        return exit::USAGE;
+    }
+    let shim = match shim_dir(s.cig) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("cigcompile bench: cannot make a folder for the runtime: {e}");
+            return exit::USAGE;
+        }
+    };
+    let mut path_dirs = vec![shim.clone()];
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(Path::to_path_buf))
+    {
+        path_dirs.push(dir);
+    }
+    path_dirs.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(path_dirs).unwrap_or_default();
+    let mut cmd = Command::new(s.cig);
+    cmd.args(shared_argv(s)).env("PATH", path);
+    let code = if s.syscalls {
+        match cmd.stdin(Stdio::null()).stderr(Stdio::inherit()).output() {
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout).into_owned();
+                if s.json {
+                    print!("{text}");
+                } else {
+                    print_syscalls(&text);
+                }
+                out.status.code().unwrap_or(1)
+            }
+            Err(e) => {
+                eprintln!("cigcompile bench: cannot run {}: {e}", s.cig.display());
+                exit::USAGE
+            }
+        }
+    } else {
+        match cmd.status() {
+            Ok(st) => st.code().unwrap_or(1),
+            Err(e) => {
+                eprintln!("cigcompile bench: cannot run {}: {e}", s.cig.display());
+                exit::USAGE
+            }
+        }
+    };
+    let _ = std::fs::remove_dir_all(&shim);
+    code
+}
+
+/// mmap and munmap calls from one case's `debug.syscalls` (the top ten by
+/// time that `cig bench --syscalls --json` carries).
+fn map_calls(case: &serde_json::Value) -> Option<(u64, u64)> {
+    let top = case["debug"]["syscalls"]["top"].as_array()?;
+    let n = |names: &[&str]| -> u64 {
+        top.iter()
+            .filter(|c| c["syscall"].as_str().is_some_and(|x| names.contains(&x)))
+            .filter_map(|c| c["calls"].as_u64())
+            .sum()
+    };
+    Some((n(&["mmap", "mmap2"]), n(&["munmap"])))
+}
+
+/// One compiled-against-interpreted pair whose gap the allocator explains.
+#[derive(Debug, PartialEq)]
+pub struct Gap {
+    pub name: String,
+    pub interpreted_ms: f64,
+    pub compiled_ms: f64,
+    pub interpreted_calls: u64,
+    pub compiled_calls: u64,
+}
+
+impl Gap {
+    pub fn line(&self) -> String {
+        format!(
+            "{}: interpreted {:.0} ms ({} mmap/munmap calls), compiled {:.0} ms ({}): allocator, not the compiler",
+            self.name,
+            self.interpreted_ms,
+            self.interpreted_calls,
+            self.compiled_ms,
+            self.compiled_calls
+        )
+    }
+}
+
+/// The pairs in a `cig bench --syscalls --json` report (cases named
+/// `interpreted: X` and `compiled: X`, both on the same runtime) where one side
+/// maps and unmaps far more than the other: at least 100 mmap/munmap pairs
+/// more, and ten times as many. Both sides run the one runtime, so the program
+/// the compiler made is not what is faster or slower: the allocator's
+/// behaviour is (cig-script#153). A pair that does not differ that way is left
+/// alone, whatever its times say.
+pub fn allocator_gaps(doc: &serde_json::Value) -> Vec<Gap> {
+    let cases = doc["cases"].as_array().cloned().unwrap_or_default();
+    let find = |name: &str| cases.iter().find(|c| c["name"].as_str() == Some(name));
+    let median = |c: &serde_json::Value| c["outcome"]["median_ms"].as_f64();
+    let mut out = Vec::new();
+    for c in &cases {
+        let Some(base) = c["name"]
+            .as_str()
+            .and_then(|n| n.strip_prefix("interpreted: "))
+        else {
+            continue;
+        };
+        let Some(d) = find(&format!("compiled: {base}")) else {
+            continue;
+        };
+        let (Some((im, iu)), Some((cm, cu))) = (map_calls(c), map_calls(d)) else {
+            continue;
+        };
+        let (i_pairs, c_pairs) = (im.min(iu), cm.min(cu));
+        let (hi, lo) = (i_pairs.max(c_pairs), i_pairs.min(c_pairs));
+        if hi >= lo + 100 && hi >= lo.saturating_mul(10) {
+            if let (Some(a), Some(b)) = (median(c), median(d)) {
+                out.push(Gap {
+                    name: base.to_string(),
+                    interpreted_ms: a,
+                    compiled_ms: b,
+                    interpreted_calls: im + iu,
+                    compiled_calls: cm + cu,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// `--syscalls` in words: each case with its calls, and the allocator's gaps.
+fn print_syscalls(json: &str) {
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(json) else {
+        print!("{json}");
+        return;
+    };
+    println!("syscalls: one extra run of each case under strace");
+    for c in doc["cases"].as_array().into_iter().flatten() {
+        let name = c["name"].as_str().unwrap_or("?");
+        let sc = &c["debug"]["syscalls"];
+        match sc["measured"].as_bool() {
+            Some(true) => {
+                let (m, u) = map_calls(c).unwrap_or((0, 0));
+                let flag = if sc["thrash"].is_string() {
+                    "  FLAG: mmap/munmap thrash"
+                } else {
+                    ""
+                };
+                println!(
+                    "  {name}: {} calls, mmap {m}, munmap {u}{flag}",
+                    sc["total"].as_u64().unwrap_or(0)
+                );
+            }
+            _ => println!(
+                "  {name}: {}",
+                sc["note"].as_str().unwrap_or("not measured")
+            ),
+        }
+    }
+    for g in allocator_gaps(&doc) {
+        println!("{}", g.line());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1488,5 +1770,117 @@ mod tests {
         assert_eq!(compute_ms(&s1, None), None);
         // A 5x that is absent or wrong leaves the slope empty.
         assert_eq!(compute_ms(&s1, Some(&Side::Absent("x".into()))), None);
+    }
+
+    fn case(name: &str, ms: f64, mmap: u64, munmap: u64) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "outcome": { "state": "timed", "median_ms": ms },
+            "debug": { "syscalls": {
+                "measured": true,
+                "total": mmap + munmap + 40,
+                "top": [
+                    { "syscall": "mmap", "calls": mmap, "ms": 1.0 },
+                    { "syscall": "munmap", "calls": munmap, "ms": 1.0 },
+                    { "syscall": "write", "calls": 40, "ms": 0.1 },
+                ],
+                "thrash": null,
+            } },
+        })
+    }
+
+    /// #68: a planted mmap thrash on one side of a pair, both on the one
+    /// runtime, is the allocator's, not the compiler's.
+    #[test]
+    fn allocator_gap_is_named() {
+        // The numbers of cig-script#153: nbody, 400,507 mmap/munmap calls
+        // interpreted against 78 compiled, 1433 ms against 778 ms.
+        let doc = serde_json::json!({ "cases": [
+            case("interpreted: nbody", 1433.0, 200_254, 200_253),
+            case("compiled: nbody", 778.0, 39, 39),
+            // Both quiet: no gap to name, however far apart the times are.
+            case("interpreted: fib", 900.0, 30, 30),
+            case("compiled: fib", 500.0, 30, 30),
+            // Both thrash alike: the runtime is the same on both sides.
+            case("interpreted: trees", 900.0, 5_000, 5_000),
+            case("compiled: trees", 880.0, 5_000, 5_000),
+            // A compiled side with no interpreted partner is left alone.
+            case("compiled: lonely", 10.0, 1, 1),
+        ]});
+        let gaps = allocator_gaps(&doc);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(gaps[0].name, "nbody");
+        assert_eq!(gaps[0].interpreted_calls, 400_507);
+        assert_eq!(gaps[0].compiled_calls, 78);
+        let line = gaps[0].line();
+        assert!(line.contains("allocator, not the compiler"), "{line}");
+        assert!(
+            line.contains("400507") || line.contains("400,507") || line.contains("(400507"),
+            "{line}"
+        );
+
+        // The planted thrash on the compiled side is named the same way.
+        let doc = serde_json::json!({ "cases": [
+            case("interpreted: x", 100.0, 20, 20),
+            case("compiled: x", 400.0, 50_000, 50_000),
+        ]});
+        assert_eq!(allocator_gaps(&doc).len(), 1);
+        // A strace that was not available says nothing: never a made-up flag.
+        let doc = serde_json::json!({ "cases": [
+            { "name": "interpreted: y", "outcome": { "median_ms": 1.0 },
+              "debug": { "syscalls": { "measured": false, "note": "not measured: no strace" } } },
+            { "name": "compiled: y", "outcome": { "median_ms": 1.0 },
+              "debug": { "syscalls": { "measured": false, "note": "not measured: no strace" } } },
+        ]});
+        assert!(allocator_gaps(&doc).is_empty());
+    }
+
+    #[test]
+    fn the_front_end_hands_cig_the_flags_it_was_given() {
+        let only = vec!["fib".to_string()];
+        let group = vec!["programs".to_string()];
+        let s = Shared {
+            manifest: None,
+            cig: Path::new("cig"),
+            samples: Some(3),
+            only: &only,
+            group: &group,
+            markdown: true,
+            json: false,
+            watch: false,
+            against: Some("origin/main"),
+            timings: true,
+            stats: false,
+            syscalls: false,
+        };
+        assert_eq!(
+            shared_argv(&s),
+            [
+                "bench",
+                "bench/bench.toml",
+                "--samples",
+                "3",
+                "--only",
+                "fib",
+                "--group",
+                "programs",
+                "--markdown",
+                "--against",
+                "origin/main",
+                "--timings"
+            ]
+        );
+        // `--json` is cig's global flag and goes before `bench`; `--syscalls`
+        // needs the JSON to name the allocator's gaps.
+        let s = Shared {
+            json: true,
+            markdown: false,
+            against: None,
+            timings: false,
+            syscalls: true,
+            ..s
+        };
+        assert_eq!(shared_argv(&s)[..2], ["--json", "bench"]);
+        assert!(shared_argv(&s).contains(&"--syscalls".to_string()));
     }
 }
