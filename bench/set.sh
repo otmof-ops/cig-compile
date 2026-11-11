@@ -36,11 +36,21 @@ if [ -z "$set_dir" ]; then
     echo "set.sh: the pinned cig's bench/compute was not found (set CIG_BENCH_SET or CIGSCRIPT_SRC)" >&2
     exit 3
 fi
+# The file goes in on stdin: with a name, sha256sum escapes one holding a
+# backslash (every Windows path) and the line starts with `\`, not the sum.
+if command -v sha256sum >/dev/null 2>&1; then
+    sum256() { sha256sum; }
+else
+    sum256() { shasum -a 256; }
+fi
 mkdir -p "$out"
 status=0
 while read -r want name; do
     [ -n "$want" ] || continue
-    have="$(sha256sum "$set_dir/$name" 2>/dev/null | cut -d' ' -f1 || true)"
+    have=""
+    if [ -f "$set_dir/$name" ]; then
+        have="$(sum256 < "$set_dir/$name" | cut -d' ' -f1)"
+    fi
     if [ "$have" != "$want" ]; then
         echo "set.sh: $name is not the pinned cig's (sha256 ${have:-missing}, want $want)" >&2
         status=3

@@ -402,7 +402,9 @@ fn set_comes_from_the_pinned_cig() {
 
     // A set that is not the sums' (one byte different, one file missing) is
     // refused by name, and a file that is not right is never copied.
-    let fake = s.path().join("fake");
+    // A backslash in the set's path: sha256sum escapes such a name (every
+    // Windows path), so the set must be hashed from stdin on every machine.
+    let fake = s.path().join("fa\\ke");
     fs::create_dir_all(&fake).unwrap();
     fs::write(fake.join("a.cig"), "exhale 1\n").unwrap();
     fs::write(fake.join("a.expect"), "1\n").unwrap();
