@@ -5,6 +5,17 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **CIR lowers to the register bytecode, first part (#31).** With the
+  `vm` feature, `src/bc` lowers a verified CIR module to the bytecode the
+  cig runtime's VM runs, and the format crate's verifier checks every
+  module before it leaves: constants, `roll`/`stick` slots and moves,
+  arithmetic, comparison and short-circuit logic, `if`/`else if`/`else`,
+  `while`, `break`, `continue`, pulls and lambdas that capture nothing,
+  calls to them and to builtins, `snuff`, and step marks with the line
+  table. Anything else is refused with its construct and position.
+  `--emit bc` prints the disassembly (goldens in `tests/bc/`).
+  `tests/bc.rs` runs each lowered program in the VM and holds its values,
+  errors, positions and step-budget stops to the tree-walker's.
 - **Step marks in CIR (#33, #31).** Lowering opens every statement but a
   `pull` with a `step`, and every loop body with a `step.iter`, one for
   each tick of the interpreter's step counter, at its span; `--emit cir`

@@ -158,6 +158,25 @@ the script, not from the IR. The level shapes `--emit` only.
 Stage B is where `-O1` and `-O2` will start to differ: the passes
 there will shape the bytecode a program runs.
 
+### The bytecode lowering
+
+`src/bc` lowers verified IR to the register bytecode of
+[#31](https://github.com/otmof-ops/cig-compile/issues/31), the format cig-script's `docs/BYTECODE.md` sets out, and
+runs the format crate's verifier on every module it makes (a module
+that does not verify is the compiler's bug). A slot is a register for
+the whole function; a value has a register from its definition to its
+last use. A call moves its callee and arguments into consecutive
+registers. `a > b` is `le a, b` then `not`, so the operands keep the
+order the interpreter's errors name. A step mark is one `steps`
+instruction, a loop sets its nesting before its condition and back
+after it, and the line table keeps the IR's span for every instruction.
+Constants, slots, arithmetic, comparison and logic, `if`, `while`,
+`break`, `continue`, pulls and lambdas that capture nothing, calls and
+`snuff` lower today. The rest (closures that capture, lists and maps,
+`for`, interpolation, method calls, `try`, burns, `exhale`) is refused
+with its construct and position. `tests/bc.rs` runs what it lowers in
+the VM and checks it against the tree-walker.
+
 ## The box is Linux's
 
 cig's box is the copy-on-write layer and namespaces it uses on Linux
@@ -248,6 +267,11 @@ diagnostics and the standard library in as one crate, which keeps the
 compiler simple at the cost of linking all of cig into the output.
 [#1](https://github.com/otmof-ops/cig-compile/issues/1) is the crate split that lets stage B's runtime be only what a
 program uses — the smaller runtime #36 and #14 are aiming at.
+
+The `vm` feature turns on the bytecode lowering, `--emit bc` and their
+tests. It needs a cigscript that carries the bytecode VM and re-exports
+its format crate, which no cig release does yet, so it is off by
+default and the compiler builds at its pinned tag without it.
 
 ## The launcher
 

@@ -2,7 +2,7 @@
 
 ```
 cigcompile build [path] [-o out] [--target T] [--runtime cig] [--check]
-                 [--emit cir|cir-opt|oci|deb] [-O 0|1|2] [--passes a,b,...] [--passes-diff]
+                 [--emit cir|cir-opt|bc|oci|deb] [-O 0|1|2] [--passes a,b,...] [--passes-diff]
                  [--remarks] [--timings[=FILE]] [--json-progress] [--sbom]
                  [--sign <key>] [--pass] [--watch]
                  [--pkg-version V] [--pkg-maintainer "Name <email>"] [--pkg-description TEXT]
@@ -108,6 +108,7 @@ Flags:
 | `--strength mild \| medium \| full` | for a `.cigar` file, check it as if it declared this strength; see [`.cigar` files](#cigar-files-and---strength). A `.cig` script is always mild and ignores it |
 | `--check` | parse and check; write nothing, need no runtime |
 | `--emit cir \| cir-opt` | the verified IR instead of a program; see [IR and passes](#ir-and-passes) |
+| `--emit bc` | the bytecode the IR lowers to, verified and disassembled; a cigcompile built with the `vm` feature only; see [IR and passes](#ir-and-passes) |
 | `--emit oci` | the program, and beside it an OCI image of it; Linux targets only |
 | `--emit deb` | the program, and beside it a `.deb` that installs to `/usr/bin/<name>`; Linux targets only |
 | `-O 0 \| 1 \| 2` | the optimization level: `0` lowering only; `1` and `2` run every pass there is. At stage A this shapes `--emit` only (a program carries the script) |
@@ -457,6 +458,13 @@ them.
 `--emit cir-opt` names the IR after the passes. At stage A it reads
 the same as `cir` at the chosen level; `cir-opt` is reserved so that
 stage B can split the two without a flag change.
+
+`--emit bc` lowers that IR to the register bytecode the cig runtime's
+VM runs ([#31](https://github.com/otmof-ops/cig-compile/issues/31)), verifies it and prints its disassembly, then each
+function's line table (`pc@line:col`). It covers part of the language
+so far; a script that uses anything else is refused with the construct
+and its position (exit 3). It exists only in a cigcompile built with
+the `vm` feature.
 
 `--passes-diff`, with `--emit`, adds a unified diff of what each pass
 changed, or a line saying it changed nothing. `--remarks` says the

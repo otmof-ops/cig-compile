@@ -251,8 +251,15 @@ struct BuildArgs {
     /// Check only: write nothing, need no runtime.
     #[arg(long)]
     check: bool,
-    /// `cir`: print the verified IR (#3) instead of a program, shaped by `-O`/`--passes`. `cir-opt`: the same IR, said in words: after the passes (at stage A, equivalent to `cir` at the chosen level; stage B may split them). `oci`: the program, and beside it an OCI image of it (`<program>.oci.tar`, a scratch image of one file; Linux targets). `deb`: the program, and beside it a `.deb` that installs it to `/usr/bin/<name>` (Linux targets; `--pkg-version`, `--pkg-maintainer`, `--pkg-description` shape the control file).
-    #[arg(long, value_name = "WHAT", value_parser = ["cir", "cir-opt", "oci", "deb"])]
+    /// `cir`: print the verified IR (#3) instead of a program, shaped by `-O`/`--passes`. `cir-opt`: the same IR, said in words: after the passes (at stage A, equivalent to `cir` at the chosen level; stage B may split them). `bc`: the bytecode that IR lowers to (#31), verified and disassembled (a cigcompile built with the `vm` feature only). `oci`: the program, and beside it an OCI image of it (`<program>.oci.tar`, a scratch image of one file; Linux targets). `deb`: the program, and beside it a `.deb` that installs it to `/usr/bin/<name>` (Linux targets; `--pkg-version`, `--pkg-maintainer`, `--pkg-description` shape the control file).
+    #[cfg_attr(
+        feature = "vm",
+        arg(long, value_name = "WHAT", value_parser = ["cir", "cir-opt", "bc", "oci", "deb"])
+    )]
+    #[cfg_attr(
+        not(feature = "vm"),
+        arg(long, value_name = "WHAT", value_parser = ["cir", "cir-opt", "oci", "deb"])
+    )]
     emit: Option<String>,
     /// The optimisation level: 0 (lowering only), 1 or 2 (every pass there is). Stage A programs carry the script, so the level shapes `--emit` until stage B.
     #[arg(short = 'O', value_name = "LEVEL", value_parser = ["0", "1", "2"], conflicts_with = "passes")]
@@ -621,6 +628,11 @@ fn build_cmd(
     // reserved so that stage B can split the two without a flag change.
     if matches!(a.emit.as_deref(), Some("cir") | Some("cir-opt")) {
         emit_cir(ctx, &jobs, &passes, a.passes_diff, a.remarks, strength)?;
+        return Ok(None);
+    }
+    #[cfg(feature = "vm")]
+    if a.emit.as_deref() == Some("bc") {
+        emit_bc(ctx, &jobs, &passes, strength)?;
         return Ok(None);
     }
     if a.remarks {
@@ -1338,6 +1350,61 @@ fn emit_cir(
                 cigscript::cli::report(ctx, &d, None, None);
                 eprintln!("{}", installer::please_report());
                 return Err(70);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `--emit=bc`: each script lowered to CIR, through the passes, to the
+/// register bytecode (#31), verified and disassembled. A construct the
+/// lowering does not cover yet is said with its position; a module that
+/// does not verify is the compiler's bug.
+#[cfg(feature = "vm")]
+fn emit_bc(
+    ctx: &Ctx,
+    jobs: &[project::Job],
+    passes: &[&'static dyn cigcompile::cir::pass::Pass],
+    strength: Option<cigarscript::features::Strength>,
+) -> Result<(), i32> {
+    use cigcompile::bc::{compile, disassemble, CompileError, Error};
+    use cigcompile::cir::LowerError;
+    for job in jobs {
+        let source = build::read_for_ir(ctx, job, strength)?;
+        let internal = |what: String| {
+            let d = cigscript::diagnostics::internal(format!("lowering {}: {what}", job.file));
+            cigscript::cli::report(ctx, &d, None, None);
+            eprintln!("{}", installer::please_report());
+            70
+        };
+        match compile(&source, &job.file, passes) {
+            Ok(m) => print!("{}", disassemble(&m)),
+            Err(CompileError::Lower(LowerError::Diagnostic(d))) => {
+                cigscript::cli::report(ctx, &d, Some(&job.file), Some(&source));
+                return Err(exit::CHECK);
+            }
+            Err(CompileError::Lower(LowerError::Internal(e))) => return Err(internal(e)),
+            Err(CompileError::Verify(e)) => {
+                let lines: Vec<String> = e.errors.iter().map(|x| x.to_string()).collect();
+                return Err(internal(format!(
+                    "the IR broke a rule after {}: {}",
+                    e.pass,
+                    lines.join("; ")
+                )));
+            }
+            Err(CompileError::Bytecode(e)) => {
+                let (what, span) = match e {
+                    Error::Internal(e) => return Err(internal(e)),
+                    Error::Refused { construct, span } => {
+                        (format!("{construct} is not lowered to bytecode yet"), span)
+                    }
+                    Error::Limit { what, span } => (what, span),
+                };
+                let d = cigscript::diagnostics::usage(what).at(span).with_hint(
+                    "--emit cir shows the IR; the lowering grows a part at a time (#31)",
+                );
+                cigscript::cli::report(ctx, &d, Some(&job.file), Some(&source));
+                return Err(exit::USAGE);
             }
         }
     }
