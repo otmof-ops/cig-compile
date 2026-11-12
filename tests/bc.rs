@@ -446,6 +446,46 @@ fn corpus() -> Vec<(String, String)> {
     );
     add("range-value-too-big", "roll a = 0\nroll r = a..100000000\n");
     add("range-value-extremes", "roll a = 9223372036854775807\nroll b = -9223372036854775807 - 1\nexhale a..b\nexhale b..a\n");
+    // A computed key is checked before the entry's value runs; a pass
+    // that replaces an operand leaves its position where it was.
+    add(
+        "key-before-failing-value",
+        "roll k = true\nexhale {[k]: 1, b: 1 / 0}\n",
+    );
+    add(
+        "key-before-a-call",
+        "pull f() {\n  snuff \"v\"\n}\nroll k = \"j\"\nroll m = {[k]: f(), [3]: f()}\nexhale m\n",
+    );
+    add(
+        "key-effect-read-by-value",
+        "roll xs = [1]\nroll m = {[str(xs.push(2))]: xs.len(), n: xs}\nexhale m\n",
+    );
+    add(
+        "key-list-after-copy-prop",
+        "stick k = [1]\nexhale {[k]: 1}\n",
+    );
+    add(
+        "key-int-after-copy-prop",
+        "stick n = 7\nstick m = {[n]: 1}\nexhale m[\"7\"]\n",
+    );
+    add(
+        "index-type-after-copy-prop",
+        "stick xs = [1, 2]\nstick k = \"a\"\nexhale xs[k]\n",
+    );
+    add(
+        "cannot-index-after-copy-prop",
+        "stick n = 5\nstick k = 0\nexhale n[k]\n",
+    );
+    add(
+        "store-index-type-after-copy-prop",
+        "stick xs = [1]\nstick k = \"a\"\nxs[k] = 2\n",
+    );
+    add("store-into-int-after-copy-prop", "stick n = 5\nn[0] = 1\n");
+    add("member-store-after-copy-prop", "stick n = 5\nn.k = 1\n");
+    add(
+        "member-compound-after-copy-prop",
+        "stick n = \"s\"\nn.k += 1\n",
+    );
     add(
         "module-call",
         "exhale math.floor(2.5), path.join(\"a\", \"b\"), text.split(\"a,b\", \",\")\n",
@@ -625,12 +665,6 @@ fn a_program_outside_this_part_is_refused_with_its_construct() {
             3,
             1,
         ),
-        (
-            "pull f() {\n  snuff \"k\"\n}\nroll k = \"j\"\nroll m = {[k]: f()}\n",
-            "a computed map key followed by a value that can fail or run code",
-            5,
-            10,
-        ),
     ];
     for (src, construct, line, col) in cases {
         match bc::compile(src, "t.cig", &pass::level(0)) {
@@ -729,6 +763,7 @@ fn every_cir_kind_is_lowered_or_refused() {
             name: "k".into(),
             op: AssignOp::Set,
             val: v,
+            obj_at: Span::default(),
         },
         Kind::Closure(FuncId(1)),
         Kind::BurnOp {
@@ -837,9 +872,6 @@ fn every_cir_kind_is_lowered_or_refused() {
         "throw refused: `cough`",
     ];
     assert_eq!(table, want);
-    // Lowered, but refused for what it names: a computed map key followed
-    // by code that can fail, an index or computed key a pass replaced (see
-    // a_program_outside_this_part_is_refused_with_its_construct).
 }
 
 // ----- operands past 8 and 16 bits ---------------------------------------------------

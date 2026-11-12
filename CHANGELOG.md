@@ -5,6 +5,14 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **The bytecode lowering uses the IR's `key` and stored spans (#31).**
+  A computed map key is checked where the interpreter checks it, before
+  the entry's value, so a map with a computed key no longer needs to be
+  refused when a later value can fail or run code. Index and store
+  errors take their positions from the spans the IR stores, so a pass
+  that replaces an operand no longer makes the lowering refuse it. A
+  member store (`obj.k = v`) now stores its object's span too, and a
+  store into something that is not a map is reported there.
 - **The bytecode lowering, second part (#31).** Closures that capture
   (cells, a fresh one per loop turn) and pulls that call themselves or
   each other by name; lists and maps with the interpreter's errors at

@@ -150,6 +150,7 @@ fn operand_spans(k: &Kind) -> Vec<(&'static str, Span)> {
     match k {
         Kind::Index { idx_at, .. } => vec![("index", *idx_at)],
         Kind::SetIndex { obj_at, idx_at, .. } => vec![("object", *obj_at), ("index", *idx_at)],
+        Kind::SetMember { obj_at, .. } => vec![("object", *obj_at)],
         Kind::MakeMap(kv) => kv
             .iter()
             .filter_map(|(k, _)| match k {

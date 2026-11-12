@@ -210,11 +210,18 @@ fn block(m: &Module, b: &Block, depth: usize, out: &mut String) {
                 i,
                 &[("obj", *obj_at), ("idx", *idx_at)],
             ),
-            Kind::SetMember { obj, name, op, val } => line(
+            Kind::SetMember {
+                obj,
+                name,
+                op,
+                val,
+                obj_at,
+            } => line_at(
                 out,
                 depth,
                 &format!("set.member %{}.{name} {} %{}", obj.0, assign(*op), val.0),
                 i,
+                &[("obj", *obj_at)],
             ),
             Kind::Closure(f) => line(out, depth, &simple(format!("closure @{}", f.0)), i),
             Kind::BurnOp {

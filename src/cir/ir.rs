@@ -271,11 +271,15 @@ pub enum Kind {
         obj_at: Span,
         idx_at: Span,
     },
+    /// `obj.name op= val`. A value that is not a map is an error at
+    /// `obj_at`, the object expression's own span, which no pass changes;
+    /// the rest at the statement.
     SetMember {
         obj: ValueId,
         name: String,
         op: AssignOp,
         val: ValueId,
+        obj_at: Span,
     },
     Closure(FuncId),
     BurnOp {

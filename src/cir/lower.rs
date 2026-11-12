@@ -414,6 +414,7 @@ impl Lowerer<'_> {
                                 name: name.clone(),
                                 op: *op,
                                 val: v,
+                                obj_at: fix(object.span),
                             },
                             None,
                         );

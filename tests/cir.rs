@@ -776,6 +776,11 @@ mod marks {
                     (V::List(_) | V::Map(_), _) => return self.raise(*idx_at),
                     _ => return self.raise(*obj_at),
                 },
+                Kind::SetMember { obj, obj_at, .. } => {
+                    if !matches!(self.val(*obj), V::Map(_)) {
+                        return self.raise(*obj_at);
+                    }
+                }
                 Kind::CallUser { func, args } => {
                     let args = args.iter().map(|a| self.val(*a)).collect();
                     let v = self.call(*func, args);
@@ -1302,6 +1307,20 @@ fn an_index_keeps_its_operands_positions_through_the_passes() {
         "the operands were replaced: {text}"
     );
     assert!(text.contains("obj@3:1 idx@3:4"), "{text}");
+}
+
+#[test]
+fn a_member_store_keeps_its_objects_position_through_the_passes() {
+    // Copy propagation puts the `5` of line 1 in place of `n`: the error
+    // stays at the object, where the tree-walker raises it.
+    let src = "stick n = 5\nn.k = 1\n";
+    assert_eq!(walker_run(src).1, Some((2, 1)));
+    same_as_the_walker(src);
+    let mut m = lower_source(src, "m.cig").unwrap();
+    run_passes(&mut m, &pass::default_passes()).unwrap();
+    let text = print::print(&m);
+    assert!(!text.contains("load "), "the object was replaced: {text}");
+    assert!(text.contains("obj@2:1"), "{text}");
 }
 
 #[test]

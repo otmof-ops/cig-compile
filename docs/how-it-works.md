@@ -125,8 +125,9 @@ the same step, at the same line, as the interpreter.
 Errors come out where the interpreter puts them. A map literal is
 lowered in the interpreter's order: each computed key, then its
 `key` check, then the entry's value. A key that is not a string or
-an int raises before a later value can. An index, an indexed store
-and a map's computed keys carry the spans of their own operands
+an int raises before a later value can. An index, an indexed store, a
+member store and a map's computed keys carry the spans of their own
+operands
 (`--emit cir` prints them beside the instruction's span, as
 `idx@3:10`). A wrong index type is reported at the index, and a
 value that cannot be indexed at the object, even after a pass has
@@ -190,8 +191,10 @@ interpreter's snapshot with `iterprep`/`iternext`; the item is fresh
 each turn. An index read or store checks the types of its operands
 first, so a wrong index type is reported at the index and a value
 that cannot be indexed at the object, as the interpreter reports them,
-and an `exhale` part or interpolation piece is turned to text where the
-interpreter shows it, before a later part can change it.
+taking those positions from the spans the IR stores, and an `exhale`
+part or interpolation piece is turned to text where the interpreter
+shows it, before a later part can change it. A computed map key is
+checked by its own `key` instruction, before the entry's value runs.
 `try`, `cough`, burns, `pack`, chains, and a builtin, a module or
 `args` used as a value are refused with
 their construct and position. `tests/bc.rs` runs what it lowers in the

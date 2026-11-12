@@ -39,7 +39,7 @@
 //!   instruction before it.
 
 use crate::cir::ir::{
-    self, Block, Class, Const, Func, FuncId, Instr, Kind, Piece, ShortOp, Ty, ValueId, VarId,
+    self, Block, Const, Func, FuncId, Instr, Kind, Piece, ShortOp, Ty, ValueId, VarId,
 };
 use cigscript::cig_bytecode::{
     self as bc, verify_module, wide_prefix, Constant, Instr as Word, LineEntry, Op, SpanBase,
@@ -313,8 +313,6 @@ struct FnLower<'c, 'm> {
     dies_at: HashMap<usize, Vec<ValueId>>,
     start: HashMap<ir::InstrId, usize>,
     end: HashMap<ir::InstrId, usize>,
-    /// The span of each instruction, for an operand's own position.
-    def_span: HashMap<ir::InstrId, Span>,
     /// `a..b` values only a `for` reads: lowered as the loop's bounds.
     ranges: HashMap<ValueId, (ValueId, ValueId, Span)>,
     /// `exhale` parts and interpolation pieces to turn to text before or
@@ -350,7 +348,6 @@ impl<'c, 'm> FnLower<'c, 'm> {
             dies_at: HashMap::new(),
             start: HashMap::new(),
             end: HashMap::new(),
-            def_span: HashMap::new(),
             ranges: HashMap::new(),
             show_before: HashMap::new(),
             show_after: HashMap::new(),
@@ -553,15 +550,13 @@ impl<'c, 'm> FnLower<'c, 'm> {
         Ok(r)
     }
 
-    /// What the lowering needs to know before it starts: each
-    /// instruction's span, and the `a..b` values only a `for` reads.
+    /// What the lowering needs to know before it starts: the `a..b`
+    /// values only a `for` reads.
     fn prepass(&mut self) {
         let mut range_def: HashMap<ValueId, (ValueId, ValueId, Span)> = HashMap::new();
         let mut for_iters = Vec::new();
         let mut uses: HashMap<ValueId, usize> = HashMap::new();
-        let mut spans = HashMap::new();
         walk(&self.f.body, &mut |i| {
-            spans.insert(i.id, i.span);
             for u in i.kind.uses() {
                 *uses.entry(u).or_default() += 1;
             }
@@ -582,19 +577,6 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 }
             }
         }
-        self.def_span = spans;
-    }
-
-    /// The span of the expression that made `v`, when it lies inside
-    /// `within` (the instruction that reads it). A pass that replaced the
-    /// operand with a value made elsewhere leaves no span for it.
-    fn part_span(&self, v: ValueId, within: Span) -> Option<Span> {
-        let s = self
-            .f
-            .vals
-            .get(v.0 as usize)
-            .and_then(|x| self.def_span.get(&x.def))?;
-        (s.start >= within.start && s.end <= within.end).then_some(*s)
     }
 
     /// Every value's last use, as the position after which its register
@@ -837,50 +819,11 @@ impl<'c, 'm> FnLower<'c, 'm> {
         for j in 0..b.instrs.len() {
             self.schedule_shows(b, j);
         }
-        for (j, i) in b.instrs.iter().enumerate() {
-            if let Kind::MakeMap(kv) = &i.kind {
-                self.computed_keys(b, j, kv, i.span)?;
-            }
+        for i in &b.instrs {
             self.instr(i)?;
             self.release(i);
         }
         Ok(())
-    }
-
-    /// The tree-walker checks a computed map key before it evaluates the
-    /// next value; CIR evaluates every key and value first, and
-    /// `insertmap` checks the key then. The two agree only when nothing
-    /// between the first computed key and the map can fail, run code or
-    /// change a slot.
-    fn computed_keys(
-        &self,
-        b: &Block,
-        j: usize,
-        kv: &[(ir::MapKey, ValueId)],
-        span: Span,
-    ) -> Result<(), Error> {
-        let Some(k) = kv.iter().find_map(|(k, _)| match k {
-            ir::MapKey::Dyn(k, _) => Some(*k),
-            ir::MapKey::Static(_) => None,
-        }) else {
-            return Ok(());
-        };
-        let def = self.f.vals.get(k.0 as usize).map(|x| x.def);
-        let from = b.instrs[..j].iter().position(|i| Some(i.id) == def);
-        let quiet = from.is_some_and(|p| {
-            b.instrs[p + 1..j].iter().all(|i| {
-                matches!(i.kind, Kind::Load(_) | Kind::Key(_))
-                    || i.kind.class(self.f, &self.cx.m.vars) == Class::Pure
-            })
-        });
-        if quiet {
-            Ok(())
-        } else {
-            Err(self.refuse(
-                "a computed map key followed by a value that can fail or run code",
-                span,
-            ))
-        }
     }
 
     fn refuse(&self, construct: impl Into<String>, span: Span) -> Error {
@@ -1005,11 +948,19 @@ impl<'c, 'm> FnLower<'c, 'm> {
                     Slot::Up(u) => self.abc(Op::SETUP, u, x, 0)?,
                 }
             }
-            // `insertmap` checks the key, as before.
+            // A computed map key, checked where the tree-walker checks it
+            // (after the key, before the entry's value): `insertmap` into a
+            // scratch map raises the tree-walker's own error for anything
+            // but a string or an int, at the key's row; then the key is
+            // its text (a string stays, an int becomes its digits).
             Kind::Key(k) => {
                 let k = self.val(*k)?;
                 let r = self.define(i)?;
-                self.abc(Op::MOV, r, k, 0)?;
+                let t = self.alloc();
+                self.abc(Op::NEWMAP, t, 1, 0)?;
+                self.abc(Op::INSERTMAP, t, k, k)?;
+                self.free(t);
+                self.abc(Op::INTERP, r, k, 0)?;
             }
             Kind::Unary(op, x) => {
                 let x = self.val(*x)?;
@@ -1240,19 +1191,10 @@ impl<'c, 'm> FnLower<'c, 'm> {
                             self.abc(Op::INSERTMAP, r, t, x)?;
                             self.free(t);
                         }
+                        // A `key`'s value: a string, so this cannot fail.
                         ir::MapKey::Dyn(key, _) => {
-                            // A key that is not a string or an int is an
-                            // error at the key's own position.
-                            let at = self.part_span(*key, i.span).ok_or_else(|| {
-                                self.refuse(
-                                    "a computed map key a pass replaced (its position is lost)",
-                                    i.span,
-                                )
-                            })?;
                             let key = self.val(*key)?;
-                            self.span = at;
                             self.abc(Op::INSERTMAP, r, key, x)?;
-                            self.span = i.span;
                         }
                     }
                 }
@@ -1324,25 +1266,32 @@ impl<'c, 'm> FnLower<'c, 'm> {
                     self.abc(Op::GETFIELD, r, o, k)?;
                 }
             }
-            Kind::Index { obj, idx, .. } => {
-                let at = self.index_span(*idx, i.span)?;
+            Kind::Index { obj, idx, idx_at } => {
                 let (o, x) = (self.val(*obj)?, self.val(*idx)?);
                 let r = self.define(i)?;
-                self.index_read(r, o, x, at)?;
+                self.index_read(r, o, x, *idx_at)?;
             }
             Kind::SetIndex {
-                obj, idx, op, val, ..
+                obj,
+                idx,
+                op,
+                val,
+                obj_at,
+                idx_at,
             } => {
-                let at = self.index_span(*idx, i.span)?;
-                let obj_at = self.part_span(*obj, i.span).unwrap_or(i.span);
                 let (o, x, v) = (self.val(*obj)?, self.val(*idx)?, self.val(*val)?);
-                self.index_store(o, x, v, *op, at, obj_at)?;
+                self.index_store(o, x, v, *op, *idx_at, *obj_at)?;
             }
-            Kind::SetMember { obj, name, op, val } => {
-                let obj_at = self.part_span(*obj, i.span).unwrap_or(i.span);
+            Kind::SetMember {
+                obj,
+                name,
+                op,
+                val,
+                obj_at,
+            } => {
                 let (o, v) = (self.val(*obj)?, self.val(*val)?);
                 let k = self.konst(ConstKey::Str(name));
-                self.member_store(o, name, k, v, *op, obj_at)?;
+                self.member_store(o, name, k, v, *op, *obj_at)?;
             }
             Kind::CallMethod { recv, name, args } => {
                 let recv = self.val(*recv)?;
@@ -1387,13 +1336,6 @@ impl<'c, 'm> FnLower<'c, 'm> {
             Some(t) => Ok((t, true)),
             None => Ok((self.val(v)?, false)),
         }
-    }
-
-    /// The index expression's own position, where the tree-walker puts
-    /// its type errors.
-    fn index_span(&self, idx: ValueId, within: Span) -> Result<Span, Error> {
-        self.part_span(idx, within)
-            .ok_or_else(|| self.refuse("an index a pass replaced (its position is lost)", within))
     }
 
     /// `type_of(R(x))` in a fresh register.
