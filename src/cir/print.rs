@@ -92,6 +92,8 @@ fn block(m: &Module, b: &Block, depth: usize, out: &mut String) {
         let res = i.result.map(|r| format!("%{} = ", r.0)).unwrap_or_default();
         let simple = |text: String| format!("{res}{text}");
         match &i.kind {
+            Kind::Step(StepSite::Stmt) => line(out, depth, "step", i),
+            Kind::Step(StepSite::Iter) => line(out, depth, "step.iter", i),
             Kind::Const(c) => line(out, depth, &simple(format!("const {}", konst(c))), i),
             Kind::Prelude(n) => line(out, depth, &simple(format!("prelude {n}")), i),
             Kind::Load(v) => line(out, depth, &simple(format!("load {}", var(m, *v))), i),

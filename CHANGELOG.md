@@ -3,6 +3,31 @@
 All notable changes to CigCompile. The format follows Keep a Changelog; the
 project follows semantic versioning.
 
+## Unreleased
+
+- **Step marks in CIR (#33, #31).** Lowering opens every statement but a
+  `pull` with a `step`, and every loop body with a `step.iter`, one for
+  each tick of the interpreter's step counter, at its span; `--emit cir`
+  prints them. The verifier keeps them: a loop body opens with exactly
+  one `step.iter` (V11), and a pass that drops a mark from a block that
+  keeps anything else breaks T3. `tests/cir.rs` has
+  `the_marks_a_run_passes_are_the_steps_the_tree_walker_counts`, which
+  checks a script's marks against cig's own count and, for every
+  `--max-steps` short of the total, its stopping line.
+- **The pass framework in its final shape (#33).** Each pass is its own
+  module under `src/cir/pass/`. `Kind::class` sorts every instruction,
+  from its kind and its operands' types, into pure, may raise, effect
+  or step mark. T1 and T2 now hold only what is not pure, so pure code
+  may move, merge or vanish. The new rule T4 removes an operation that
+  may raise only where the verifier proves it cannot: constant operands
+  that the interpreter's arithmetic folds to the constant left in its
+  place. `dead-pure` prunes by class, so an unused `a / b` stays and
+  raises where the interpreter raises. `fold-consts` and `dead-pure` have
+  goldens (`tests/cir/fold-consts/`, `tests/cir/dead-pure/`) and broken
+  twins. `each_pass_has_a_negative_test_that_is_caught` runs the twin of
+  every pass in `pass::NAMES`, and `remarks_name_their_sites` holds
+  `--remarks` to a golden.
+
 ## 0.4.0 — 2026-11-12
 
 Programs for cig 1.21.0; CigCompile joins the cig family's shared

@@ -5,6 +5,8 @@
 //! an assignment before its target, a call's callee before its arguments,
 //! every `pull` of a block hoisted to the block's head, `?.` evaluating
 //! nothing after a null subject, a `burn`'s label before its region.
+//! A step mark opens every statement but a `pull`, and every loop body,
+//! where the interpreter's `tick` counts.
 
 use super::effects::{kind_of, Resolved, Resolver};
 use super::ir::*;
@@ -349,6 +351,12 @@ impl Lowerer<'_> {
     }
 
     fn stmt(&mut self, s: &Stmt, out: &mut Block) -> Result<(), Error> {
+        // The interpreter counts a step as each statement starts, before
+        // it evaluates anything (eval.rs `exec`); a `pull` is hoisted and
+        // never runs as a statement, so it counts nothing.
+        if !matches!(s, Stmt::Pull(_)) {
+            self.emit(out, s.span(), Kind::Step(StepSite::Stmt), None);
+        }
         match s {
             Stmt::Declare {
                 name, value, span, ..
@@ -459,7 +467,9 @@ impl Lowerer<'_> {
                 let mut c = Block::default();
                 let cv = self.expr(cond, &mut c)?;
                 self.emit(&mut c, cond.span, Kind::Yield(cv), None);
+                // One step per iteration, once the condition held.
                 let mut b = Block::default();
+                self.emit(&mut b, *span, Kind::Step(StepSite::Iter), None);
                 self.block(&body.stmts, &mut b, None)?;
                 self.emit(out, *span, Kind::Loop { cond: c, body: b }, None);
             }
@@ -471,7 +481,9 @@ impl Lowerer<'_> {
             } => {
                 let it = self.expr(iter, out)?;
                 let v = self.new_var(var, true, *span);
+                // One step per item, before the body.
                 let mut b = Block::default();
+                self.emit(&mut b, *span, Kind::Step(StepSite::Iter), None);
                 self.block(&body.stmts, &mut b, Some((var, v)))?;
                 self.emit(
                     out,

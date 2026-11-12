@@ -113,6 +113,15 @@ succeeded. See [shipping](shipping.md#all-or-nothing-staging).
 `--emit cir` prints the IR ([#3](https://github.com/otmof-ops/cig-compile/issues/3)): CigScript lowered to an SSA-like
 form that each pass verifies before the next runs.
 
+The IR carries the step budget (`--max-steps`, `CIG_MAX_STEPS`) the
+way the interpreter counts it. A `step` opens every statement except
+a `pull`, and a `step.iter` opens every loop body: one mark for each
+tick of the interpreter's counter, at the same span. The verifier
+holds them in place. A mark never moves, a loop body always opens
+with its `step.iter` (V11), and a pass removes a mark only together
+with everything else in its block (T3). A compiled program stops on
+the same step, at the same line, as the interpreter.
+
 The passes today are
 `fold-consts`, `copy-prop`, `fold-consts`, `sccp`, `dead-pure`, in
 that order. Each is read as:
@@ -124,6 +133,21 @@ that order. Each is read as:
   known boolean constant, unless an effect in the dead branch means
   emptying it would delete work (T3 catches that shape).
 - **dead-pure** prunes pure expressions whose result is unused.
+
+Each instruction has a class, read from its kind and the types of its
+operands. A **pure** one (a constant, a fresh list, `==`, float
+arithmetic, a read of a `stick` where it lives) may move, merge or
+vanish. One that **may raise** (integer arithmetic that can overflow,
+`/`, an index, a member that can be missing, a float ordered against
+a NaN) keeps its place and its order, and goes only where the
+verifier proves it cannot raise: its operands are constants that the
+interpreter's arithmetic folds, and the constant left in its place is
+that result (T4). **Effects** (slot writes, calls, `exhale`, burn
+ops) and step marks keep their place and order and are never lost
+(T1 to T3), except with a whole `if` arm that a constant condition
+never takes. Each pass is its own module, with a golden folder under
+`tests/cir/` and a deliberately broken twin that the verifier must
+catch.
 
 `--passes-diff` adds a unified diff of what each pass changed, or a
 line that says it did not; `--remarks` says the same thing in

@@ -450,6 +450,10 @@ IR is shaped by `-O` and `--passes`:
 - **`--passes a,b,...`** runs exactly these passes, in this order,
   for bisecting a bad result.
 
+Every statement opens with a `step` and every loop body with a
+`step.iter`: the step budget's ticks, where the interpreter counts
+them.
+
 `--emit cir-opt` names the IR after the passes. At stage A it reads
 the same as `cir` at the chosen level; `cir-opt` is reserved so that
 stage B can split the two without a flag change.

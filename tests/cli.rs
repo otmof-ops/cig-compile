@@ -2148,6 +2148,32 @@ fn outputs_appear_together() {
     );
 }
 
+/// #33: `--remarks` names every site a pass changed, as `file:line:col`,
+/// byte for byte: tests/cir/remarks/sites.txt. After a deliberate change,
+/// `CIR_UPDATE_GOLDEN=1` writes it again.
+#[test]
+fn remarks_name_their_sites() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cir/remarks");
+    let lf = |t: String| t.replace("\r\n", "\n");
+    let s = Sandbox::new();
+    s.write(
+        "sites.cig",
+        &lf(std::fs::read_to_string(dir.join("sites.cig")).unwrap()),
+    );
+    let o = s.cc(&["build", "sites.cig", "--emit", "cir", "--remarks"]);
+    ok(&o);
+    let got = lf(text(&o.stderr));
+    let golden = dir.join("sites.txt");
+    if std::env::var_os("CIR_UPDATE_GOLDEN").is_some() {
+        std::fs::write(&golden, &got).unwrap();
+    }
+    assert_eq!(
+        got,
+        lf(std::fs::read_to_string(&golden).unwrap_or_default()),
+        "CIR_UPDATE_GOLDEN=1 writes it again"
+    );
+}
+
 /// #33 with #38: a pass with no remarks of its own (`copy-prop`, `sccp`)
 /// is still said, as having changed the IR or not, so `--remarks` tells the
 /// whole story of a fold that copy propagation made possible.
