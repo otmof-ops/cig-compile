@@ -80,9 +80,10 @@ project follows semantic versioning.
   "peak memory of a compiled hello", under 14 MB, held on Linux: 5.9 MB on the runtime whose
   heap starts in small pages once the file is cold, 11.5 MB straight after the build on a
   kernel that maps a new file in large page-cache folios, 17.5 MB on cig 1.21.0 as released.
-  `a_compiled_hello_over_its_memory_budget_is_missed` holds it. It needs the runtime from
-  cig-script's next release (a short program's heap in small pages again); on cig 1.21.0 as
-  released it is missed.
+  `a_compiled_hello_over_its_memory_budget_is_missed` holds it. The budget is held from the
+  first cig after 1.21.0, whose runtime starts a short program's heap in small pages again;
+  on cig 1.21.0 as released a hello peaks at 14 to 18 MB, by the machine, and the row reads
+  `not yet`.
 
 ## 0.4.0 — 2026-11-12
 

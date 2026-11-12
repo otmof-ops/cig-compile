@@ -110,9 +110,9 @@ The memory gate holds a pull request to `main`; the budget holds a compiled prog
 
 | what | budget | held | measured |
 |---|---|---|---|
-| peak memory of a compiled hello, real run, just built | under 14 MB | Linux | 5.9 MB on the runtime whose heap starts in 4 KiB pages, the file cold; 11.5 MB just built on Linux 6.17 (large page-cache folios); 17.5 MB on cig 1.21.0 as released, whose heap was in 2 MiB pages |
+| peak memory of a compiled hello, real run, just built | under 14 MB | Linux, from the first cig after 1.21.0 | 5.9 MB on the runtime whose heap starts in 4 KiB pages, the file cold; 11.5 MB just built on Linux 6.17 (large page-cache folios); 17.5 MB on cig 1.21.0 as released, whose heap was in 2 MiB pages |
 
-The runtime's own share is held in cig-script (`tests/heap_pages.rs`: a dry-run hello under 9 MiB, and the heap's first 8 MiB in 4 KiB pages). Data-heavy programs are held by the memory gate, against `main`.
+On cig 1.21.0 as released the row is shown and reads `not yet`: a hello peaks at 14 to 18 MB there, by the machine, and no change in the compiler can bring it under. The runtime's own share is held in cig-script (`tests/heap_pages.rs`: a dry-run hello under 9 MiB, and the heap's first 8 MiB in 4 KiB pages). Data-heavy programs are held by the memory gate, against `main`.
 
 ### Tests
 

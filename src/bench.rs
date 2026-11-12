@@ -574,7 +574,7 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
     });
     let _ = std::fs::remove_dir_all(&root);
 
-    let checks = budgets(&rows, noop_ms, orchestrate_ms);
+    let checks = budgets(&rows, noop_ms, orchestrate_ms, cigscript::VERSION);
     let wrong: Vec<&str> = rows
         .iter()
         .filter(|r| {
@@ -1125,7 +1125,27 @@ type Check = (String, String, String, bool, bool);
 /// 1.21.0 as released peaked at 17.5 MB there (its heap in 2 MiB pages).
 const HELLO_PEAK_BUDGET: u64 = 14_000_000;
 
-fn budgets(rows: &[Row], noop_ms: Option<f64>, orchestrate_ms: Option<f64>) -> Vec<Check> {
+/// Does this cig's runtime start a short program's heap in small pages? The
+/// first release after 1.21.0 does. 1.21.0 as released keeps its heap in
+/// 2 MiB pages, and a hello's peak there is 14 to 18 MB, by the machine.
+fn heap_starts_small(runtime: &str) -> bool {
+    let mut parts = runtime
+        .split(['.', '-', '+'])
+        .map(|p| p.parse::<u64>().ok());
+    let v = (
+        parts.next().flatten(),
+        parts.next().flatten(),
+        parts.next().flatten(),
+    );
+    matches!(v, (Some(a), Some(b), Some(c)) if (a, b, c) > (1, 21, 0))
+}
+
+fn budgets(
+    rows: &[Row],
+    noop_ms: Option<f64>,
+    orchestrate_ms: Option<f64>,
+    runtime: &str,
+) -> Vec<Check> {
     let median_of = |r: &Row, compiled: bool| {
         (if compiled {
             &r.compiled
@@ -1178,15 +1198,24 @@ fn budgets(rows: &[Row], noop_ms: Option<f64>, orchestrate_ms: Option<f64>) -> V
         ),
     ]);
     // Compiled peak memory has a budget of its own (cig-compile#30): held on
-    // Linux, where the peak is the program's own (see `peak_rss`); a side
-    // with no figure is not measured, never missed.
+    // Linux, where the peak is the program's own (see `peak_rss`), and from
+    // the first runtime that can meet it (`heap_starts_small`); a side with
+    // no figure is not measured, never missed.
     let hello_peak = hello.and_then(|h| h.compiled.stats()).and_then(|s| s.rss);
     if let Some(bytes) = hello_peak {
+        let small = heap_starts_small(runtime);
         checks.push((
             "peak memory of a compiled hello".into(),
-            format!("under {} MB (Linux)", HELLO_PEAK_BUDGET / 1_000_000),
+            if small {
+                format!("under {} MB (Linux)", HELLO_PEAK_BUDGET / 1_000_000)
+            } else {
+                format!(
+                    "under {} MB (Linux, from the cig after 1.21.0)",
+                    HELLO_PEAK_BUDGET / 1_000_000
+                )
+            },
             format!("{:.1} MB", bytes as f64 / 1e6),
-            cfg!(target_os = "linux"),
+            cfg!(target_os = "linux") && small,
             bytes < HELLO_PEAK_BUDGET,
         ));
     }
@@ -1843,7 +1872,8 @@ mod tests {
 
     /// Compiled peak memory has an explicit budget (cig-compile#30): a hello
     /// over it is missed where it is held, one under it is met, and a hello
-    /// with no figure has no row.
+    /// with no figure has no row. It is held from the first cig after 1.21.0:
+    /// on 1.21.0 as released the row is there and reads "not yet".
     #[test]
     fn a_compiled_hello_over_its_memory_budget_is_missed() {
         let row = |rss: Option<u64>| Row {
@@ -1858,11 +1888,12 @@ mod tests {
             refs_5x: Vec::new(),
             allocs: None,
         };
-        let peak = |rss| {
-            budgets(&[row(rss)], None, None)
+        let peak_on = |rss, runtime: &str| {
+            budgets(&[row(rss)], None, None, runtime)
                 .into_iter()
                 .find(|c| c.0 == "peak memory of a compiled hello")
         };
+        let peak = |rss| peak_on(rss, "1.22.0");
         let over = peak(Some(17_500_000)).expect("a row");
         assert_eq!(
             (over.3, over.4),
@@ -1872,6 +1903,22 @@ mod tests {
         let under = peak(Some(5_000_000)).expect("a row");
         assert!(under.4, "{under:?}");
         assert!(peak(None).is_none());
+        // cig 1.21.0 as released cannot meet it: the row is not held there
+        let released = peak_on(Some(17_500_000), "1.21.0").expect("a row");
+        assert_eq!((released.3, released.4), (false, false), "{released:?}");
+        assert_eq!(verdict(&released), "not yet (a later stage)");
+        assert!(released.1.contains("after 1.21.0"), "{released:?}");
+        for (v, small) in [
+            ("1.21.0", false),
+            ("1.20.9", false),
+            ("1.21.1", true),
+            ("1.22.0", true),
+            ("2.0.0", true),
+            ("1.22.0-rc.1", true),
+            ("nonsense", false),
+        ] {
+            assert_eq!(heap_starts_small(v), small, "{v}");
+        }
     }
 
     #[test]
