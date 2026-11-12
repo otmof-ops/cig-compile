@@ -88,7 +88,7 @@ cigcompile verify <program> --pass <program>.pass [--allowed-signers <file>]
 
 - On the machine that built it, the pass holds with nothing more:
   `pass  ok  made by this machine on 2026-11-09T15:57:52Z: hello.cig for
-  cig 1.20.0 on x86_64-unknown-linux-musl, built by cigcompile 0.3.0`.
+  cig 1.21.0 on x86_64-unknown-linux-musl, built by cigcompile 0.4.0`.
 - On another machine, it holds when that machine trusts the builder for
   programs. On the builder, `cig pass key --kinds program` prints the
   line; put it in the other machine's allowed signers (cig's own,
@@ -169,7 +169,7 @@ ones (a program needs nothing else).
 
 ```
 $ cigcompile build hello.cig --emit oci --target x86_64-unknown-linux-musl
-compiled hello.cig -> hello (13.0 MB, cig 1.20.0 for x86_64-unknown-linux-musl)
+compiled hello.cig -> hello (15.8 MB, cig 1.21.0 for x86_64-unknown-linux-musl)
   sha256 ...
   image  hello.oci.tar (docker load -i, then run localhost/hello:latest)
 ```
@@ -191,7 +191,7 @@ ar + tar + gzip, written here, so no dpkg is needed to make one.
 ```
 $ cigcompile build hello.cig --emit deb --target x86_64-unknown-linux-musl \
     --pkg-version 1.0.0 --pkg-description "greeting program"
-compiled hello.cig -> hello (13.0 MB, cig 1.20.0 for x86_64-unknown-linux-musl)
+compiled hello.cig -> hello (15.8 MB, cig 1.21.0 for x86_64-unknown-linux-musl)
   sha256 ...
   deb    hello_1.0.0_amd64.deb (hello_1.0.0_amd64.deb, dpkg -i to install to /usr/bin/hello)
 ```

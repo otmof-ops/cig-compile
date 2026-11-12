@@ -3,8 +3,27 @@
 All notable changes to CigCompile. The format follows Keep a Changelog; the
 project follows semantic versioning.
 
-## Unreleased
+## 0.4.0 — 2026-11-12
 
+Programs for cig 1.21.0; CigCompile joins the cig family's shared
+plumbing, installed through ciginstaller (and brought back out the
+same way), its crashes join cig's one queue, and its bench runs on
+the family's shared harness with regression, memory and trend gates.
+`.cigar` files build at a strength; `cigcompile trial <new>` compares
+two compilers side by side when a project pins a newer carton; and
+the licence moves to FSL-1.1-ALv2 for every release from this one on.
+
+- **Programs for cig 1.21.0.** The pinned runtime moves to cig 1.21.0's
+  release (cig-script's notes for 1.21.0 say what the interpreter gained).
+  The runtime a compiled program embeds is cig 1.21.0, so its
+  `cigcompile verify` row prints `cig-v1.21.0-<target>`, and the pass,
+  the SBOM and `cigcompile audit` name the same version. **The licence
+  travels with the runtime.** Cig 1.21.0 is the first FSL-1.1-ALv2
+  cig release (cig-installer DECISIONS 19), so the cig inside a 0.4.0
+  program carries FSL-1.1-ALv2 too, not Apache-2.0; the SBOM reports
+  it (`src/sbom.rs::runtime_license`) and the shipping guide's
+  licence block has the split by cig release. A program built on an
+  older cig with `--runtime` still carries that cig's own licence.
 - **`cigcompile bench` on the family's harness (#68).** `bench/bench.toml` measures
   build, programs (each of 21 compiled and interpreted, on one runtime), start-up, size,
   artefacts and passes, and `cigcompile bench` is a front end of `cig bench` for

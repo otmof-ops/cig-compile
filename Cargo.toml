@@ -1,6 +1,6 @@
 [package]
 name = "cigcompile"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.82"
 description = "CigCompile: CigScript scripts as programs that run with nothing installed"
@@ -29,10 +29,12 @@ path = "src/bin/cig-runtime.rs"
 alloc-count = []
 
 [dependencies]
-cigscript = { git = "https://github.com/otmof-ops/cig-script", tag = "v1.20.0" }
+cigscript = { git = "https://github.com/otmof-ops/cig-script", tag = "v1.21.0" }
 # `.cigar` files and `--strength` (cigar-script#7): the checker and lowering
-# that `cigar check` is, pinned the way cigscript is, to a cigar-script commit
-# built on the same cigscript (v1.20.0).
+# that `cigar check` is, pinned the way cigscript is, to a cigar-script commit.
+# The rev here is built on cigscript v1.20.0's AST and keeps its own cigscript
+# copy in the graph until cigar-script rebases on v1.21.0; cigarscript's public
+# API (Strength, Render, Prepared, experience) does not cross either cigscript.
 cigarscript = { git = "https://github.com/otmof-ops/cigar-script", rev = "8275562f576b18ba568471b51028a9ee648371ae" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"

@@ -18,10 +18,11 @@ out = [
     "",
     "cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothing is vendored); "
     "cig-runtime is cig itself, built from the `cigscript` crate (CigScript, https://github.com/otmof-ops/cig-script, "
-    "Apache-2.0, whose NOTICE travels with it). Every crate is under a permissive license compatible with Apache-2.0; "
-    "where a crate offers a choice (`OR`), the permissive option is the one taken. Holder names come from each crate's "
-    "metadata; `unrecorded` means the crate publishes no author field. Regenerate with `cargo license --avoid-dev-deps "
-    "--json` (cargo-license) and `ci/gen-third-party.py`.",
+    "FSL-1.1-ALv2 from v1.21.0, Apache-2.0 for releases through v1.20.0). Every linked crate is under a permissive "
+    "or source-available license whose use in cigcompile and in a compiled program is allowed; where a crate offers "
+    "a choice (`OR`), the permissive option is the one taken. Holder names come from each crate's metadata; "
+    "`unrecorded` means the crate publishes no author field. Regenerate with `cargo license --avoid-dev-deps --json` "
+    "(cargo-license) and `ci/gen-third-party.py`.",
     "",
 ]
 for lic, items in sorted(fam.items(), key=lambda kv: (-len(kv[1]), kv[0])):

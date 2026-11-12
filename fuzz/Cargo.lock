@@ -454,10 +454,51 @@ dependencies = [
 ]
 
 [[package]]
-name = "cigcompile"
-version = "0.3.0"
+name = "cig-pass"
+version = "0.1.0"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.21.0#b3a5a262c3e44f65467359b1494cab9a29dbfe66"
 dependencies = [
- "cigscript",
+ "base64",
+ "blake3",
+ "ed25519-dalek",
+ "getrandom 0.2.17",
+ "globset",
+ "hmac",
+ "libc",
+ "sha2",
+ "subtle",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "cig-vault"
+version = "0.1.0"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.21.0#b3a5a262c3e44f65467359b1494cab9a29dbfe66"
+dependencies = [
+ "getrandom 0.2.17",
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "cigarscript"
+version = "0.1.0"
+source = "git+https://github.com/otmof-ops/cigar-script?rev=8275562f576b18ba568471b51028a9ee648371ae#8275562f576b18ba568471b51028a9ee648371ae"
+dependencies = [
+ "cigscript 1.20.0",
+ "clap",
+ "serde_json",
+]
+
+[[package]]
+name = "cigcompile"
+version = "0.4.0"
+dependencies = [
+ "cigarscript",
+ "cigscript 1.21.0",
  "clap",
  "flate2",
  "hex",
@@ -472,7 +513,7 @@ name = "cigcompile-fuzz"
 version = "0.0.0"
 dependencies = [
  "cigcompile",
- "cigscript",
+ "cigscript 1.21.0",
  "libfuzzer-sys",
 ]
 
@@ -485,7 +526,7 @@ dependencies = [
  "blake3",
  "chacha20poly1305",
  "chrono",
- "cig-pass",
+ "cig-pass 0.1.0 (git+https://github.com/otmof-ops/cig-script?tag=v1.20.0)",
  "clap",
  "fastcdc",
  "flate2",
@@ -508,6 +549,43 @@ dependencies = [
  "wait-timeout",
  "walkdir",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "cigscript"
+version = "1.21.0"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.21.0#b3a5a262c3e44f65467359b1494cab9a29dbfe66"
+dependencies = [
+ "argon2",
+ "blake3",
+ "chacha20poly1305",
+ "chrono",
+ "cig-pass 0.1.0 (git+https://github.com/otmof-ops/cig-script?tag=v1.21.0)",
+ "cig-vault",
+ "clap",
+ "fastcdc",
+ "flate2",
+ "getrandom 0.2.17",
+ "globset",
+ "hex",
+ "hkdf",
+ "hmac",
+ "indexmap",
+ "keyring",
+ "libc",
+ "memchr",
+ "mimalloc",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tar",
+ "toml",
+ "wait-timeout",
+ "walkdir",
+ "windows-sys 0.61.2",
+ "zstd",
 ]
 
 [[package]]
@@ -1146,6 +1224,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libmimalloc-sys"
+version = "0.1.49"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1170,6 +1257,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "mimalloc"
+version = "0.1.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
+dependencies = [
+ "libmimalloc-sys",
 ]
 
 [[package]]
@@ -2360,6 +2456,34 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zstd"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdb02c3132d251ab1606e9fc913a7da6c6ed08cc263df15edf082e1dc497d157"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c8ea04668f5de8d8d51051714ba560c9536519cadcdb8829bba4fe2ad159b03"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.1.2+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "481ada9c543b2323cbb7bbdbb5249177fbf0188ed959ed2c15e4b22421c84ed3"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
 
 [[package]]
 name = "zvariant"
