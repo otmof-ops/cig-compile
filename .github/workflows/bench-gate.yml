@@ -34,7 +34,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: main-src
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
       - name: build this pull request
         run: |
           cargo build --release --bin cigcompile

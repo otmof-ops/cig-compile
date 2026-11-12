@@ -26,7 +26,8 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
       - name: the pinned CigScript
         shell: bash
         run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"

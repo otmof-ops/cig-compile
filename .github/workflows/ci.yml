@@ -8,19 +8,82 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its earlier run. A push to main (or a tag) finishes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # A docs-only change (docs/** and *.md where the job does not build or test docs) skips the heavy
+  # jobs: the macOS and Windows test matrices, the repro and probe matrices, the burns, the Docker
+  # images that prove `portable`, the cross-build fan-out, and so on. The Linux `test` job still
+  # runs (it tests cargo doctests and the README examples). One `ci-ok` verdict always reports.
+  # Plain `git`, no third-party action.
+  changes:
+    name: what changed
+    runs-on: ubuntu-latest
+    outputs:
+      code_changed: ${{ steps.filter.outputs.code_changed }}
+      test_oses: ${{ steps.filter.outputs.test_oses }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        name: are any non-docs paths touched
+        env:
+          GH_EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          case "$GH_EVENT" in
+            pull_request)
+              base="$BASE_SHA"
+              git fetch --no-tags --prune --depth=50 origin "+refs/heads/*:refs/remotes/origin/*" >/dev/null 2>&1 || true
+              files=$(git diff --name-only "$base"...HEAD)
+              ;;
+            *)
+              if git rev-parse HEAD^ >/dev/null 2>&1; then
+                files=$(git diff --name-only HEAD^ HEAD)
+              else
+                files=$(git ls-tree -r --name-only HEAD)
+              fi
+              ;;
+          esac
+          echo "changed files:"
+          printf '%s\n' "$files"
+          code_changed=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              docs/*|*.md) ;;
+              *) code_changed=true; break ;;
+            esac
+          done <<EOF
+          $files
+          EOF
+          if [ "$code_changed" = true ]; then
+            test_oses='["ubuntu-latest","ubuntu-24.04-arm","macos-latest","macos-15-intel","windows-latest"]'
+          else
+            test_oses='["ubuntu-latest"]'
+          fi
+          echo "code_changed=$code_changed" >> "$GITHUB_OUTPUT"
+          echo "test_oses=$test_oses" >> "$GITHUB_OUTPUT"
+          echo "code_changed=$code_changed"
+          echo "test_oses=$test_oses"
+
   test:
     name: test (${{ matrix.os }})
+    needs: changes
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
+        os: ${{ fromJSON(needs.changes.outputs.test_oses) }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
@@ -57,6 +120,8 @@ jobs:
   # even when one of them failed, so a missing machine fails it.
   repro:
     name: one script for every machine, on ${{ matrix.os }} (#9)
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -64,7 +129,8 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
       - run: cargo build --release --bin cigcompile
       - name: build and hash
         shell: bash
@@ -91,8 +157,8 @@ jobs:
 
   reproducible:
     name: the same bytes on five machines (#9)
-    needs: repro
-    if: ${{ !cancelled() }}
+    needs: [changes, repro]
+    if: needs.changes.outputs.code_changed == 'true' && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -101,8 +167,10 @@ jobs:
           merge-multiple: true
       - name: compare
         run: |
+          # shellcheck disable=SC2012
           n=$(ls sha256-*.txt | wc -l)
           [ "$n" -eq 5 ] || { echo "$n machines' hashes, not five"; exit 1; }
+          # shellcheck disable=SC2012
           first=$(ls sha256-*.txt | head -1)
           [ "$(wc -l < "$first")" -eq 6 ] || { echo "not six programs:"; cat "$first"; exit 1; }
           for f in sha256-*.txt; do
@@ -116,6 +184,8 @@ jobs:
   # program (ci/cig-compiled.sh). Every scenario must say the same.
   probe:
     name: the portability probe, compiled (${{ matrix.os }}) (#7)
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -123,7 +193,8 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
       - name: the pinned CigScript
         shell: bash
         run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
@@ -207,6 +278,8 @@ jobs:
   # argv, golden text that names `cig run`).
   burns:
     name: CigScript's burn tests, compiled (${{ matrix.os }}) (#6)
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -214,7 +287,8 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
       - name: the pinned CigScript
         shell: bash
         run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
@@ -245,10 +319,13 @@ jobs:
   # in Debian 12 and Alpine, whose glibc is older or absent.
   portable:
     name: a source build's programs run on any Linux (#27)
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
       - run: cargo build --release
       - name: build with no runtime given, then run in debian:12 and alpine
         shell: bash
@@ -273,6 +350,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2016
           printf 'stick who = args.get(0, "nobody")\nexhale "hello from a scratch image, ${who}"\n' > img.cig
           ./target/release/cigcompile build img.cig --emit oci
           docker load -i img.oci.tar
@@ -282,12 +360,15 @@ jobs:
 
   nothing-installed:
     name: nothing installed (#5)
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl
       - name: the pinned CigScript
         run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
@@ -336,10 +417,13 @@ jobs:
   # compiler pins), and each program runs on its own machine.
   cross:
     name: one runner builds for every machine (#10)
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
       - name: the pinned CigScript
         run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
@@ -365,7 +449,8 @@ jobs:
 
   cross-run:
     name: runs on its own machine (${{ matrix.target }})
-    needs: cross
+    needs: [changes, cross]
+    if: needs.changes.outputs.code_changed == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -403,3 +488,22 @@ jobs:
             echo "the $t programs ran on ${{ matrix.target }}"
           done
 
+  # The one verdict every pull request reports: did every needed job pass or skip.
+  ci-ok:
+    name: ci
+    if: always()
+    needs: [changes, test, repro, reproducible, probe, burns, portable, nothing-installed, cross, cross-run]
+    runs-on: ubuntu-latest
+    steps:
+      - name: every needed job passed or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$NEEDS"
+          failed=$(printf '%s' "$NEEDS" | jq -r 'to_entries | map(select(.value.result != "success" and .value.result != "skipped")) | map(.key) | join(" ")')
+          if [ -n "$failed" ]; then
+            echo "::error::failed or cancelled: $failed"
+            exit 1
+          fi
+          echo "every needed job passed or was skipped"

@@ -39,7 +39,7 @@ jobs:
           mkdir -p "fuzz/corpus/${{ matrix.target }}"
           cp cigscript-src/examples/*.cig cigscript-src/tests/scripts/*.cig cigscript-src/tests/corpus/*.cig "fuzz/corpus/${{ matrix.target }}/"
       - name: fuzz
-        run: cargo fuzz run ${{ matrix.target }} "fuzz/corpus/${{ matrix.target }}" -- -max_total_time=${{ inputs.seconds || 300 }} -max_len=65536 -rss_limit_mb=4096
+        run: cargo +nightly fuzz run ${{ matrix.target }} "fuzz/corpus/${{ matrix.target }}" -- -max_total_time=${{ inputs.seconds || 300 }} -max_len=65536 -rss_limit_mb=4096
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
