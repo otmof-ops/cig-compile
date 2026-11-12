@@ -113,6 +113,27 @@ succeeded. See [shipping](shipping.md#all-or-nothing-staging).
 `--emit cir` prints the IR ([#3](https://github.com/otmof-ops/cig-compile/issues/3)): CigScript lowered to an SSA-like
 form that each pass verifies before the next runs.
 
+The IR carries the step budget (`--max-steps`, `CIG_MAX_STEPS`) the
+way the interpreter counts it. A `step` opens every statement except
+a `pull`, and a `step.iter` opens every loop body: one mark for each
+tick of the interpreter's counter, at the same span. The verifier
+holds them in place. A mark never moves, a loop body always opens
+with its `step.iter` (V11), and a pass removes a mark only together
+with everything else in its block (T3). A compiled program stops on
+the same step, at the same line, as the interpreter.
+
+Errors come out where the interpreter puts them. A map literal is
+lowered in the interpreter's order: each computed key, then its
+`key` check, then the entry's value. A key that is not a string or
+an int raises before a later value can. An index, an indexed store, a
+member store and a map's computed keys carry the spans of their own
+operands
+(`--emit cir` prints them beside the instruction's span, as
+`idx@3:10`). A wrong index type is reported at the index, and a
+value that cannot be indexed at the object, even after a pass has
+replaced either operand with a value made somewhere else. The
+verifier checks every such span lies inside its instruction (V2).
+
 The passes today are
 `fold-consts`, `copy-prop`, `fold-consts`, `sccp`, `dead-pure`, in
 that order. Each is read as:
@@ -125,6 +146,21 @@ that order. Each is read as:
   emptying it would delete work (T3 catches that shape).
 - **dead-pure** prunes pure expressions whose result is unused.
 
+Each instruction has a class, read from its kind and the types of its
+operands. A **pure** one (a constant, a fresh list, `==`, float
+arithmetic, a read of a `stick` where it lives) may move, merge or
+vanish. One that **may raise** (integer arithmetic that can overflow,
+`/`, an index, a member that can be missing, a float ordered against
+a NaN) keeps its place and its order, and goes only where the
+verifier proves it cannot raise: its operands are constants that the
+interpreter's arithmetic folds, and the constant left in its place is
+that result (T4). **Effects** (slot writes, calls, `exhale`, burn
+ops) and step marks keep their place and order and are never lost
+(T1 to T3), except with a whole `if` arm that a constant condition
+never takes. Each pass is its own module, with a golden folder under
+`tests/cir/` and a deliberately broken twin that the verifier must
+catch.
+
 `--passes-diff` adds a unified diff of what each pass changed, or a
 line that says it did not; `--remarks` says the same thing in
 prose. Neither changes what a program does: the verifier re-reads
@@ -133,6 +169,37 @@ the script, not from the IR. The level shapes `--emit` only.
 
 Stage B is where `-O1` and `-O2` will start to differ: the passes
 there will shape the bytecode a program runs.
+
+### The bytecode lowering
+
+`src/bc` lowers verified IR to the register bytecode of
+[#31](https://github.com/otmof-ops/cig-compile/issues/31), the format cig-script's `docs/BYTECODE.md` sets out, and
+runs the format crate's verifier on every module it makes (a module
+that does not verify is the compiler's bug). A slot is a register for
+the whole function; a value has a register from its definition to its
+last use. A call moves its callee and arguments into consecutive
+registers. `a > b` is `le a, b` then `not`, so the operands keep the
+order the interpreter's errors name. A step mark is one `steps`
+instruction, a loop sets its nesting before its condition and back
+after it, and the line table keeps the IR's span for every instruction.
+A slot a closure captures lives in a cell: a fresh one each time its
+block runs (each turn of a loop), so a closure made in a turn keeps
+that turn's value, and a pull calls itself or a sibling through the
+cell its closure was declared into. `for` over `a..b` counts with
+`forprep`/`forloop`, and over a list, a map or a string walks the
+interpreter's snapshot with `iterprep`/`iternext`; the item is fresh
+each turn. An index read or store checks the types of its operands
+first, so a wrong index type is reported at the index and a value
+that cannot be indexed at the object, as the interpreter reports them,
+taking those positions from the spans the IR stores, and an `exhale`
+part or interpolation piece is turned to text where the interpreter
+shows it, before a later part can change it. A computed map key is
+checked by its own `key` instruction, before the entry's value runs.
+`try`, `cough`, burns, `pack`, chains, and a builtin, a module or
+`args` used as a value are refused with
+their construct and position. `tests/bc.rs` runs what it lowers in the
+VM and holds its output, errors, positions and step count to the
+tree-walker's.
 
 ## The box is Linux's
 
@@ -224,6 +291,11 @@ diagnostics and the standard library in as one crate, which keeps the
 compiler simple at the cost of linking all of cig into the output.
 [#1](https://github.com/otmof-ops/cig-compile/issues/1) is the crate split that lets stage B's runtime be only what a
 program uses — the smaller runtime #36 and #14 are aiming at.
+
+The `vm` feature turns on the bytecode lowering, `--emit bc` and their
+tests. It needs a cigscript that carries the bytecode VM and re-exports
+its format crate, which no cig release does yet, so it is off by
+default and the compiler builds at its pinned tag without it.
 
 ## The launcher
 

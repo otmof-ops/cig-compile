@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 //! CIR (#3): lowering, the verifier, the passes, the text form.
 
-use cigcompile::cir::ir::{Kind, VarId};
+use cigcompile::cir::ir::{Class, Const, Kind, VarId};
 use cigcompile::cir::pass::{self, broken, run_passes, Pass};
 use cigcompile::cir::verify::{errors, verify, Severity};
 use cigcompile::cir::{emit_with, lower_source, print, LowerError};
@@ -438,4 +438,924 @@ fn every_script_cigscript_carries_lowers_and_verifies() {
         "exactly the corpus scripts the checker refuses"
     );
     assert!(lowered >= 24, "only {lowered} scripts lowered");
+}
+
+/// A script that runs every tick site the interpreter has: statements at
+/// the top level, in pulls, in a block lambda, in `if` and `else if` arms,
+/// in `try`, `ashtray` and `finally`; `while` with `continue` and
+/// `break`; `for` over a range, a list and an empty list; a recursion; an
+/// expression lambda, which counts nothing of its own.
+const STEPPY: &str = "pull fib(n) {
+  if n < 2 {
+    snuff n
+  }
+  snuff fib(n - 1) + fib(n - 2)
+}
+roll total = 0
+roll i = 0
+while i < 5 {
+  i += 1
+  if i == 2 {
+    continue
+  } else if i == 4 {
+    break
+  }
+  total += i
+}
+for j in 0..3 {
+  pull twice(x) {
+    snuff x * 2
+  }
+  for k in [1, 2] {
+    total += twice(j * k)
+  }
+  try {
+    if j == 1 {
+      cough \"one\"
+    }
+    total += 1
+  } ashtray e {
+    total += 10
+  } finally {
+    total += 100
+  }
+}
+for e in [] {
+  total += 1
+}
+stick sq = pack(x) => x * x
+stick add = pack(a, b) {
+  stick s = a + b
+  snuff s
+}
+total += sq(3) + add(1, 2) + fib(5)
+exhale total
+";
+
+/// The step marks a run passes through, in order, from a small evaluator
+/// over CIR: enough of the language for `STEPPY`, and nothing else. With a
+/// budget, a mark past it raises E515 at its own span as the interpreter's
+/// `tick` does: an ordinary error, which `ashtray` catches and a `finally`
+/// that raises again replaces.
+mod marks {
+    use cigcompile::cir::ir::*;
+    use cigscript::syntax::ast::{BinOp, UnOp};
+    use cigscript::syntax::span::Span;
+    use std::collections::HashMap;
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum V {
+        Null,
+        Bool(bool),
+        Int(i64),
+        Str(String),
+        List(Vec<V>),
+        Map(Vec<(String, V)>),
+        Func(FuncId),
+    }
+
+    impl V {
+        fn show(&self) -> String {
+            match self {
+                V::Null => "null".into(),
+                V::Bool(b) => b.to_string(),
+                V::Int(i) => i.to_string(),
+                V::Str(s) => s.clone(),
+                other => panic!("{other:?} is not shown in this evaluator"),
+            }
+        }
+    }
+
+    impl V {
+        fn truthy(&self) -> bool {
+            !matches!(self, V::Null | V::Bool(false))
+        }
+        fn int(&self) -> i64 {
+            match self {
+                V::Int(i) => *i,
+                other => panic!("not an int: {other:?}"),
+            }
+        }
+    }
+
+    enum Flow {
+        Next,
+        Break,
+        Continue,
+        Ret(V),
+        Yield(V),
+        Throw,
+    }
+
+    struct Frame {
+        func: FuncId,
+        vals: HashMap<ValueId, V>,
+        slots: HashMap<VarId, V>,
+    }
+
+    pub struct Run<'m> {
+        m: &'m Module,
+        frames: Vec<Frame>,
+        marks: Vec<Span>,
+        out: Vec<String>,
+        max: u64,
+        /// The error in flight: where it was raised.
+        err: Option<Span>,
+    }
+
+    /// Every mark a run of the module passes through, in order, and where
+    /// the error that ends it was raised, if one does. `max` is the step
+    /// budget, 0 for none.
+    pub fn trace(m: &Module, max: u64) -> (Vec<Span>, Option<Span>) {
+        let (marks, _, stop) = run(m, max);
+        (marks, stop)
+    }
+
+    /// `trace`, and the lines the run's `exhale`s wrote.
+    pub fn run(m: &Module, max: u64) -> (Vec<Span>, Vec<String>, Option<Span>) {
+        let mut r = Run {
+            m,
+            frames: Vec::new(),
+            marks: Vec::new(),
+            out: Vec::new(),
+            max,
+            err: None,
+        };
+        let stop = r
+            .call(FuncId(0), Vec::new())
+            .is_none()
+            .then(|| r.err.expect("raised"));
+        (r.marks, r.out, stop)
+    }
+
+    impl Run<'_> {
+        fn frame(&mut self) -> &mut Frame {
+            self.frames.last_mut().unwrap()
+        }
+
+        /// A slot lives in the newest frame of the function that owns it.
+        fn slot(&mut self, v: VarId) -> &mut V {
+            let owner = self.m.vars[v.0 as usize].owner;
+            let f = self
+                .frames
+                .iter_mut()
+                .rev()
+                .find(|f| f.func == owner)
+                .expect("the owner is running");
+            f.slots.entry(v).or_insert(V::Null)
+        }
+
+        fn val(&mut self, v: ValueId) -> V {
+            self.frame().vals[&v].clone()
+        }
+
+        /// `None`: an error escaped the call.
+        fn call(&mut self, func: FuncId, args: Vec<V>) -> Option<V> {
+            let f = &self.m.funcs[func.0 as usize];
+            let mut slots = HashMap::new();
+            for (p, a) in f.params.iter().zip(args) {
+                slots.insert(*p, a);
+            }
+            self.frames.push(Frame {
+                func,
+                vals: HashMap::new(),
+                slots,
+            });
+            let out = match self.block(&f.body) {
+                Flow::Ret(v) => Some(v),
+                Flow::Next => Some(V::Null),
+                Flow::Throw => None,
+                _ => panic!("a stray break, continue or yield"),
+            };
+            self.frames.pop();
+            out
+        }
+
+        fn block(&mut self, b: &Block) -> Flow {
+            for i in &b.instrs {
+                match self.instr(i) {
+                    Flow::Next => {}
+                    other => return other,
+                }
+            }
+            Flow::Next
+        }
+
+        fn raise(&mut self, at: Span) -> Flow {
+            self.err = Some(at);
+            Flow::Throw
+        }
+
+        fn set(&mut self, i: &Instr, v: V) {
+            if let Some(r) = i.result {
+                self.frame().vals.insert(r, v);
+            }
+        }
+
+        /// A call's result, or the error that escaped it, raised on here.
+        fn called(&mut self, i: &Instr, v: Option<V>) -> Flow {
+            match v {
+                Some(v) => {
+                    self.set(i, v);
+                    Flow::Next
+                }
+                None => Flow::Throw,
+            }
+        }
+
+        fn instr(&mut self, i: &Instr) -> Flow {
+            match &i.kind {
+                Kind::Step(_) => {
+                    self.marks.push(i.span);
+                    if self.max != 0 && self.marks.len() as u64 > self.max {
+                        self.err = Some(i.span);
+                        return Flow::Throw;
+                    }
+                }
+                Kind::Const(c) => {
+                    let v = match c {
+                        Const::Null => V::Null,
+                        Const::Bool(b) => V::Bool(*b),
+                        Const::Int(n) => V::Int(*n),
+                        Const::Str(s) => V::Str(s.clone()),
+                        Const::Float(_) => panic!("no floats here"),
+                    };
+                    self.set(i, v);
+                }
+                Kind::Load(v) => {
+                    let x = self.slot(*v).clone();
+                    self.set(i, x);
+                }
+                Kind::Decl(v, x) | Kind::Store(v, x) => {
+                    let x = self.val(*x);
+                    *self.slot(*v) = x;
+                }
+                Kind::Unary(op, x) => {
+                    let x = self.val(*x);
+                    let v = match op {
+                        UnOp::Neg => V::Int(-x.int()),
+                        UnOp::Not => V::Bool(!x.truthy()),
+                    };
+                    self.set(i, v);
+                }
+                Kind::Binary(op, a, b) => {
+                    let (a, b) = (self.val(*a), self.val(*b));
+                    let v = match op {
+                        BinOp::Add => V::Int(a.int() + b.int()),
+                        BinOp::Sub => V::Int(a.int() - b.int()),
+                        BinOp::Mul => V::Int(a.int() * b.int()),
+                        BinOp::Div if b.int() == 0 => return self.raise(i.span),
+                        BinOp::Div => V::Int(a.int() / b.int()),
+                        BinOp::Eq => V::Bool(a == b),
+                        BinOp::Ne => V::Bool(a != b),
+                        BinOp::Lt => V::Bool(a.int() < b.int()),
+                        BinOp::Le => V::Bool(a.int() <= b.int()),
+                        BinOp::Gt => V::Bool(a.int() > b.int()),
+                        BinOp::Ge => V::Bool(a.int() >= b.int()),
+                        BinOp::Range => V::List((a.int()..b.int()).map(V::Int).collect()),
+                        other => panic!("{other:?} is not in this evaluator"),
+                    };
+                    self.set(i, v);
+                }
+                Kind::MakeList(xs) => {
+                    let v = xs.iter().map(|x| self.val(*x)).collect();
+                    self.set(i, V::List(v));
+                }
+                Kind::Closure(f) => self.set(i, V::Func(*f)),
+                // The tree-walker's checks and the positions it raises at.
+                Kind::Key(k) => match self.val(*k) {
+                    V::Str(s) => self.set(i, V::Str(s)),
+                    V::Int(n) => self.set(i, V::Str(n.to_string())),
+                    _ => return self.raise(i.span),
+                },
+                Kind::MakeMap(kv) => {
+                    let mut map = Vec::new();
+                    for (k, x) in kv {
+                        let k = match k {
+                            MapKey::Static(s) => s.clone(),
+                            MapKey::Dyn(d, _) => self.val(*d).show(),
+                        };
+                        map.push((k, self.val(*x)));
+                    }
+                    self.set(i, V::Map(map));
+                }
+                Kind::Member { obj, name, .. } => {
+                    let V::Map(map) = self.val(*obj) else {
+                        panic!("not a map")
+                    };
+                    let v = map
+                        .iter()
+                        .find(|(k, _)| k == name)
+                        .expect("the key")
+                        .1
+                        .clone();
+                    self.set(i, v);
+                }
+                Kind::Index { obj, idx, idx_at } => {
+                    let v = match (self.val(*obj), self.val(*idx)) {
+                        (V::List(xs), V::Int(n)) => xs[n as usize].clone(),
+                        (V::Map(map), V::Str(k)) => map
+                            .iter()
+                            .find(|(x, _)| *x == k)
+                            .expect("the key")
+                            .1
+                            .clone(),
+                        (V::List(_) | V::Map(_) | V::Str(_), _) => return self.raise(*idx_at),
+                        _ => return self.raise(i.span),
+                    };
+                    self.set(i, v);
+                }
+                Kind::SetIndex {
+                    obj,
+                    idx,
+                    obj_at,
+                    idx_at,
+                    ..
+                } => match (self.val(*obj), self.val(*idx)) {
+                    (V::List(_), V::Int(_)) | (V::Map(_), V::Str(_)) => {}
+                    (V::List(_) | V::Map(_), _) => return self.raise(*idx_at),
+                    _ => return self.raise(*obj_at),
+                },
+                Kind::SetMember { obj, obj_at, .. } => {
+                    if !matches!(self.val(*obj), V::Map(_)) {
+                        return self.raise(*obj_at);
+                    }
+                }
+                Kind::CallUser { func, args } => {
+                    let args = args.iter().map(|a| self.val(*a)).collect();
+                    let v = self.call(*func, args);
+                    return self.called(i, v);
+                }
+                Kind::CallValue { f, args } => {
+                    let V::Func(func) = self.val(*f) else {
+                        panic!("not a function")
+                    };
+                    let args = args.iter().map(|a| self.val(*a)).collect();
+                    let v = self.call(func, args);
+                    return self.called(i, v);
+                }
+                Kind::Exhale(vs) => {
+                    let line: Vec<String> = vs.iter().map(|v| self.val(*v).show()).collect();
+                    self.out.push(line.join(" "));
+                }
+                Kind::If {
+                    cond,
+                    then,
+                    otherwise,
+                } => {
+                    if self.val(*cond).truthy() {
+                        return self.block(then);
+                    } else if let Some(o) = otherwise {
+                        return self.block(o);
+                    }
+                }
+                Kind::Loop { cond, body } => loop {
+                    match self.block(cond) {
+                        Flow::Yield(v) if v.truthy() => {}
+                        Flow::Yield(_) => break,
+                        Flow::Throw => return Flow::Throw,
+                        _ => panic!("a condition ends in yield"),
+                    }
+                    match self.block(body) {
+                        Flow::Next | Flow::Continue => {}
+                        Flow::Break => break,
+                        other => return other,
+                    }
+                },
+                Kind::ForEach { iter, var, body } => {
+                    let V::List(items) = self.val(*iter) else {
+                        panic!("not a list")
+                    };
+                    for item in items {
+                        *self.slot(*var) = item;
+                        match self.block(body) {
+                            Flow::Next | Flow::Continue => {}
+                            Flow::Break => break,
+                            other => return other,
+                        }
+                    }
+                }
+                Kind::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    let mut flow = self.block(body);
+                    if let (Flow::Throw, Some((var, handler))) = (&flow, catch) {
+                        if let Some(v) = var {
+                            *self.slot(*v) = V::Null;
+                        }
+                        flow = self.block(handler);
+                    }
+                    if let Some(f) = finally {
+                        // Its own signal wins; otherwise the pending one
+                        // carries on.
+                        let pending = self.err;
+                        match self.block(f) {
+                            Flow::Next => self.err = pending,
+                            other => return other,
+                        }
+                    }
+                    return flow;
+                }
+                Kind::Yield(v) => return Flow::Yield(self.val(*v)),
+                Kind::Ret(v) => return Flow::Ret(self.val(*v)),
+                Kind::Break => return Flow::Break,
+                Kind::Continue => return Flow::Continue,
+                Kind::Throw(_) => {
+                    self.err = Some(i.span);
+                    return Flow::Throw;
+                }
+                _ => panic!("instruction #{} is not in this evaluator", i.id.0),
+            }
+            Flow::Next
+        }
+    }
+}
+
+/// What the tree-walker writes for a script, and where an error stops it.
+fn walker_run(src: &str) -> (Vec<String>, Option<(u32, u32)>) {
+    use cigscript::burn::{Kernel, Mode};
+    use cigscript::interp::Interp;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let program = cigscript::syntax::parse(src).expect("parses");
+    let sink = Sink::default();
+    let mut interp = Interp::new(Kernel::ephemeral(Mode::Run));
+    interp.out = Box::new(sink.clone());
+    interp.set_max_steps(0);
+    let stop = interp
+        .run_program(&program)
+        .err()
+        .map(|d| (d.line.unwrap_or(0), d.col.unwrap_or(0)));
+    let text = String::from_utf8(sink.0.borrow().clone()).unwrap();
+    (text.lines().map(str::to_string).collect(), stop)
+}
+
+/// The tree-walker's own count for a script, and where it stops when the
+/// budget is `max` (0: no budget).
+fn walker_steps(src: &str, max: u64) -> (u64, Option<(u32, u32, String)>) {
+    use cigscript::burn::{Kernel, Mode};
+    use cigscript::interp::Interp;
+    let program = cigscript::syntax::parse(src).expect("parses");
+    let mut interp = Interp::new(Kernel::ephemeral(Mode::Run));
+    interp.out = Box::new(std::io::sink());
+    interp.set_max_steps(max);
+    let stop = interp
+        .run_program(&program)
+        .err()
+        .map(|d| (d.line.unwrap_or(0), d.col.unwrap_or(0), d.code.to_string()));
+    (interp.steps, stop)
+}
+
+#[test]
+fn the_marks_a_run_passes_are_the_steps_the_tree_walker_counts() {
+    let (total, stop) = walker_steps(STEPPY, 0);
+    assert_eq!(stop, None, "the script runs to the end");
+    for passes in [pass::level(0), pass::level(1)] {
+        let mut m = lower_source(STEPPY, "steppy.cig").unwrap();
+        run_passes(&mut m, &passes).unwrap();
+        let (marks, end) = marks::trace(&m, 0);
+        assert_eq!(end, None);
+        assert_eq!(
+            marks.len() as u64,
+            total,
+            "one mark per step the interpreter counts"
+        );
+        // With the budget at each value short of the total, both stop at
+        // the same span: the first mark past the budget, or, where a `try`
+        // caught that, the mark in its `ashtray` or `finally` that raised
+        // again.
+        let mut caught = 0;
+        for max in 1..total {
+            let (_, stop) = walker_steps(STEPPY, max);
+            let (_, at) = marks::trace(&m, max);
+            let at = at.expect("the budget ends the run");
+            assert_eq!(
+                stop,
+                Some((at.line, at.col, "E515".to_string())),
+                "--max-steps {max}"
+            );
+            if at != marks[max as usize] {
+                caught += 1;
+            }
+        }
+        assert!(caught > 0, "some budget runs out inside a try");
+    }
+    let (with_budget, stop) = walker_steps(STEPPY, total);
+    assert_eq!(
+        (with_budget, stop),
+        (total, None),
+        "a budget of exactly the total is enough"
+    );
+}
+
+#[test]
+fn every_statement_opens_with_a_step_and_every_loop_body_with_a_step_iter() {
+    let mut m = lower_source(STEPPY, "steppy.cig").unwrap();
+    run_passes(&mut m, &[]).unwrap();
+    let text = print::print(&m);
+    // A `pull` is hoisted and counts nothing; an `else if` is part of its
+    // `if`; an expression lambda has no statement.
+    assert_eq!(text.matches("step.iter").count(), 4, "{text}");
+    assert_eq!(
+        text.lines()
+            .filter(|l| l.trim_start().starts_with("step "))
+            .count(),
+        29,
+        "{text}"
+    );
+    let sq = text
+        .split("func ")
+        .find(|f| f.contains("lambda") && f.contains("bin * "))
+        .expect("the expression lambda");
+    assert!(!sq.contains("step"), "{sq}");
+}
+
+#[test]
+fn a_step_mark_dropped_from_a_block_that_stays_is_caught_t3() {
+    let src = "roll n = 0\nn += 1\nexhale n\n";
+    let mut m = lower_source(src, "d.cig").unwrap();
+    let e = run_passes(&mut m, &[&broken::DropStepMark as &dyn Pass]).unwrap_err();
+    assert_eq!(e.pass, "drop-step-mark");
+    assert!(
+        e.errors
+            .iter()
+            .any(|x| x.code == "T3" && x.message.contains("step mark")),
+        "{:#?}",
+        e.errors
+    );
+}
+
+#[test]
+fn step_marks_go_with_their_whole_block() {
+    // `sccp` empties the dead `else`, marks and all: the block is gone as
+    // a whole, so nothing is miscounted.
+    let src = "roll n = 0\nif true {\n  n = 1\n} else {\n  n = 2\n  n = 3\n}\nexhale n\n";
+    let mut m = lower_source(src, "w.cig").unwrap();
+    run_passes(&mut m, &[&pass::Sccp as &dyn Pass]).unwrap();
+    let text = print::print(&m);
+    assert_eq!(text.matches("step").count(), 4, "{text}");
+}
+
+#[test]
+fn a_loop_body_without_its_step_iter_is_caught_v11() {
+    let src = "roll i = 0\nwhile i < 3 {\n  i += 1\n}\n";
+    let mut m = lower_source(src, "l.cig").unwrap();
+    let e = run_passes(&mut m, &[&broken::EmptyLoopBody as &dyn Pass]).unwrap_err();
+    assert_eq!(e.pass, "empty-loop-body");
+    assert!(e.errors.iter().any(|x| x.code == "V11"), "{:#?}", e.errors);
+    // A `step.iter` moved out of its loop body is V11 and T1 both.
+    let mut m = lower_source(src, "l.cig").unwrap();
+    let e = run_passes(&mut m, &[&broken::HoistStepIter as &dyn Pass]).unwrap_err();
+    assert!(e.errors.iter().any(|x| x.code == "V11"), "{:#?}", e.errors);
+    assert!(e.errors.iter().any(|x| x.code == "T1"), "{:#?}", e.errors);
+}
+
+/// Golden: `fold-consts` alone folds through a chain (`2 + 3 * 4`), a
+/// string `+` and the compare on it, and leaves an overflow and a
+/// division by zero to raise at run time.
+#[test]
+fn fold_consts_matches_its_golden_text() {
+    golden_for_pass("fold-consts", "chain", &[&pass::FoldConsts as &dyn Pass]);
+}
+
+/// Golden: `dead-pure` alone removes an unused list, an unused
+/// interpolation and the read of a `stick` it alone used; it keeps an
+/// unused `a / b`, which may raise, and the reads of the `roll` slots it
+/// needs.
+#[test]
+fn dead_pure_matches_its_golden_text() {
+    golden_for_pass("dead-pure", "unused", &[&pass::DeadPure as &dyn Pass]);
+}
+
+/// Every pass `--passes` can name has a broken twin, and the verifier
+/// catches the twin by the rule it names, on a script the real pass gets
+/// through.
+#[test]
+fn each_pass_has_a_negative_test_that_is_caught() {
+    for name in pass::NAMES {
+        let real = pass::by_name(name).unwrap_or_else(|| panic!("{name} has no pass"));
+        let twin = broken::twin(name).unwrap_or_else(|| panic!("{name} has no broken twin"));
+        assert_ne!(twin.pass.name(), *name);
+        let mut m = lower_source(twin.script, "twin.cig").unwrap();
+        run_passes(&mut m, &[real]).unwrap_or_else(|e| panic!("{name} itself: {e:#?}"));
+        let mut m = lower_source(twin.script, "twin.cig").unwrap();
+        let e = run_passes(&mut m, &[twin.pass]).expect_err(&format!(
+            "{}, the twin of {name}, is caught",
+            twin.pass.name()
+        ));
+        assert_eq!(e.pass, twin.pass.name());
+        assert!(
+            e.errors.iter().any(|x| x.code == twin.rule),
+            "{} is caught by {}: {:#?}",
+            twin.pass.name(),
+            twin.rule,
+            e.errors
+        );
+    }
+}
+
+/// The class of each instruction in `main`, by the mnemonic it prints as.
+fn classes(src: &str) -> Vec<(String, Class)> {
+    let m = lower_source(src, "k.cig").unwrap();
+    let f = &m.funcs[0];
+    let text = print::print(&m);
+    let lines: Vec<&str> = text
+        .lines()
+        .skip_while(|l| !l.starts_with("func @0"))
+        .skip(1)
+        .collect();
+    let mut out = Vec::new();
+    for (i, line) in f.body.instrs.iter().zip(lines) {
+        let shown = line.split(" @").next().unwrap().trim();
+        let shown = shown.split(" = ").last().unwrap().to_string();
+        out.push((shown, i.kind.class(f, &m.vars)));
+    }
+    out
+}
+
+#[test]
+fn the_class_of_an_operation_is_read_from_its_operand_types() {
+    let got = classes(
+        "roll r = 1\nstick s = 2\nexhale 1 + 2, 1.5 + 2.5, \"a\" < \"b\", 1.5 < 2.5, 1 == \"x\", 4 / 2, -1.5, -1, not r, r, s, [s], {k: s}\n",
+    );
+    let class = |want: &str| {
+        got.iter()
+            .find(|(shown, _)| shown.starts_with(want))
+            .unwrap_or_else(|| panic!("{want} in {got:#?}"))
+            .1
+    };
+    // Integer arithmetic overflows (E503); floats do not.
+    assert_eq!(class("bin + %"), Class::MayRaise);
+    let floats: Vec<_> = got.iter().filter(|(s, _)| s.starts_with("bin +")).collect();
+    assert_eq!(floats[1].1, Class::Pure, "{got:#?}");
+    // Strings order; a float may be a NaN, which raises.
+    let orders: Vec<_> = got.iter().filter(|(s, _)| s.starts_with("bin <")).collect();
+    assert_eq!((orders[0].1, orders[1].1), (Class::Pure, Class::MayRaise));
+    // `==` never raises; `/` always may.
+    assert_eq!(class("bin =="), Class::Pure);
+    assert_eq!(class("bin /"), Class::MayRaise);
+    let negs: Vec<_> = got
+        .iter()
+        .filter(|(s, _)| s.starts_with("un neg"))
+        .collect();
+    assert_eq!((negs[0].1, negs[1].1), (Class::Pure, Class::MayRaise));
+    assert_eq!(class("un not"), Class::Pure);
+    // A `roll` slot changes; a `stick` slot read where it lives does not.
+    assert_eq!(class("load $0:r!"), Class::Effect);
+    assert_eq!(class("load $1:s"), Class::Pure);
+    assert_eq!(class("list"), Class::Pure);
+    assert_eq!(class("map"), Class::Pure);
+    assert_eq!(class("step"), Class::Step);
+    assert_eq!(class("exhale"), Class::Effect);
+    assert_eq!(class("decl"), Class::Effect);
+}
+
+/// Moves the instruction at `from` in the top level's own block to `to`.
+struct Move {
+    from: usize,
+    to: usize,
+}
+
+impl Pass for Move {
+    fn name(&self) -> &'static str {
+        "move"
+    }
+
+    fn run(&self, m: &mut cigcompile::cir::Module) {
+        let b = &mut m.funcs[0].body.instrs;
+        let i = b.remove(self.from);
+        b.insert(self.to, i);
+    }
+}
+
+#[test]
+fn pure_code_moves_freely_and_code_that_may_raise_keeps_its_order_t2() {
+    // step, %0 = const 1, decl a, step, %1 = const 0, decl b, step,
+    // load a, load b, bin /, step, const "x", exhale.
+    let src = "roll a = 1\nroll b = 0\na / b\nexhale \"x\"\n";
+    let mut m = lower_source(src, "mv.cig").unwrap();
+    let names: Vec<String> = print::print(&m)
+        .lines()
+        .skip(2)
+        .map(|l| l.split(" @").next().unwrap().trim().to_string())
+        .collect();
+    assert!(names[9].ends_with("bin / %2, %3"), "{names:#?}");
+    assert!(names[11].ends_with("const \"x\""), "{names:#?}");
+    // The constant moves up, past the division, a step mark and a slot
+    // write: pure, so nothing is said.
+    run_passes(&mut m, &[&Move { from: 11, to: 2 } as &dyn Pass]).unwrap();
+    // The division moves down past a step mark and the `exhale`: it would
+    // now raise after the output, not before.
+    let mut m = lower_source(src, "mv.cig").unwrap();
+    let e = run_passes(&mut m, &[&Move { from: 9, to: 12 } as &dyn Pass]).unwrap_err();
+    assert!(e.errors.iter().any(|x| x.code == "T2"), "{:#?}", e.errors);
+}
+
+/// Replaces the first `bin +` in the top level with `const 6`.
+struct FoldToSix;
+
+impl Pass for FoldToSix {
+    fn name(&self) -> &'static str {
+        "fold-to-six"
+    }
+
+    fn run(&self, m: &mut cigcompile::cir::Module) {
+        for i in &mut m.funcs[0].body.instrs {
+            if matches!(i.kind, Kind::Binary(..)) {
+                i.kind = Kind::Const(Const::Int(6));
+                return;
+            }
+        }
+    }
+}
+
+#[test]
+fn a_fold_the_interpreter_disagrees_with_is_caught_t4() {
+    let mut m = lower_source("exhale 2 + 3\n", "f.cig").unwrap();
+    let e = run_passes(&mut m, &[&FoldToSix as &dyn Pass]).unwrap_err();
+    assert!(
+        e.errors
+            .iter()
+            .any(|x| x.code == "T4" && x.message.contains("Int(5)")),
+        "{:#?}",
+        e.errors
+    );
+}
+
+#[test]
+fn code_that_may_raise_goes_with_an_arm_that_never_runs() {
+    // `sccp` empties the dead arm, its division and its marks with it: the
+    // arm never runs, so nothing in it can raise or count a step.
+    let src = "if false {\n  exhale 1 / 0\n}\n";
+    let mut m = lower_source(src, "d.cig").unwrap();
+    run_passes(&mut m, &[&pass::Sccp as &dyn Pass]).unwrap();
+    assert!(!print::print(&m).contains("bin /"));
+    // Emptying the arm that does run is caught.
+    let src = "if true {\n  exhale 1 / 0\n}\n";
+    let mut m = lower_source(src, "d.cig").unwrap();
+    let e = run_passes(&mut m, &[&EmptyThen as &dyn Pass]).unwrap_err();
+    let codes: Vec<_> = e.errors.iter().map(|x| x.code).collect();
+    assert!(codes.contains(&"T3") && codes.contains(&"T4"), "{codes:?}");
+}
+
+/// Empties the `then` of the top level's first `if`.
+struct EmptyThen;
+
+impl Pass for EmptyThen {
+    fn name(&self) -> &'static str {
+        "empty-then"
+    }
+
+    fn run(&self, m: &mut cigcompile::cir::Module) {
+        for i in &mut m.funcs[0].body.instrs {
+            if let Kind::If { then, .. } = &mut i.kind {
+                then.instrs.clear();
+                return;
+            }
+        }
+    }
+}
+
+#[test]
+fn a_pure_read_moved_above_its_declaration_is_caught_v1() {
+    // step, const 1, decl s, step, load s, exhale: the read of a `stick`
+    // is pure, so only V1 sees it move above the `decl`.
+    let mut m = lower_source("stick s = 1\nexhale s\n", "s.cig").unwrap();
+    let e = run_passes(&mut m, &[&Move { from: 4, to: 0 } as &dyn Pass]).unwrap_err();
+    assert!(
+        e.errors
+            .iter()
+            .any(|x| x.code == "V1" && x.message.contains("before its declaration")),
+        "{:#?}",
+        e.errors
+    );
+}
+
+/// A run of `src` through the CIR evaluator after `passes` gives what the
+/// tree-walker gives: the same lines out, the same error position.
+fn same_as_the_walker(src: &str) {
+    let (want_out, want_stop) = walker_run(src);
+    for (n, passes) in [pass::level(0), pass::level(1)].into_iter().enumerate() {
+        let mut m = lower_source(src, "w.cig").unwrap();
+        run_passes(&mut m, &passes).unwrap();
+        let (_, out, stop) = marks::run(&m, 0);
+        let stop = stop.map(|s| (s.line, s.col));
+        assert_eq!((&out, stop), (&want_out, want_stop), "-O{n}: {src}");
+    }
+}
+
+#[test]
+fn a_computed_key_is_checked_before_the_next_value() {
+    // The first key is not a valid key; the second value would raise too.
+    // The tree-walker raises the key's error, at the key.
+    let src = "roll k = true\nexhale {[k]: 1, b: 1 / 0}\n";
+    assert_eq!(walker_run(src).1, Some((2, 10)));
+    same_as_the_walker(src);
+    let m = lower_source(src, "k.cig").unwrap();
+    let text = print::print(&m);
+    let key = text.find("key %").expect("a key instruction");
+    let div = text.find("bin /").expect("the division");
+    assert!(key < div, "the check comes before the next value: {text}");
+    // An int key is its text; a list key raises, after copy propagation
+    // put a value made elsewhere in its place.
+    same_as_the_walker("stick n = 7\nstick m = {[n]: 1}\nexhale m[\"7\"]\n");
+    same_as_the_walker("stick k = [1]\nexhale {[k]: 1}\n");
+}
+
+#[test]
+fn a_computed_key_runs_its_effects_before_the_next_value_reads_them() {
+    let src = "roll n = 0\npull bump() {\n  n += 1\n  snuff \"k\"\n}\nstick m = {[bump()]: n, b: n + 1}\nexhale m.k, m.b\n";
+    assert_eq!(walker_run(src), (vec!["1 2".to_string()], None));
+    same_as_the_walker(src);
+}
+
+#[test]
+fn an_index_keeps_its_operands_positions_through_the_passes() {
+    // Copy propagation puts a constant made on another line in place of
+    // each operand: the error positions stay the tree-walker's.
+    for src in [
+        // A wrong index type: at the index.
+        "stick xs = [1, 2]\nstick k = \"a\"\nexhale xs[k]\n",
+        // A value that cannot be indexed: at the whole expression.
+        "stick n = 5\nstick k = 0\nexhale n[k]\n",
+        // A store with a wrong index type: at the index.
+        "stick xs = [1]\nstick k = \"a\"\nxs[k] = 2\n",
+        // A store into a value that cannot be indexed: at the object.
+        "stick n = 5\nn[0] = 1\n",
+    ] {
+        assert!(walker_run(src).1.is_some(), "{src}");
+        same_as_the_walker(src);
+    }
+    let mut m = lower_source("stick xs = [1]\nstick k = \"a\"\nxs[k] = 2\n", "s.cig").unwrap();
+    run_passes(&mut m, &pass::default_passes()).unwrap();
+    let text = print::print(&m);
+    assert!(
+        !text.contains("load "),
+        "the operands were replaced: {text}"
+    );
+    assert!(text.contains("obj@3:1 idx@3:4"), "{text}");
+}
+
+#[test]
+fn a_member_store_keeps_its_objects_position_through_the_passes() {
+    // Copy propagation puts the `5` of line 1 in place of `n`: the error
+    // stays at the object, where the tree-walker raises it.
+    let src = "stick n = 5\nn.k = 1\n";
+    assert_eq!(walker_run(src).1, Some((2, 1)));
+    same_as_the_walker(src);
+    let mut m = lower_source(src, "m.cig").unwrap();
+    run_passes(&mut m, &pass::default_passes()).unwrap();
+    let text = print::print(&m);
+    assert!(!text.contains("load "), "the object was replaced: {text}");
+    assert!(text.contains("obj@2:1"), "{text}");
+}
+
+#[test]
+fn an_operand_span_outside_its_instruction_is_caught_v2() {
+    let mut m = lower_source("stick xs = [1]\nexhale xs[0]\n", "v.cig").unwrap();
+    let outside = m.funcs[0].span;
+    for i in &mut m.funcs[0].body.instrs {
+        if let Kind::Index { idx_at, .. } = &mut i.kind {
+            *idx_at = outside;
+        }
+    }
+    let found = verify(&m);
+    assert!(
+        found
+            .iter()
+            .any(|e| e.code == "V2" && e.message.contains("index span")),
+        "{found:#?}"
+    );
+}
+
+/// Golden: a map literal lowered in the tree-walker's order (each
+/// computed key, its `key` check, then the entry's value), and the
+/// operand spans an index and a map's computed keys carry.
+#[test]
+fn a_map_and_an_index_match_their_golden_text() {
+    golden_for_pass("lower", "map-and-index", &[]);
+}
+
+/// Golden: `copy-prop` replaces every operand of an index and an indexed
+/// store; the operands' own spans stay on the instructions.
+#[test]
+fn copy_prop_keeps_index_operand_spans_golden() {
+    golden_for_pass(
+        "copy-prop",
+        "index-operands",
+        &[&pass::CopyProp as &dyn Pass],
+    );
 }

@@ -15,7 +15,10 @@
 //!   cell each iteration (`Scope::child` per iteration), so a closure made
 //!   in one iteration keeps that iteration's value;
 //! - `call.user @f` calls the closure most recently made for `f` in scope
-//!   (a pull made inside a loop or a recursion has one closure per entry).
+//!   (a pull made inside a loop or a recursion has one closure per entry);
+//! - every `step` and `step.iter` is one tick of the step budget
+//!   (`--max-steps`), counted where the interpreter counts it and raising
+//!   E515 at the mark's own span once the budget is spent.
 
 use cigscript::syntax::ast::{AssignOp, BinOp, BurnClass, UnOp};
 use cigscript::syntax::span::Span;
@@ -137,7 +140,9 @@ pub enum ShortOp {
 
 pub enum MapKey {
     Static(String),
-    Dyn(ValueId),
+    /// A computed key: a `key` instruction's value, always a string, and
+    /// the span of the key expression, which no pass changes.
+    Dyn(ValueId, Span),
 }
 
 pub enum Piece {
@@ -179,6 +184,22 @@ impl OpKind {
     }
 }
 
+/// Where a step mark sits, and so which of the interpreter's ticks it is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StepSite {
+    /// A statement starts: the first instruction of every statement but a
+    /// `pull` (hoisted, never run as a statement), before anything the
+    /// statement evaluates. Its span is the statement's. An `if` with
+    /// `else if` arms is one statement and has one mark.
+    Stmt,
+    /// A loop iteration starts: the first instruction of a `loop.body` or
+    /// `foreach.body`, after the condition held (or the next item was
+    /// taken) and before the body's first statement. Its span is the loop
+    /// statement's. A loop whose condition fails, or whose list is empty,
+    /// runs none.
+    Iter,
+}
+
 pub struct BurnNode {
     pub region: RegionId,
     pub class: BurnClass,
@@ -190,6 +211,9 @@ pub struct BurnNode {
 }
 
 pub enum Kind {
+    /// One tick of the interpreter's step counter. No operands, no result.
+    /// Ordered: it never moves, and it goes only when its whole block goes.
+    Step(StepSite),
     Const(Const),
     /// A name that resolves to the prelude: a builtin, a module, `args`.
     Prelude(String),
@@ -209,7 +233,15 @@ pub enum Kind {
         rhs: Block,
     },
     MakeList(Vec<ValueId>),
+    /// The entries in order. Each computed key is a `key` instruction's
+    /// value, made before the entry's value is evaluated.
     MakeMap(Vec<(MapKey, ValueId)>),
+    /// A computed map key, checked where the tree-walker checks it: after
+    /// the key expression and before the entry's value. A string stays, an
+    /// int becomes its decimal text, anything else raises a type error
+    /// ("map keys must be strings") at this instruction's span, the key
+    /// expression's. Its value is a string.
+    Key(ValueId),
     Interp(Vec<Piece>),
     /// `safe`: `?.`, null for a null subject and for a map without the key.
     Member {
@@ -217,22 +249,37 @@ pub enum Kind {
         name: String,
         safe: bool,
     },
+    /// `obj[idx]`. A wrong index type is raised at `idx_at`, the index
+    /// expression's span; a value that cannot be indexed, and a missing
+    /// key or an index out of range, at the instruction's own span.
     Index {
         obj: ValueId,
         idx: ValueId,
+        idx_at: Span,
     },
-    /// The combined read-modify-write: the type errors live in it.
+    /// The combined read-modify-write: the type errors live in it. A wrong
+    /// index type is raised at `idx_at`, a value that cannot be indexed at
+    /// `obj_at` (the object expression's span), the rest at the statement.
+    /// Both spans are the expressions' own and no pass changes them, so
+    /// they hold when a pass replaces an operand with a value made
+    /// elsewhere.
     SetIndex {
         obj: ValueId,
         idx: ValueId,
         op: AssignOp,
         val: ValueId,
+        obj_at: Span,
+        idx_at: Span,
     },
+    /// `obj.name op= val`. A value that is not a map is an error at
+    /// `obj_at`, the object expression's own span, which no pass changes;
+    /// the rest at the statement.
     SetMember {
         obj: ValueId,
         name: String,
         op: AssignOp,
         val: ValueId,
+        obj_at: Span,
     },
     Closure(FuncId),
     BurnOp {
@@ -293,18 +340,135 @@ pub enum Kind {
     Throw(ValueId),
 }
 
+/// What a pass may do with an instruction (#33). Read from the kind and
+/// the types of its operands: an operation that cannot fail for the types
+/// it is given is pure, and the same operation over `dynamic` operands
+/// may raise.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Class {
+    /// Raises nothing, writes nothing, reads nothing that changes: may
+    /// move, merge or vanish. A fresh list, map or closure is pure but has
+    /// an identity of its own: a pass never merges two of them.
+    Pure,
+    /// Pure but for the error the interpreter raises for some operands
+    /// (E503 overflow, E403 a type error, a missing key, an index out of
+    /// range, a NaN ordered): keeps its place and its order (T1, T2), and
+    /// goes only where the verifier proves it cannot raise (T4).
+    MayRaise,
+    /// Writes a slot, an element or the world, reads a slot that can
+    /// change, calls, or carries control: keeps its place and its order,
+    /// and is never lost (T1 to T3).
+    Effect,
+    /// A step mark: keeps its place and its order, and goes only with its
+    /// whole block (T3).
+    Step,
+}
+
+impl Class {
+    /// T1 and T2 hold it in place; anything else may move.
+    pub fn is_pinned(self) -> bool {
+        self != Class::Pure
+    }
+}
+
+/// What the interpreter computes for `a op b` over two constants, where
+/// it cannot fail: integer `+ - *` that do not overflow, string `+`,
+/// `==` and `!=` of like constants, the order of two ints. `None` for
+/// everything else, which is left to run (and maybe raise) at its span.
+/// Both `fold-consts` and the verifier's T4 read it, so a fold the
+/// verifier accepts is a fold the interpreter agrees with.
+pub fn fold_binary(op: BinOp, a: &Const, b: &Const) -> Option<Const> {
+    use Const::*;
+    let same_kind = matches!(
+        (a, b),
+        (Null, Null) | (Bool(_), Bool(_)) | (Int(_), Int(_)) | (Str(_), Str(_))
+    );
+    Some(match (op, a, b) {
+        (BinOp::Add, Int(x), Int(y)) => Int(x.checked_add(*y)?),
+        (BinOp::Sub, Int(x), Int(y)) => Int(x.checked_sub(*y)?),
+        (BinOp::Mul, Int(x), Int(y)) => Int(x.checked_mul(*y)?),
+        (BinOp::Add, Str(x), Str(y)) => Str(format!("{x}{y}")),
+        (BinOp::Eq, x, y) if same_kind => Bool(x == y),
+        (BinOp::Ne, x, y) if same_kind => Bool(x != y),
+        (BinOp::Lt, Int(x), Int(y)) => Bool(x < y),
+        (BinOp::Le, Int(x), Int(y)) => Bool(x <= y),
+        (BinOp::Gt, Int(x), Int(y)) => Bool(x > y),
+        (BinOp::Ge, Int(x), Int(y)) => Bool(x >= y),
+        _ => return None,
+    })
+}
+
+/// `fold_binary` for the unary operators: `not` of a boolean.
+pub fn fold_unary(op: UnOp, x: &Const) -> Option<Const> {
+    match (op, x) {
+        (UnOp::Not, Const::Bool(b)) => Some(Const::Bool(!b)),
+        _ => None,
+    }
+}
+
+impl Const {
+    pub fn ty(&self) -> Ty {
+        match self {
+            Const::Null => Ty::Null,
+            Const::Bool(_) => Ty::Bool,
+            Const::Int(_) => Ty::Int,
+            Const::Float(_) => Ty::Float,
+            Const::Str(_) => Ty::Str,
+        }
+    }
+}
+
 impl Kind {
+    /// What a pass may do with this instruction in `func`: `vals` gives
+    /// its operands' types, `vars` its slots.
+    pub fn class(&self, func: &Func, vars: &[VarInfo]) -> Class {
+        use Ty::*;
+        let ty = |v: &ValueId| func.vals.get(v.0 as usize).map_or(Dynamic, |x| x.ty);
+        let raises_unless = |pure: bool| if pure { Class::Pure } else { Class::MayRaise };
+        match self {
+            Kind::Step(_) => Class::Step,
+            Kind::Const(_) | Kind::Prelude(_) | Kind::Closure(_) | Kind::MakeList(_) => Class::Pure,
+            // Display never fails.
+            Kind::Interp(_) => Class::Pure,
+            // A slot that never changes once declared, read in the function
+            // that owns it (where lowering never reads it before its
+            // `decl`); any other read sees writes, or a capture made
+            // before its declaration ran.
+            Kind::Load(v) => match vars.get(v.0 as usize) {
+                Some(x) if x.owner == func.id && !x.mutable && !x.captured => Class::Pure,
+                _ => Class::Effect,
+            },
+            Kind::Unary(UnOp::Not, _) => Class::Pure,
+            Kind::Unary(UnOp::Neg, x) => raises_unless(ty(x) == Float),
+            Kind::Binary(op, a, b) => {
+                let (a, b) = (ty(a), ty(b));
+                raises_unless(match op {
+                    BinOp::Eq | BinOp::Ne => true,
+                    BinOp::Add => matches!((a, b), (Float, Float) | (Str, Str) | (List, List)),
+                    BinOp::Sub | BinOp::Mul => (a, b) == (Float, Float),
+                    // Floats are ordered too, but a NaN raises.
+                    BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                        matches!((a, b), (Int, Int) | (Str, Str))
+                    }
+                    _ => false,
+                })
+            }
+            Kind::MakeMap(kv) => raises_unless(kv.iter().all(|(k, _)| match k {
+                MapKey::Static(_) => true,
+                MapKey::Dyn(d, _) => ty(d) == Str,
+            })),
+            Kind::Member { obj, safe, .. } => raises_unless(*safe && matches!(ty(obj), Map | Null)),
+            Kind::Index { .. } => Class::MayRaise,
+            Kind::Key(k) => raises_unless(matches!(ty(k), Str | Int)),
+            _ => Class::Effect,
+        }
+    }
+
     pub fn is_terminator(&self) -> bool {
         matches!(
             self,
             Kind::Yield(_) | Kind::Ret(_) | Kind::Break | Kind::Continue | Kind::Throw(_)
         )
-    }
-
-    /// Ordered: everything a pass may not move across an effect. Only
-    /// constants, prelude names and closure creation are free to move.
-    pub fn is_ordered(&self) -> bool {
-        !matches!(self, Kind::Const(_) | Kind::Prelude(_) | Kind::Closure(_))
     }
 
     /// The nested blocks, in evaluation order.
@@ -398,7 +562,8 @@ impl Kind {
     /// Every value it reads, nested blocks not included.
     pub fn uses(&self) -> Vec<ValueId> {
         match self {
-            Kind::Const(_)
+            Kind::Step(_)
+            | Kind::Const(_)
             | Kind::Prelude(_)
             | Kind::Load(_)
             | Kind::Closure(_)
@@ -413,7 +578,7 @@ impl Kind {
             Kind::MakeMap(kv) => {
                 let mut v = Vec::new();
                 for (k, x) in kv {
-                    if let MapKey::Dyn(k) = k {
+                    if let MapKey::Dyn(k, _) = k {
                         v.push(*k);
                     }
                     v.push(*x);
@@ -428,7 +593,8 @@ impl Kind {
                 })
                 .collect(),
             Kind::Member { obj, .. } => vec![*obj],
-            Kind::Index { obj, idx } => vec![*obj, *idx],
+            Kind::Index { obj, idx, .. } => vec![*obj, *idx],
+            Kind::Key(k) => vec![*k],
             Kind::SetIndex { obj, idx, val, .. } => vec![*obj, *idx, *val],
             Kind::SetMember { obj, val, .. } => vec![*obj, *val],
             Kind::BurnOp { args, .. }

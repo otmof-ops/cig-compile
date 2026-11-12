@@ -1,0 +1,11 @@
+sites.cig: fold-consts: folded 1 constant
+sites.cig:1:11: fold-consts: folded bin in @0 main to const 5
+sites.cig: copy-prop: changed the IR
+sites.cig: fold-consts: folded 1 constant
+sites.cig:2:11: fold-consts: folded bin in @0 main to const 20
+sites.cig: sccp: nothing to do
+sites.cig: dead-pure: pruned 4 pure values
+sites.cig:1:11: dead-pure: pruned a const in @0 main
+sites.cig:1:15: dead-pure: pruned a const in @0 main
+sites.cig:2:15: dead-pure: pruned a const in @0 main
+sites.cig:5:1: dead-pure: pruned a list in @0 main

@@ -3,6 +3,88 @@
 All notable changes to CigCompile. The format follows Keep a Changelog; the
 project follows semantic versioning.
 
+## Unreleased
+
+- **The bytecode lowering uses the IR's `key` and stored spans (#31).**
+  A computed map key is checked where the interpreter checks it, before
+  the entry's value, so a map with a computed key no longer needs to be
+  refused when a later value can fail or run code. Index and store
+  errors take their positions from the spans the IR stores, so a pass
+  that replaces an operand no longer makes the lowering refuse it. A
+  member store (`obj.k = v`) now stores its object's span too, and a
+  store into something that is not a map is reported there.
+- **The bytecode lowering, second part (#31).** Closures that capture
+  (cells, a fresh one per loop turn) and pulls that call themselves or
+  each other by name; lists and maps with the interpreter's errors at
+  its positions (an index's type at the index, a value that cannot be
+  indexed at the object); `for` over ranges, lists, maps and text;
+  interpolation, `exhale` and method calls. `tests/bc.rs` now compares
+  printed output byte for byte, and counts how many of CigScript's own
+  scripts lower.
+- **CIR lowers to the register bytecode, first part (#31).** With the
+  `vm` feature, `src/bc` lowers a verified CIR module to the bytecode the
+  cig runtime's VM runs, and the format crate's verifier checks every
+  module before it leaves: constants, `roll`/`stick` slots and moves,
+  arithmetic, comparison and short-circuit logic, `if`/`else if`/`else`,
+  `while`, `break`, `continue`, pulls and lambdas that capture nothing,
+  calls to them and to builtins, `snuff`, and step marks with the line
+  table. Anything else is refused with its construct and position.
+  `--emit bc` prints the disassembly (goldens in `tests/bc/`).
+  `tests/bc.rs` runs each lowered program in the VM and holds its values,
+  errors, positions and step-budget stops to the tree-walker's.
+- **Step marks in CIR (#33, #31).** Lowering opens every statement but a
+  `pull` with a `step`, and every loop body with a `step.iter`, one for
+  each tick of the interpreter's step counter, at its span; `--emit cir`
+  prints them. The verifier keeps them: a loop body opens with exactly
+  one `step.iter` (V11), and a pass that drops a mark from a block that
+  keeps anything else breaks T3. `tests/cir.rs` has
+  `the_marks_a_run_passes_are_the_steps_the_tree_walker_counts`, which
+  checks a script's marks against cig's own count and, for every
+  `--max-steps` short of the total, its stopping line.
+- **Map literals and indexes keep the interpreter's error order and
+  positions in CIR (#31).** A computed map key is checked by a new
+  `key` instruction right after it, before the entry's value, as the
+  tree-walker does, so a bad key raises before a later value can. An
+  index, an indexed store and a map's computed keys carry their
+  operands' own spans (the verifier's V2 checks them; `--emit cir`
+  prints them as `idx@`, `obj@`, `key@`), so the right line and column
+  survive copy propagation and folding. `tests/cir.rs` holds both to
+  the tree-walker: `a_computed_key_is_checked_before_the_next_value`,
+  `a_computed_key_runs_its_effects_before_the_next_value_reads_them`,
+  `an_index_keeps_its_operands_positions_through_the_passes`.
+- **The pass framework in its final shape (#33).** Each pass is its own
+  module under `src/cir/pass/`. `Kind::class` sorts every instruction,
+  from its kind and its operands' types, into pure, may raise, effect
+  or step mark. T1 and T2 now hold only what is not pure, so pure code
+  may move, merge or vanish. The new rule T4 removes an operation that
+  may raise only where the verifier proves it cannot: constant operands
+  that the interpreter's arithmetic folds to the constant left in its
+  place. `dead-pure` prunes by class, so an unused `a / b` stays and
+  raises where the interpreter raises. `fold-consts` and `dead-pure` have
+  goldens (`tests/cir/fold-consts/`, `tests/cir/dead-pure/`) and broken
+  twins. `each_pass_has_a_negative_test_that_is_caught` runs the twin of
+  every pass in `pass::NAMES`, and `remarks_name_their_sites` holds
+  `--remarks` to a golden.
+- **The bench's peak memory is the program's own (#30; carton 0.2.0 row 10).** Linux folds
+  the parent's peak into a child's at `exec`, and the bench held the runtime it had read
+  (15.8 MB for cig 1.21.0), so every row's peak was at least the bench's: CI read 24.7 to
+  25.0 MB on cig 1.20.0's runtime and 28.3 to 28.4 MB on 1.21.0's for hello and every other
+  small program alike. That is the "+3.5 MB on every program" 0.4.0 shipped as an accepted
+  exception; the programs' own peaks had moved more (hello 5.2 to 13.9 MB, a dry run). The
+  bench now lets go of the runtime's bytes before it runs anything, and takes each side's
+  peak from one more run that is not timed: on Linux it forks and sets the child's mark back
+  to what it has resident (`/proc/self/clear_refs`) before `exec`. Timed runs start as
+  before. `a_benchmarks_peak_memory_is_its_own_not_the_benchs` holds it (docs/BENCHMARKS.md,
+  "How a benchmark is measured").
+- **Compiled peak memory has a budget (CigCompile 1.0 row 6).** `cigcompile bench` reports
+  "peak memory of a compiled hello", under 14 MB, held on Linux: 5.9 MB on the runtime whose
+  heap starts in small pages once the file is cold, 11.5 MB straight after the build on a
+  kernel that maps a new file in large page-cache folios, 17.5 MB on cig 1.21.0 as released.
+  `a_compiled_hello_over_its_memory_budget_is_missed` holds it. The budget is held from the
+  first cig after 1.21.0, whose runtime starts a short program's heap in small pages again;
+  on cig 1.21.0 as released a hello peaks at 14 to 18 MB, by the machine, and the row reads
+  `not yet`.
+
 ## 0.4.0 — 2026-11-12
 
 Programs for cig 1.21.0; CigCompile joins the cig family's shared

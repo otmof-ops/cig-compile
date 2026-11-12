@@ -1,0 +1,6 @@
+stick a = 2 + 3
+stick b = a * 4
+roll n = 0
+n / 1
+[n]
+exhale b, 9223372036854775807 + 1

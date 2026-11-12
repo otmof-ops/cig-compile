@@ -1,0 +1,183 @@
+; module: data.cig
+
+fn 0 <anonymous> (0 args, 17 regs, main, 13 consts, 2 children, 0 upvals, 0 handlers, 58 lines, 0 regions, 0 region rows):
+  0000   cellnew   R0
+  0001   loadnull  R0
+  0002   closure   R1, Fn0
+  0003   mov       R0, R1
+  0004   steps     0, 1
+  0005   newlist   R1, 0
+  0006   mov       R2, R1
+  0007   steps     0, 1
+  0008   loadint   R1, 0
+  0009   loadint   R3, 3
+  0010   mov       R4, R1
+  0011   mov       R5, R3
+  0012   loadint   R6, 1
+  0013   steps     1, 0
+  0014   forprep   R4, -> 24
+  0015   cellnew   R7
+  0016   steps     1, 1
+  0017   steps     1, 1
+  0018   mov       R8, R2
+  0019   closure   R9, Fn1
+  0020   mov       R10, R8
+  0021   mov       R11, R9
+  0022   callm     R10, K0 ("push"), n=1
+  0023   forloop   R4, -> 15
+  0024   steps     0, 0
+  0025   steps     0, 1
+  0026   loadk     R1, K1 ("cig")
+  0027   loadint   R3, 0
+  0028   newmap    R8, 2
+  0029   loadk     R9, K2 ("name")
+  0030   insertmap R8, R9, R1
+  0031   loadk     R9, K3 ("n")
+  0032   insertmap R8, R9, R3
+  0033   mov       R1, R8
+  0034   steps     0, 1
+  0035   mov       R3, R2
+  0036   mov       R8, R3
+  0037   iterprep  R8
+  0038   steps     1, 0
+  0039   iternext  R8, -> 57
+  0040   steps     1, 1
+  0041   steps     1, 1
+  0042   mov       R12, R11
+  0043   mov       R13, R12
+  0044   call      R13, n=0, n=0
+  0045   mov       R12, R1
+  0046   mov       R15, R12
+  0047   callb     R14, B6, n=1
+  0048   eqk       R15, R14, K4 ("map")
+  0049   test      R15, -> 52
+  0050   setfield  R12, K3 ("n"), R13
+  0051   jmp       0, -> 56
+  0052   loadk     R16, K3 ("n")
+  0053   getindex  R15, R12, R16
+  0054   add       R15, R15, R13
+  0055   setfield  R12, K3 ("n"), R15
+  0056   loop      0, -> 39
+  0057   steps     0, 0
+  0058   steps     0, 1
+  0059   mov       R3, R1
+  0060   getfield  R8, R3, K2 ("name")
+  0061   mov       R3, R1
+  0062   mov       R11, R3
+  0063   callb     R10, B6, n=1
+  0064   eqk       R11, R10, K6 ("null")
+  0065   test      R11, -> 77
+  0066   eqk       R11, R10, K4 ("map")
+  0067   test      R11, -> 70
+  0068   getfield  R9, R3, K5 ("missing")
+  0069   jmp       0, -> 78
+  0070   mov       R12, R3
+  0071   callb     R11, B8, n=1
+  0072   loadk     R12, K5 ("missing")
+  0073   callm     R11, K7 ("contains"), n=1
+  0074   testn     R11, -> 77
+  0075   getfield  R9, R3, K5 ("missing")
+  0076   jmp       0, -> 78
+  0077   loadnull  R9
+  0078   newlist   R3, 2
+  0079   appendlistR3, R8
+  0080   appendlistR3, R9
+  0081   mov       R8, R3
+  0082   steps     0, 1
+  0083   mov       R3, R8
+  0084   loadint   R9, 0
+  0085   mov       R12, R3
+  0086   callb     R11, B6, n=1
+  0087   mov       R13, R9
+  0088   callb     R12, B6, n=1
+  0089   eqk       R13, R11, K4 ("map")
+  0090   test      R13, -> 98
+  0091   eqk       R13, R11, K8 ("list")
+  0092   test      R13, -> 95
+  0093   eqk       R13, R11, K9 ("string")
+  0094   testn     R13, -> 102
+  0095   eqk       R13, R12, K10 ("int")
+  0096   test      R13, -> 102
+  0097   jmp       0, -> 100
+  0098   eqk       R13, R12, K9 ("string")
+  0099   test      R13, -> 102
+  0100   getindex  R10, R3, R9
+  0101   jmp       0, -> 103
+  0102   getindex  R10, R3, R9
+  0103   mov       R3, R10
+  0104   callm     R3, K11 ("upper"), n=0
+  0105   mov       R9, R8
+  0106   loadint   R10, 0
+  0107   mov       R12, R9
+  0108   callb     R11, B6, n=1
+  0109   mov       R13, R10
+  0110   callb     R12, B6, n=1
+  0111   eqk       R13, R11, K8 ("list")
+  0112   test      R13, -> 117
+  0113   eqk       R13, R11, K4 ("map")
+  0114   test      R13, -> 120
+  0115   setindex  R9, R10, R3
+  0116   jmp       0, -> 125
+  0117   eqk       R13, R12, K10 ("int")
+  0118   test      R13, -> 124
+  0119   jmp       0, -> 122
+  0120   eqk       R13, R12, K9 ("string")
+  0121   test      R13, -> 124
+  0122   setindex  R9, R10, R3
+  0123   jmp       0, -> 125
+  0124   setindex  R9, R10, R3
+  0125   steps     0, 1
+  0126   mov       R3, R8
+  0127   interp    R9, R3, x0
+  0128   mov       R10, R1
+  0129   mov       R12, R9
+  0130   loadk     R13, K12 (" ")
+  0131   mov       R14, R10
+  0132   interp    R11, R12, x2
+  0133   mov       R3, R11
+  0134   exhale    R3, x1
+  0135   loadnull  R3
+  0136   ret       R3
+
+  fn 1 fib (1 args, 7 regs, pull, 0 consts, 0 children, 1 upvals, 0 handlers, 19 lines, 0 regions, 0 region rows):
+    0000   steps     0, 1
+    0001   mov       R1, R0
+    0002   loadint   R2, 2
+    0003   lt        R3, R1, R2
+    0004   testn     R3, -> 8
+    0005   steps     0, 1
+    0006   mov       R1, R0
+    0007   ret       R1
+    0008   steps     0, 1
+    0009   mov       R1, R0
+    0010   loadint   R2, 1
+    0011   sub       R3, R1, R2
+    0012   getup     R1, U0
+    0013   mov       R4, R1
+    0014   mov       R5, R3
+    0015   call      R4, n=1, n=0
+    0016   mov       R1, R0
+    0017   loadint   R2, 2
+    0018   sub       R3, R1, R2
+    0019   getup     R1, U0
+    0020   mov       R5, R1
+    0021   mov       R6, R3
+    0022   call      R5, n=1, n=0
+    0023   add       R1, R4, R5
+    0024   ret       R1
+
+  fn 2 <anonymous> (0 args, 6 regs, lambda, 0 consts, 0 children, 2 upvals, 0 handlers, 6 lines, 0 regions, 0 region rows):
+    0000   getup     R0, U0
+    0001   getup     R1, U0
+    0002   loadint   R2, 5
+    0003   add       R3, R1, R2
+    0004   getup     R1, U1
+    0005   mov       R4, R1
+    0006   mov       R5, R3
+    0007   call      R4, n=1, n=0
+    0008   mul       R1, R0, R4
+    0009   ret       R1
+
+; fn 0 lines: 0@1:1 4@7:1 5@7:11 6@7:1 7@8:1 8@8:10 9@8:13 10@8:1 14@8:10 15@8:1 17@9:3 18@9:3 19@9:11 20@9:3 23@8:1 25@11:1 26@11:17 27@11:27 28@11:10 33@11:1 34@12:1 35@12:10 36@12:1 41@13:3 42@13:10 43@13:10 45@13:3 46@13:3 50@13:3 51@13:3 55@13:3 56@12:1 58@15:1 59@15:12 60@15:12 61@15:20 62@15:20 78@15:11 81@15:1 82@16:1 83@16:9 84@16:12 85@16:9 100@16:12 101@16:9 103@16:9 105@16:1 106@16:4 107@16:1 115@16:1 116@16:1 122@16:4 123@16:1 125@17:1 126@17:11 128@17:17 129@17:8 133@17:1
+; fn 1 lines: 0@2:3 1@2:6 2@2:10 3@2:6 4@2:3 5@3:5 6@3:11 7@3:5 8@5:3 9@5:13 10@5:17 11@5:13 12@5:9 16@5:26 17@5:30 18@5:26 19@5:22 23@5:9 24@5:3
+; fn 2 lines: 0@9:21 1@9:29 2@9:33 3@9:29 4@9:25 8@9:21

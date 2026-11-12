@@ -27,6 +27,11 @@ path = "src/bin/cig-runtime.rs"
 # A bench-only build of the runtime that counts allocations (#30):
 # `cargo build --release --bin cig-runtime --features alloc-count`.
 alloc-count = []
+# The bytecode lowering (`src/bc`, `--emit bc`) and its tests (#31). It
+# needs a cigscript whose runtime carries the bytecode VM and re-exports
+# its format crate, which no cig release does yet: off by default, so the
+# compiler builds at its pinned cigscript tag.
+vm = []
 
 [dependencies]
 cigscript = { git = "https://github.com/otmof-ops/cig-script", tag = "v1.21.0" }

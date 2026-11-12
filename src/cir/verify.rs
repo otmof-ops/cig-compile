@@ -8,8 +8,8 @@
 //!
 //! | rule | holds |
 //! |---|---|
-//! | V1 | ids are unique, and a value is used only where it is defined |
-//! | V2 | every instruction and function has a span |
+//! | V1 | ids are unique, and a value is used only where it is defined; a slot read as pure (a `stick` read in the function that owns it) is read only after its declaration |
+//! | V2 | every instruction and function has a span; an index, an indexed store and a map's computed keys carry their operands' own spans, each inside the instruction's |
 //! | V3 | a terminator ends its block; `yield` ends a value block, and only one; `break` and `continue` sit in loops; the top level does not `ret` |
 //! | V4 | a `burn.op` sits in a burn, or in a function that requires one |
 //! | V5 | `requires_burn` is what the call graph says |
@@ -18,9 +18,14 @@
 //! | V8 | regions are unique; `pack` is declared once, in the top level's own block, before any burn (E753); a compensation names only its state, what it declares and what the functions made in it own, and calls only those functions (E754) |
 //! | V9 | a variable is its function's or captured by it; only a mutable one is stored to; a closure's captures resolve where it is made; `captured` is set exactly when another function captures the variable |
 //! | V10 | the top level is the first function and is never made; any other is made at one place at most; `call.user` calls a pull that is made |
-//! | T1 | no ordered instruction changes its place: every block around it, so its burn region, its branch of an `if`, its loop, its `try` handler, and a burn's body or compensation |
-//! | T2 | no ordered instruction is reordered |
-//! | T3 | no `burn.op` is lost or cloned |
+//! | V11 | every loop body opens with exactly one `step.iter`, and no `step.iter` sits anywhere else; no step mark sits in a value block |
+//! | T1 | no pinned instruction (an effect, an operation that may raise, a step mark: anything `Kind::class` does not call pure) changes its place: every block around it, so its burn region, its branch of an `if`, its loop, its `try` handler, and a burn's body or compensation |
+//! | T2 | no pinned instruction is reordered |
+//! | T3 | no effect (a `burn.op`, an `exhale`, a store, a call, ...) or step mark is lost or cloned; one goes only with its whole block, when that block is an `if` arm its constant condition never takes or its owner went too |
+//! | T4 | an operation that may raise is removed only when the verifier proves it cannot (constant operands that `fold_binary` folds, and a fold left in its place is that constant), or with its whole block as T3 allows |
+//!
+//! Pure instructions are free: T1 to T4 let them move, merge or vanish,
+//! and V1 keeps every use after its definition.
 //!
 //! Not seen by any rule: an effect reached dynamically (through `light`, a
 //! method that takes a callback, a function kept in a map) is a call here,
@@ -40,7 +45,7 @@ pub enum Severity {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifyError {
-    /// The rule: `V1`..`V10`, `T1`..`T3`.
+    /// The rule: `V1`..`V11`, `T1`..`T4`.
     pub code: &'static str,
     pub severity: Severity,
     pub func: String,
@@ -139,6 +144,24 @@ fn each<'a>(b: &'a Block, f: &mut dyn FnMut(&'a Instr)) {
     }
 }
 
+/// The operand spans an instruction carries, by name: where the
+/// tree-walker raises an error about that operand.
+fn operand_spans(k: &Kind) -> Vec<(&'static str, Span)> {
+    match k {
+        Kind::Index { idx_at, .. } => vec![("index", *idx_at)],
+        Kind::SetIndex { obj_at, idx_at, .. } => vec![("object", *obj_at), ("index", *idx_at)],
+        Kind::SetMember { obj_at, .. } => vec![("object", *obj_at)],
+        Kind::MakeMap(kv) => kv
+            .iter()
+            .filter_map(|(k, _)| match k {
+                MapKey::Dyn(_, at) => Some(("key", *at)),
+                MapKey::Static(_) => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// The variables an instruction declares.
 fn declared(k: &Kind) -> Vec<VarId> {
     match k {
@@ -172,6 +195,9 @@ struct Walk<'m> {
     flags: &'m [bool],
     /// How many `closure` instructions make each function.
     made: &'m HashMap<FuncId, usize>,
+    /// The slots declared on the way here: parameters, `decl`s and chains
+    /// before this point, a loop variable, a catch variable, a state.
+    slots: HashSet<VarId>,
 }
 
 impl Walk<'_> {
@@ -312,8 +338,58 @@ impl Walk<'_> {
         }
     }
 
+    /// V11: a loop body opens with its one `step.iter`; nothing else has
+    /// one; a value block (a condition, a short-circuit's right side) has
+    /// no step mark at all, since it holds no statement.
+    fn steps(&mut self, b: &Block, loop_body: bool, yields: bool) {
+        let mut iters = 0usize;
+        let mut ordered_before = false;
+        for i in &b.instrs {
+            match i.kind {
+                Kind::Step(_) if yields => {
+                    self.err("V11", i.span, "a step mark in a value block".to_string())
+                }
+                Kind::Step(StepSite::Iter) if !loop_body => self.err(
+                    "V11",
+                    i.span,
+                    "a step.iter outside a loop body's head".to_string(),
+                ),
+                Kind::Step(StepSite::Iter) => {
+                    iters += 1;
+                    if iters > 1 {
+                        self.err(
+                            "V11",
+                            i.span,
+                            "a second step.iter in one loop body".to_string(),
+                        );
+                    } else if ordered_before {
+                        self.err(
+                            "V11",
+                            i.span,
+                            "the loop body's step.iter is not its first pinned instruction"
+                                .to_string(),
+                        );
+                    }
+                }
+                _ => {}
+            }
+            if i.kind.class(self.f, &self.m.vars).is_pinned() {
+                ordered_before = true;
+            }
+        }
+        if loop_body && iters == 0 {
+            let span = b.instrs.first().map(|i| i.span).unwrap_or(self.f.span);
+            self.err(
+                "V11",
+                span,
+                "a loop body without its step.iter: every iteration counts a step".to_string(),
+            );
+        }
+    }
+
     /// `visible`: the values in scope here. `yields`: this block must end
-    /// in `yield` (and only such a block may).
+    /// in `yield` (and only such a block may). `loop_body`: the body of a
+    /// `loop` or `foreach`, which opens with its `step.iter`.
     fn block(
         &mut self,
         b: &Block,
@@ -321,10 +397,13 @@ impl Walk<'_> {
         burn_depth: usize,
         loop_depth: usize,
         yields: bool,
+        loop_body: bool,
     ) {
         let m = self.m;
         let mut scope = visible.clone();
+        let entry = self.slots.clone();
         let n = b.instrs.len();
+        self.steps(b, loop_body, yields);
         for (k, i) in b.instrs.iter().enumerate() {
             let last = k + 1 == n;
             // V1: ids.
@@ -344,9 +423,33 @@ impl Walk<'_> {
                     );
                 }
             }
+            // V1: a pure read of a slot follows its declaration, since a
+            // pass may move it anywhere its value is in scope.
+            if let Kind::Load(v) = &i.kind {
+                if i.kind.class(self.f, &m.vars) == Class::Pure && !self.slots.contains(v) {
+                    self.err(
+                        "V1",
+                        i.span,
+                        format!("${} is read before its declaration", v.0),
+                    );
+                }
+            }
             // V2: spans.
             if i.span.line < 1 || i.span.start > i.span.end {
                 self.err("V2", i.span, "an instruction without a span".to_string());
+            }
+            for (name, at) in operand_spans(&i.kind) {
+                let inside = at.start >= i.span.start && at.end <= i.span.end;
+                if at.line < 1 || at.start > at.end || !inside {
+                    self.err(
+                        "V2",
+                        i.span,
+                        format!(
+                            "the {name} span {}:{} is not a span inside the instruction's",
+                            at.line, at.col
+                        ),
+                    );
+                }
             }
             // V3: terminators.
             if i.kind.is_terminator() && !last {
@@ -481,20 +584,30 @@ impl Walk<'_> {
             } else {
                 burn_depth
             };
+            let outer = self.slots.clone();
+            if !matches!(i.kind, Kind::Decl(..) | Kind::MakeChain { .. }) {
+                self.slots.extend(declared(&i.kind));
+            }
             match &i.kind {
-                Kind::Short { rhs, .. } => self.block(rhs, &scope, inner_burn, loop_depth, true),
+                Kind::Short { rhs, .. } => {
+                    self.block(rhs, &scope, inner_burn, loop_depth, true, false)
+                }
                 Kind::Loop { cond, body } => {
-                    self.block(cond, &scope, inner_burn, loop_depth, true);
-                    self.block(body, &scope, inner_burn, loop_depth + 1, false);
+                    self.block(cond, &scope, inner_burn, loop_depth, true, false);
+                    self.block(body, &scope, inner_burn, loop_depth + 1, false, true);
                 }
                 Kind::ForEach { body, .. } => {
-                    self.block(body, &scope, inner_burn, loop_depth + 1, false)
+                    self.block(body, &scope, inner_burn, loop_depth + 1, false, true)
                 }
                 other => {
                     for blk in other.blocks() {
-                        self.block(blk, &scope, inner_burn, loop_depth, false);
+                        self.block(blk, &scope, inner_burn, loop_depth, false, false);
                     }
                 }
+            }
+            self.slots = outer;
+            if matches!(i.kind, Kind::Decl(..) | Kind::MakeChain { .. }) {
+                self.slots.extend(declared(&i.kind));
             }
             if let Some(r) = i.result {
                 if !self.defined.insert(r) {
@@ -510,6 +623,7 @@ impl Walk<'_> {
                 scope.insert(r);
             }
         }
+        self.slots = entry;
         if yields
             && !b
                 .instrs
@@ -650,11 +764,12 @@ pub fn verify(m: &Module) -> Vec<VerifyError> {
             regions: &mut regions,
             flags: &flags,
             made: &made,
+            slots: f.params.iter().copied().collect(),
         };
         if f.span.line < 1 {
             w.err("V2", f.span, "a function without a span".to_string());
         }
-        w.block(&f.body, &HashSet::new(), 0, 0, false);
+        w.block(&f.body, &HashSet::new(), 0, 0, false, false);
         errors.extend(w.errors);
     }
     // V9: `captured` is set exactly when another function captures it.
@@ -697,48 +812,175 @@ pub fn errors(found: &[VerifyError]) -> Vec<&VerifyError> {
         .collect()
 }
 
-/// Where an ordered instruction sits: every structured instruction around
-/// it and which of its blocks, outermost first.
+/// Where an instruction sits: every structured instruction around it and
+/// which of its blocks, outermost first.
 type Place = Vec<(InstrId, &'static str)>;
 
 struct Spot {
     id: InstrId,
     place: Place,
-    effect: bool,
+    class: Class,
+    burn_op: bool,
+    /// For an operation that may raise: what the interpreter computes
+    /// from its constant operands, where it cannot fail (T4's proof).
+    proof: Option<Const>,
+    tag: &'static str,
 }
 
-/// Before a pass: every ordered instruction of every function, in order,
-/// with its place.
+/// One function's trace.
+#[derive(Default)]
+struct FuncTrace {
+    /// Its pinned instructions in order, with their places.
+    seq: Vec<Spot>,
+    /// Every instruction of each block, by place.
+    blocks: HashMap<Place, Vec<InstrId>>,
+    /// Every instruction there is, with the constant it is when it is one.
+    all: HashMap<InstrId, Option<Const>>,
+    /// The arms of an `if` that never run: the condition is a constant
+    /// that picks the other one.
+    dead_arms: HashSet<(InstrId, &'static str)>,
+}
+
+/// A module's trace, taken before a pass and again after it.
 pub struct Trace {
-    funcs: HashMap<FuncId, Vec<Spot>>,
+    funcs: HashMap<FuncId, FuncTrace>,
 }
 
 impl Trace {
     pub fn of(m: &Module) -> Trace {
         let mut funcs = HashMap::new();
         for f in &m.funcs {
-            let mut seq = Vec::new();
-            trace(&f.body, &mut Vec::new(), &mut seq);
-            funcs.insert(f.id, seq);
+            // Every value that is a constant, or that the interpreter's
+            // arithmetic computes from constants without failing: T4's
+            // proof follows a fold through a chain (`2 + 3 * 4`).
+            let mut consts: HashMap<ValueId, Const> = HashMap::new();
+            each(&f.body, &mut |i| {
+                let Some(r) = i.result else {
+                    return;
+                };
+                let c = match &i.kind {
+                    Kind::Const(c) => Some(c.clone()),
+                    Kind::Binary(op, a, b) => match (consts.get(a), consts.get(b)) {
+                        (Some(x), Some(y)) => fold_binary(*op, x, y),
+                        _ => None,
+                    },
+                    Kind::Unary(op, x) => consts.get(x).and_then(|x| fold_unary(*op, x)),
+                    _ => None,
+                };
+                if let Some(c) = c {
+                    consts.insert(r, c);
+                }
+            });
+            let mut t = FuncTrace::default();
+            trace(m, f, &consts, &f.body, &mut Vec::new(), &mut t);
+            funcs.insert(f.id, t);
         }
         Trace { funcs }
     }
 }
 
-fn trace(b: &Block, place: &mut Place, out: &mut Vec<Spot>) {
+fn trace(
+    m: &Module,
+    f: &Func,
+    consts: &HashMap<ValueId, Const>,
+    b: &Block,
+    place: &mut Place,
+    out: &mut FuncTrace,
+) {
+    out.blocks
+        .entry(place.clone())
+        .or_default()
+        .extend(b.instrs.iter().map(|i| i.id));
     for i in &b.instrs {
-        if i.kind.is_ordered() {
-            out.push(Spot {
+        let class = i.kind.class(f, &m.vars);
+        out.all.insert(
+            i.id,
+            match &i.kind {
+                Kind::Const(c) => Some(c.clone()),
+                _ => None,
+            },
+        );
+        if class.is_pinned() {
+            let proof = match &i.kind {
+                Kind::Binary(op, a, b) if class == Class::MayRaise => {
+                    match (consts.get(a), consts.get(b)) {
+                        (Some(x), Some(y)) => fold_binary(*op, x, y),
+                        _ => None,
+                    }
+                }
+                Kind::Unary(op, x) if class == Class::MayRaise => {
+                    consts.get(x).and_then(|x| fold_unary(*op, x))
+                }
+                _ => None,
+            };
+            out.seq.push(Spot {
                 id: i.id,
                 place: place.clone(),
-                effect: matches!(i.kind, Kind::BurnOp { .. }),
+                class,
+                burn_op: matches!(i.kind, Kind::BurnOp { .. }),
+                proof,
+                tag: tag(&i.kind),
             });
+        }
+        if let Kind::If { cond, .. } = &i.kind {
+            match consts.get(cond) {
+                Some(Const::Bool(true)) => {
+                    out.dead_arms.insert((i.id, "if.else"));
+                }
+                Some(Const::Bool(false)) => {
+                    out.dead_arms.insert((i.id, "if.then"));
+                }
+                _ => {}
+            }
         }
         for (slot, blk) in i.kind.slots() {
             place.push((i.id, slot));
-            trace(blk, place, out);
+            trace(m, f, consts, blk, place, out);
             place.pop();
         }
+    }
+}
+
+/// The mnemonic an error names an instruction by.
+fn tag(k: &Kind) -> &'static str {
+    match k {
+        Kind::Step(StepSite::Stmt) => "step",
+        Kind::Step(StepSite::Iter) => "step.iter",
+        Kind::Load(_) => "load",
+        Kind::Decl(..) => "decl",
+        Kind::Store(..) => "store",
+        Kind::Unary(..) => "un",
+        Kind::Binary(..) => "bin",
+        Kind::Short { .. } => "short",
+        Kind::MakeMap(_) => "map",
+        Kind::Member { .. } => "member",
+        Kind::Index { .. } => "index",
+        Kind::Key(_) => "key",
+        Kind::SetIndex { .. } => "set.index",
+        Kind::SetMember { .. } => "set.member",
+        Kind::BurnOp { .. } => "burn.op",
+        Kind::CallBuiltin { .. } => "call.builtin",
+        Kind::CallUser { .. } => "call.user",
+        Kind::CallValue { .. } => "call.value",
+        Kind::CallMethod { .. } => "call.method",
+        Kind::MakeChain { .. } => "chain",
+        Kind::PackDecl(_) => "pack",
+        Kind::Exhale(_) => "exhale",
+        Kind::Burn(_) => "burn",
+        Kind::Try { .. } => "try",
+        Kind::If { .. } => "if",
+        Kind::Loop { .. } => "loop",
+        Kind::ForEach { .. } => "foreach",
+        Kind::Yield(_) => "yield",
+        Kind::Ret(_) => "ret",
+        Kind::Break => "break",
+        Kind::Continue => "continue",
+        Kind::Throw(_) => "throw",
+        Kind::Const(_) => "const",
+        Kind::Prelude(_) => "prelude",
+        Kind::MakeList(_) => "list",
+        Kind::Interp(_) => "interp",
+        Kind::Closure(_) => "closure",
     }
 }
 
@@ -752,18 +994,43 @@ fn show(p: &Place) -> String {
         .join(" > ")
 }
 
-/// What a pass may not do: move an ordered instruction to another place
-/// (T1), reorder ordered instructions (T2), lose or clone an effect (T3).
-/// A pass that removes a structure on purpose (folding an `if` on a
-/// constant) changes places, and T1 has to be taught it first; no pass
-/// does yet.
+/// Did the block at `place` go as a whole, legitimately? Every
+/// instruction it held is gone, and either it is an `if` arm its constant
+/// condition never takes, or the instruction that owned it went too (whose
+/// own removal the same rules judge, one block out). A function's own
+/// block never goes.
+fn block_went(place: &Place, before: &FuncTrace, after: &FuncTrace) -> bool {
+    let Some(owner) = place.last() else {
+        return false;
+    };
+    let emptied = before
+        .blocks
+        .get(place)
+        .is_none_or(|ids| ids.iter().all(|id| !after.all.contains_key(id)));
+    emptied && (after.dead_arms.contains(owner) || !after.all.contains_key(&owner.0))
+}
+
+/// What a pass may not do, judged against the trace taken before it:
+///
+/// - T1: move a pinned instruction (anything but a pure one) to another
+///   place;
+/// - T2: reorder pinned instructions;
+/// - T3: lose or clone an effect or a step mark; one goes only with its
+///   whole block, when that block never runs or its owner went;
+/// - T4: remove an operation that may raise, unless the verifier proves it
+///   cannot (its operands are constants and `fold_binary` agrees, and a
+///   fold left in its place is that same constant) or its whole block went
+///   as T3 allows.
+///
+/// Pure instructions are free: they may move, merge or vanish.
 pub fn verify_transition(before: &Trace, m: &Module) -> Vec<VerifyError> {
     let after = Trace::of(m);
     let mut errors = Vec::new();
     for f in &m.funcs {
-        let (Some(b), Some(a)) = (before.funcs.get(&f.id), after.funcs.get(&f.id)) else {
+        let (Some(bt), Some(at)) = (before.funcs.get(&f.id), after.funcs.get(&f.id)) else {
             continue;
         };
+        let (b, a) = (&bt.seq, &at.seq);
         let mk = |code: &'static str, message: String| VerifyError {
             code,
             severity: Severity::Error,
@@ -773,23 +1040,101 @@ pub fn verify_transition(before: &Trace, m: &Module) -> Vec<VerifyError> {
         };
         let before_ids: HashMap<InstrId, &Spot> = b.iter().map(|s| (s.id, s)).collect();
         let after_ids: HashMap<InstrId, &Spot> = a.iter().map(|s| (s.id, s)).collect();
-        // T3.
+        // T3, T4: what is no longer pinned where it was.
         for s in b {
-            if s.effect && !after_ids.contains_key(&s.id) {
-                errors.push(mk("T3", format!("burn.op #{} was removed", s.id.0)));
+            if after_ids.contains_key(&s.id) {
+                continue;
+            }
+            let now = at.all.get(&s.id);
+            let went = block_went(&s.place, bt, at);
+            match s.class {
+                Class::MayRaise => {
+                    let fine = match (now, &s.proof) {
+                        // Still there, and its types now say it cannot raise.
+                        (Some(None), _) => true,
+                        _ if went => true,
+                        (None, Some(_)) => true,
+                        (Some(Some(c)), Some(p)) if c == p => true,
+                        (Some(Some(c)), Some(p)) => {
+                            errors.push(mk(
+                                "T4",
+                                format!(
+                                    "#{} ({}) became const {c:?}; the interpreter computes {p:?}",
+                                    s.id.0, s.tag
+                                ),
+                            ));
+                            continue;
+                        }
+                        _ => false,
+                    };
+                    if !fine {
+                        errors.push(mk(
+                            "T4",
+                            format!(
+                                "#{} ({}) may raise and was removed without a proof that it cannot",
+                                s.id.0, s.tag
+                            ),
+                        ));
+                    }
+                }
+                _ if went => {}
+                Class::Step => {
+                    let kept = bt
+                        .blocks
+                        .get(&s.place)
+                        .and_then(|ids| ids.iter().find(|id| at.all.contains_key(id)));
+                    errors.push(mk(
+                        "T3",
+                        match kept {
+                            Some(k) => format!(
+                                "step mark #{} was removed from {}, which keeps #{}",
+                                s.id.0,
+                                show(&s.place),
+                                k.0
+                            ),
+                            None => format!(
+                                "step mark #{} went with {}, a block that still runs",
+                                s.id.0,
+                                show(&s.place)
+                            ),
+                        },
+                    ));
+                }
+                _ if s.burn_op => {
+                    errors.push(mk("T3", format!("burn.op #{} was removed", s.id.0)));
+                }
+                _ => {
+                    errors.push(mk(
+                        "T3",
+                        format!(
+                            "#{} ({}) was removed from {}",
+                            s.id.0,
+                            s.tag,
+                            show(&s.place)
+                        ),
+                    ));
+                }
             }
         }
         let mut count: HashMap<InstrId, usize> = HashMap::new();
         for s in a {
             *count.entry(s.id).or_default() += 1;
         }
-        let mut cloned: Vec<(InstrId, usize)> = count
+        let mut cloned: Vec<(InstrId, usize, &'static str)> = count
             .into_iter()
-            .filter(|(id, n)| *n > 1 && before_ids.get(id).is_some_and(|s| s.effect))
+            .filter_map(|(id, n)| {
+                let was = before_ids.get(&id)?;
+                let what = match was.class {
+                    Class::Step => "step mark",
+                    _ if was.burn_op => "burn.op",
+                    _ => was.tag,
+                };
+                (n > 1).then_some((id, n, what))
+            })
             .collect();
         cloned.sort();
-        for (id, n) in cloned {
-            errors.push(mk("T3", format!("burn.op #{} appears {n} times", id.0)));
+        for (id, n, what) in cloned {
+            errors.push(mk("T3", format!("{what} #{} appears {n} times", id.0)));
         }
         // T1.
         for s in a {
@@ -827,7 +1172,7 @@ pub fn verify_transition(before: &Trace, m: &Module) -> Vec<VerifyError> {
             errors.push(mk(
                 "T2",
                 format!(
-                    "ordered instructions were reordered (first at #{})",
+                    "pinned instructions were reordered (first at #{})",
                     common_b.get(at).map(|i| i.0).unwrap_or(0)
                 ),
             ));
