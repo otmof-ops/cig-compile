@@ -14,4 +14,4 @@ while i < 10 {
     total += j
   }
 }
-log.info(repr(total))
+exhale total

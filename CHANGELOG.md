@@ -5,6 +5,14 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **The bytecode lowering, second part (#31).** Closures that capture
+  (cells, a fresh one per loop turn) and pulls that call themselves or
+  each other by name; lists and maps with the interpreter's errors at
+  its positions (an index's type at the index, a value that cannot be
+  indexed at the object); `for` over ranges, lists, maps and text;
+  interpolation, `exhale` and method calls. `tests/bc.rs` now compares
+  printed output byte for byte, and counts how many of CigScript's own
+  scripts lower.
 - **CIR lowers to the register bytecode, first part (#31).** With the
   `vm` feature, `src/bc` lowers a verified CIR module to the bytecode the
   cig runtime's VM runs, and the format crate's verifier checks every

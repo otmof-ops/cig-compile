@@ -7,4 +7,4 @@ if c > 0 and d >= a {
 } else if a != 7 {
   c = 2
 }
-log.info(repr(c + a % 2))
+exhale c + a % 2

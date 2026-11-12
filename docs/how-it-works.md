@@ -170,12 +170,22 @@ registers. `a > b` is `le a, b` then `not`, so the operands keep the
 order the interpreter's errors name. A step mark is one `steps`
 instruction, a loop sets its nesting before its condition and back
 after it, and the line table keeps the IR's span for every instruction.
-Constants, slots, arithmetic, comparison and logic, `if`, `while`,
-`break`, `continue`, pulls and lambdas that capture nothing, calls and
-`snuff` lower today. The rest (closures that capture, lists and maps,
-`for`, interpolation, method calls, `try`, burns, `exhale`) is refused
-with its construct and position. `tests/bc.rs` runs what it lowers in
-the VM and checks it against the tree-walker.
+A slot a closure captures lives in a cell: a fresh one each time its
+block runs (each turn of a loop), so a closure made in a turn keeps
+that turn's value, and a pull calls itself or a sibling through the
+cell its closure was declared into. `for` over `a..b` counts with
+`forprep`/`forloop`, and over a list, a map or a string walks the
+interpreter's snapshot with `iterprep`/`iternext`; the item is fresh
+each turn. An index read or store checks the types of its operands
+first, so a wrong index type is reported at the index and a value
+that cannot be indexed at the object, as the interpreter reports them,
+and an `exhale` part or interpolation piece is turned to text where the
+interpreter shows it, before a later part can change it.
+`try`, `cough`, burns, `pack`, chains, and a builtin, a module or
+`args` used as a value are refused with
+their construct and position. `tests/bc.rs` runs what it lowers in the
+VM and holds its output, errors, positions and step count to the
+tree-walker's.
 
 ## The box is Linux's
 

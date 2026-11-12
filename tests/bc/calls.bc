@@ -1,6 +1,6 @@
 ; module: calls.cig
 
-fn 0 <anonymous> (0 args, 12 regs, main, 1 consts, 3 children, 0 upvals, 0 handlers, 21 lines, 0 regions, 0 region rows):
+fn 0 <anonymous> (0 args, 12 regs, main, 1 consts, 3 children, 0 upvals, 0 handlers, 20 lines, 0 regions, 0 region rows):
   0000   closure   R0, Fn0
   0001   mov       R1, R0
   0002   closure   R0, Fn1
@@ -19,24 +19,24 @@ fn 0 <anonymous> (0 args, 12 regs, main, 1 consts, 3 children, 0 upvals, 0 handl
   0015   mov       R8, R6
   0016   call      R7, n=1, n=0
   0017   mov       R3, R5
-  0018   mov       R8, R2
-  0019   mov       R9, R0
-  0020   mov       R10, R3
-  0021   call      R8, n=2, n=0
-  0022   mov       R9, R1
-  0023   mov       R10, R7
-  0024   mov       R11, R8
-  0025   call      R9, n=2, n=0
-  0026   mov       R0, R5
-  0027   mov       R7, R0
-  0028   callb     R6, B1, n=1
-  0029   mov       R8, R6
-  0030   callb     R7, B0, n=1
-  0031   add       R0, R9, R7
-  0032   mov       R7, R0
-  0033   callb     R6, B2, n=1
-  0034   mov       R8, R6
-  0035   callb     R7, B103, n=1
+  0018   mov       R6, R2
+  0019   mov       R8, R6
+  0020   mov       R9, R0
+  0021   mov       R10, R3
+  0022   call      R8, n=2, n=0
+  0023   mov       R0, R1
+  0024   mov       R9, R0
+  0025   mov       R10, R7
+  0026   mov       R11, R8
+  0027   call      R9, n=2, n=0
+  0028   mov       R0, R5
+  0029   mov       R7, R0
+  0030   callb     R6, B1, n=1
+  0031   mov       R8, R6
+  0032   callb     R7, B0, n=1
+  0033   add       R0, R9, R7
+  0034   mov       R3, R0
+  0035   exhale    R3, x1
   0036   loadnull  R0
   0037   ret       R0
 
@@ -76,7 +76,7 @@ fn 0 <anonymous> (0 args, 12 regs, main, 1 consts, 3 children, 0 upvals, 0 handl
     0002   mul       R3, R1, R2
     0003   ret       R3
 
-; fn 0 lines: 0@1:1 2@4:1 4@10:1 5@10:12 6@10:1 7@11:1 8@11:14 9@11:10 11@11:1 12@12:1 13@12:22 14@12:19 17@12:37 18@12:26 22@12:15 26@12:51 27@12:47 29@12:43 31@12:15 32@12:10 34@12:1
+; fn 0 lines: 0@1:1 2@4:1 4@10:1 5@10:12 6@10:1 7@11:1 8@11:14 9@11:10 11@11:1 12@12:1 13@12:15 14@12:12 17@12:30 18@12:19 23@12:8 28@12:44 29@12:40 31@12:36 33@12:8 34@12:1
 ; fn 1 lines: 0@2:3 1@2:9 2@2:13 3@2:9 4@2:3
 ; fn 2 lines: 0@5:3 1@5:6 2@5:11 3@5:6 4@5:3 5@6:5 6@6:11 7@6:5 8@8:3 9@8:9 10@8:13 11@8:18 12@8:24 13@8:28 14@8:24 15@8:13 19@8:9 20@8:3
 ; fn 3 lines: 0@10:23 1@10:27 2@10:23

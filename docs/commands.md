@@ -461,9 +461,10 @@ stage B can split the two without a flag change.
 
 `--emit bc` lowers that IR to the register bytecode the cig runtime's
 VM runs ([#31](https://github.com/otmof-ops/cig-compile/issues/31)), verifies it and prints its disassembly, then each
-function's line table (`pc@line:col`). It covers part of the language
-so far; a script that uses anything else is refused with the construct
-and its position (exit 3). It exists only in a cigcompile built with
+function's line table (`pc@line:col`). It covers the language but
+`try`, `cough`, burns, `pack`, chains, and a builtin, a module or
+`args` used as a value; a script that uses one
+of those is refused with the construct and its position (exit 3). It exists only in a cigcompile built with
 the `vm` feature.
 
 `--passes-diff`, with `--emit`, adds a unified diff of what each pass

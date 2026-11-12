@@ -27,20 +27,25 @@ use std::rc::Rc;
 
 // ----- running both ways ---------------------------------------------------------
 
-/// What a run left: what it wrote to the error stream (`log.info`), and
-/// how it ended: cleanly, or with the error's code, message, line and
-/// column.
+/// What a run left: the bytes it printed (`exhale`) and wrote to the
+/// error stream (`log`), and how it ended: cleanly, with an `exit` code,
+/// or with the error's code, message, hint, line and column.
 #[derive(Debug, PartialEq)]
 struct Outcome {
+    printed: String,
     logged: String,
-    end: Option<(String, String, Option<u32>, Option<u32>)>,
+    exit: Option<i32>,
+    end: Option<Stop>,
 }
 
-/// The interpreter's error stream, kept for the comparison.
-#[derive(Clone, Default)]
-struct Log(Rc<RefCell<Vec<u8>>>);
+/// An error's code, message, hint, line and column.
+type Stop = (String, String, Option<String>, Option<u32>, Option<u32>);
 
-impl std::io::Write for Log {
+/// One of the interpreter's streams, kept for the comparison.
+#[derive(Clone, Default)]
+struct Stream(Rc<RefCell<Vec<u8>>>);
+
+impl std::io::Write for Stream {
     fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
         self.0.borrow_mut().extend_from_slice(b);
         Ok(b.len())
@@ -50,45 +55,65 @@ impl std::io::Write for Log {
     }
 }
 
-fn interp(max_steps: u64) -> (Interp, Log) {
-    let log = Log::default();
-    let mut i = Interp::new(Kernel::ephemeral(Mode::Run));
-    i.out = Box::new(std::io::sink());
-    i.err = Box::new(log.clone());
-    i.set_max_steps(max_steps);
-    (i, log)
+struct Run {
+    interp: Interp,
+    out: Stream,
+    err: Stream,
 }
 
-fn outcome(r: Result<(), Diagnostic>, log: &Log) -> Outcome {
-    Outcome {
-        logged: String::from_utf8_lossy(&log.0.borrow()).into_owned(),
-        end: r
-            .err()
-            .map(|d| (d.code.to_string(), d.message, d.line, d.col)),
+fn interp(max_steps: u64) -> Run {
+    let (out, err) = (Stream::default(), Stream::default());
+    let mut i = Interp::new(Kernel::ephemeral(Mode::Run));
+    i.out = Box::new(out.clone());
+    i.err = Box::new(err.clone());
+    i.set_max_steps(max_steps);
+    Run {
+        interp: i,
+        out,
+        err,
     }
+}
+
+fn outcome(r: Result<(), Diagnostic>, run: &Run) -> (Outcome, u64) {
+    let exit = run.interp.exit_requested;
+    let text = |s: &Stream| String::from_utf8_lossy(&s.0.borrow()).into_owned();
+    (
+        Outcome {
+            printed: text(&run.out),
+            logged: text(&run.err),
+            exit,
+            // `exit()` stops the tree-walker cleanly and the VM with the
+            // request recorded: both are the exit, not an error.
+            end: r
+                .err()
+                .filter(|_| exit.is_none())
+                .map(|d| (d.code.to_string(), d.message, d.hint, d.line, d.col)),
+        },
+        run.interp.steps,
+    )
 }
 
 /// The tree-walker, as `cig run` runs a script, and the steps it counted.
 fn tree_walker(src: &str, max_steps: u64) -> (Outcome, u64) {
     let program = cigscript::syntax::parse(src).expect("parses");
-    let (mut i, log) = interp(max_steps);
-    let r = i.run_program(&program);
-    (outcome(r, &log), i.steps)
+    let mut run = interp(max_steps);
+    let r = run.interp.run_program(&program);
+    outcome(r, &run)
 }
 
 /// The VM, through its public entry points: `verify_module`, `vm::load`,
-/// `vm::run`. The top level returns null (a script has no top-level
-/// `snuff`), so the values come out through `log.info`, which both call
-/// through the same builtin.
+/// `vm::run`. A script has no top-level `snuff`, so the top level leaves
+/// null; what it computed comes out through `exhale`, which both write
+/// through the interpreter's one writer.
 fn vm(m: &Module, max_steps: u64) -> (Outcome, u64) {
     let verified = verify_module(m).unwrap_or_else(|e| panic!("does not verify: {e}"));
     let program =
         cigscript::vm::load(verified).unwrap_or_else(|e| panic!("does not load: {}", e.message));
-    let (mut i, log) = interp(max_steps);
-    let r = cigscript::vm::run(&mut i, &program).map(|v| {
+    let mut run = interp(max_steps);
+    let r = cigscript::vm::run(&mut run.interp, &program).map(|v| {
         assert_eq!(v.repr(), "null", "the top level leaves null");
     });
-    (outcome(r, &log), i.steps)
+    outcome(r, &run)
 }
 
 /// The tree-walker recurses on the native stack: deep recursion needs
@@ -112,8 +137,8 @@ fn compile(src: &str, level: u8) -> Module {
 
 // ----- the corpus -------------------------------------------------------------------
 
-/// Small programs inside this part. Each says what it computed with
-/// `log.info(repr(...))`, or stops on an error first.
+/// Small programs inside what the lowering covers. Each prints what it
+/// computed with `exhale`, or stops on an error first.
 fn corpus() -> Vec<(String, String)> {
     let mut c: Vec<(String, String)> = Vec::new();
     let mut add = |name: &str, src: &str| c.push((name.to_string(), src.to_string()));
@@ -121,68 +146,44 @@ fn corpus() -> Vec<(String, String)> {
     // Arithmetic at the i64 edges, and division by zero.
     add(
         "max-plus-one",
-        "roll a = 9223372036854775807\nroll b = 1\nlog.info(repr(a + b))\n",
+        "roll a = 9223372036854775807\nroll b = 1\nexhale a + b\n",
     );
     add(
         "min-minus-one",
-        "roll a = -9223372036854775807 - 1\nroll b = 1\nlog.info(repr(a - b))\n",
+        "roll a = -9223372036854775807 - 1\nroll b = 1\nexhale a - b\n",
     );
     add(
         "min-negated",
-        "roll a = -9223372036854775807 - 1\nlog.info(repr(-a))\n",
+        "roll a = -9223372036854775807 - 1\nexhale -a\n",
     );
-    add(
-        "mul-overflow",
-        "roll a = 3037000500\nlog.info(repr(a * a))\n",
-    );
-    add("mul-edge", "roll a = 3037000499\nlog.info(repr(a * a))\n");
+    add("mul-overflow", "roll a = 3037000500\nexhale a * a\n");
+    add("mul-edge", "roll a = 3037000499\nexhale a * a\n");
     add(
         "min-div-minus-one",
-        "roll a = -9223372036854775807 - 1\nroll b = -1\nlog.info(repr(a / b))\n",
+        "roll a = -9223372036854775807 - 1\nroll b = -1\nexhale a / b\n",
     );
     add(
         "min-mod-minus-one",
-        "roll a = -9223372036854775807 - 1\nroll b = -1\nlog.info(repr(a % b))\n",
+        "roll a = -9223372036854775807 - 1\nroll b = -1\nexhale a % b\n",
     );
-    add(
-        "div-zero",
-        "roll a = 7\nroll b = 0\nlog.info(repr(a / b))\n",
-    );
-    add(
-        "mod-zero",
-        "roll a = 7\nroll b = 0\nlog.info(repr(a % b))\n",
-    );
+    add("div-zero", "roll a = 7\nroll b = 0\nexhale a / b\n");
+    add("mod-zero", "roll a = 7\nroll b = 0\nexhale a % b\n");
     add(
         "float-div-zero",
-        "roll a = 7.0\nroll b = 0.0\nlog.info(repr(a / b))\n",
+        "roll a = 7.0\nroll b = 0.0\nexhale a / b\n",
     );
-    add(
-        "int-div",
-        "roll a = -7\nroll b = 2\nlog.info(repr(a / b))\n",
-    );
-    add(
-        "int-mod",
-        "roll a = -7\nroll b = 2\nlog.info(repr(a % b))\n",
-    );
-    add(
-        "mixed",
-        "roll a = 7\nroll b = 2.5\nlog.info(repr(a * b - a / b))\n",
-    );
-    add(
-        "strings",
-        "roll a = \"ci\"\nroll b = \"g\"\nlog.info(repr(a + b))\n",
-    );
-    add(
-        "str-plus-int",
-        "roll a = \"n\"\nroll b = 1\nlog.info(repr(a + b))\n",
-    );
+    add("int-div", "roll a = -7\nroll b = 2\nexhale a / b\n");
+    add("int-mod", "roll a = -7\nroll b = 2\nexhale a % b\n");
+    add("mixed", "roll a = 7\nroll b = 2.5\nexhale a * b - a / b\n");
+    add("strings", "roll a = \"ci\"\nroll b = \"g\"\nexhale a + b\n");
+    add("str-plus-int", "roll a = \"n\"\nroll b = 1\nexhale a + b\n");
     add(
         "big-constant",
-        "roll a = 123456789012\nroll b = 40000\nlog.info(repr(a + b - 70000))\n",
+        "roll a = 123456789012\nroll b = 40000\nexhale a + b - 70000\n",
     );
     add(
         "compound",
-        "roll a = 10\na += 5\na -= 3\na *= 4\na /= 6\nlog.info(repr(a))\n",
+        "roll a = 10\na += 5\na -= 3\na *= 4\na /= 6\nexhale a\n",
     );
 
     // Every comparison across types.
@@ -194,105 +195,260 @@ fn corpus() -> Vec<(String, String)> {
             for op in ["==", "!=", "<", "<=", ">", ">="] {
                 add(
                     &format!("cmp-{i}-{op}-{j}"),
-                    &format!("roll x = {x}\nroll y = {y}\nlog.info(repr(x {op} y))\n"),
+                    &format!("roll x = {x}\nroll y = {y}\nexhale x {op} y\n"),
                 );
             }
         }
     }
     add(
         "nan",
-        "roll z = 0.0\nroll n = z / z\nroll o = 1.0\nlog.info(repr(n < o))\n",
+        "roll z = 0.0\nroll n = z / z\nroll o = 1.0\nexhale n < o\n",
     );
-    add("not", "roll t = 0\nlog.info(repr(not t))\n");
+    add("not", "roll t = 0\nexhale not t\n");
 
     // Short-circuit logic and `??`.
     add(
         "short",
-        "roll a = false and int(\"x\")\nroll b = true or int(\"x\")\nroll c = null ?? 3\nroll d = 4 ?? int(\"x\")\nroll e = 0 and 1\nroll f = \"\" or \"s\"\nroll g = 1 and 2\nroll h = false or null\nlog.info(repr(str(a) + str(b) + str(c) + str(d) + str(e) + f + str(g) + str(h)))\n",
+        "roll a = false and int(\"x\")\nroll b = true or int(\"x\")\nroll c = null ?? 3\nroll d = 4 ?? int(\"x\")\nroll e = 0 and 1\nroll f = \"\" or \"s\"\nroll g = 1 and 2\nroll h = false or null\nexhale str(a) + str(b) + str(c) + str(d) + str(e) + f + str(g) + str(h)\n",
     );
 
     // Nested `if`.
     add(
         "nested-if",
-        "roll n = 0\nroll i = 0\nwhile i < 12 {\n  i += 1\n  if i % 2 == 0 {\n    if i % 3 == 0 {\n      n += 100\n    } else if i % 4 == 0 {\n      n += 10\n    } else {\n      n += 1\n    }\n  } else if i > 9 {\n    n -= 1\n  }\n}\nlog.info(repr(n))\n",
+        "roll n = 0\nroll i = 0\nwhile i < 12 {\n  i += 1\n  if i % 2 == 0 {\n    if i % 3 == 0 {\n      n += 100\n    } else if i % 4 == 0 {\n      n += 10\n    } else {\n      n += 1\n    }\n  } else if i > 9 {\n    n -= 1\n  }\n}\nexhale n\n",
     );
 
     // `while` with `break` and `continue`, nested.
     add(
         "while-break-continue",
-        "roll total = 0\nroll i = 0\nwhile i < 20 {\n  i += 1\n  if i == 3 {\n    continue\n  }\n  roll j = 0\n  while true {\n    j += 1\n    if j > i {\n      break\n    }\n    if j % 2 == 0 {\n      continue\n    }\n    total += j\n  }\n  if i == 15 {\n    break\n  }\n}\nlog.info(repr(total))\n",
+        "roll total = 0\nroll i = 0\nwhile i < 20 {\n  i += 1\n  if i == 3 {\n    continue\n  }\n  roll j = 0\n  while true {\n    j += 1\n    if j > i {\n      break\n    }\n    if j % 2 == 0 {\n      continue\n    }\n    total += j\n  }\n  if i == 15 {\n    break\n  }\n}\nexhale total\n",
     );
     add(
         "while-false",
-        "roll n = 0\nwhile n > 0 {\n  n -= 1\n}\nlog.info(repr(n))\n",
+        "roll n = 0\nwhile n > 0 {\n  n -= 1\n}\nexhale n\n",
     );
 
     // Pulls, lambdas, `snuff`, recursion (a pull that calls itself
     // through a parameter: one that names itself captures itself).
     add(
         "pulls",
-        "pull add(a, b) {\n  snuff a + b\n}\npull none() {\n  roll x = 1\n}\nstick sq = pack(x) => x * x\nlog.info(repr(str(add(sq(3), 4)) + str(none())))\n",
+        "pull add(a, b) {\n  snuff a + b\n}\npull none() {\n  roll x = 1\n}\nstick sq = pack(x) => x * x\nexhale str(add(sq(3), 4)) + str(none())\n",
     );
     add(
         "fact",
-        "pull fact(self, n) {\n  if n <= 1 {\n    snuff 1\n  }\n  snuff n * self(self, n - 1)\n}\nlog.info(repr(fact(fact, 20)))\n",
+        "pull fact(self, n) {\n  if n <= 1 {\n    snuff 1\n  }\n  snuff n * self(self, n - 1)\n}\nexhale fact(fact, 20)\n",
     );
     add(
         "fact-overflow",
-        "pull fact(self, n) {\n  if n <= 1 {\n    snuff 1\n  }\n  snuff n * self(self, n - 1)\n}\nlog.info(repr(fact(fact, 25)))\n",
+        "pull fact(self, n) {\n  if n <= 1 {\n    snuff 1\n  }\n  snuff n * self(self, n - 1)\n}\nexhale fact(fact, 25)\n",
     );
     add(
         "fib",
-        "pull fib(self, n) {\n  if n < 2 {\n    snuff n\n  }\n  snuff self(self, n - 1) + self(self, n - 2)\n}\nlog.info(repr(fib(fib, 10)))\n",
+        "pull fib(self, n) {\n  if n < 2 {\n    snuff n\n  }\n  snuff self(self, n - 1) + self(self, n - 2)\n}\nexhale fib(fib, 10)\n",
     );
     add(
         "deep",
-        "pull down(self, n) {\n  if n == 0 {\n    snuff 0\n  }\n  snuff 1 + self(self, n - 1)\n}\nlog.info(repr(down(down, 3000)))\n",
+        "pull down(self, n) {\n  if n == 0 {\n    snuff 0\n  }\n  snuff 1 + self(self, n - 1)\n}\nexhale down(down, 3000)\n",
     );
     add(
         "too-deep",
-        "pull down(self, n) {\n  if n == 0 {\n    snuff 0\n  }\n  snuff 1 + self(self, n - 1)\n}\nlog.info(repr(down(down, 5000)))\n",
+        "pull down(self, n) {\n  if n == 0 {\n    snuff 0\n  }\n  snuff 1 + self(self, n - 1)\n}\nexhale down(down, 5000)\n",
     );
     add(
         "callee-type-error",
-        "pull f(a) {\n  roll b = a * 2\n  snuff b + \"x\"\n}\nroll i = 0\nwhile i < 3 {\n  i += 1\n}\nlog.info(repr(f(i)))\n",
+        "pull f(a) {\n  roll b = a * 2\n  snuff b + \"x\"\n}\nroll i = 0\nwhile i < 3 {\n  i += 1\n}\nexhale f(i)\n",
     );
     add(
         "arity",
-        "pull f(a, b) {\n  snuff a\n}\nroll g = f\nlog.info(repr(g(1)))\n",
+        "pull f(a, b) {\n  snuff a\n}\nroll g = f\nexhale g(1)\n",
     );
-    add("call-a-number", "roll g = 3\nlog.info(repr(g(1)))\n");
+    add("call-a-number", "roll g = 3\nexhale g(1)\n");
     add(
         "loop-in-callee",
-        "pull spin(n) {\n  roll i = 0\n  while i < n {\n    i += 1\n  }\n  snuff i\n}\nroll t = 0\nroll k = 0\nwhile k < 4 {\n  k += 1\n  t += spin(k)\n}\nlog.info(repr(t))\n",
+        "pull spin(n) {\n  roll i = 0\n  while i < n {\n    i += 1\n  }\n  snuff i\n}\nroll t = 0\nroll k = 0\nwhile k < 4 {\n  k += 1\n  t += spin(k)\n}\nexhale t\n",
     );
     add(
         "early-snuff-in-loop",
-        "pull find(n) {\n  roll i = 0\n  while true {\n    i += 1\n    if i * i > n {\n      snuff i\n    }\n  }\n}\nlog.info(repr(find(50) + find(1000)))\n",
+        "pull find(n) {\n  roll i = 0\n  while true {\n    i += 1\n    if i * i > n {\n      snuff i\n    }\n  }\n}\nexhale find(50) + find(1000)\n",
     );
     add(
         "top-level-break-in-loop",
-        "roll i = 0\nwhile true {\n  i += 1\n  if i == 7 {\n    log.info(repr(i))\n    break\n  }\n}\n",
+        "roll i = 0\nwhile true {\n  i += 1\n  if i == 7 {\n    exhale i\n    break\n  }\n}\n",
     );
     add(
         "nested-pull",
-        "pull outer(a) {\n  pull inner(b) {\n    snuff b + 1\n  }\n  snuff inner(a) * 2\n}\nlog.info(repr(outer(20)))\n",
+        "pull outer(a) {\n  pull inner(b) {\n    snuff b + 1\n  }\n  snuff inner(a) * 2\n}\nexhale outer(20)\n",
     );
 
     // Builtin calls, and their errors.
     add(
         "builtins",
-        "roll a = str(12)\nroll b = len(a)\nroll c = int(\"41\")\nroll d = type_of(2.5)\nlog.info(repr(a + str(b) + str(c + 1) + d))\n",
+        "roll a = str(12)\nroll b = len(a)\nroll c = int(\"41\")\nroll d = type_of(2.5)\nexhale a + str(b) + str(c + 1) + d\n",
     );
-    add("builtin-arity", "roll a = len()\nlog.info(repr(a))\n");
-    add("builtin-error", "roll a = int(\"x\")\nlog.info(repr(a))\n");
+    add("builtin-arity", "roll a = len()\nexhale a\n");
+    add("builtin-error", "roll a = int(\"x\")\nexhale a\n");
     add(
         "assert",
-        "roll n = 2\nassert(n == 3, \"n is not three\")\nlog.info(repr(n))\n",
+        "roll n = 2\nassert(n == 3, \"n is not three\")\nexhale n\n",
     );
 
     // Nothing to say.
     add("silent", "roll n = 1\nn += 1\n");
+    // ----- closures that capture, and named recursion -----
+    add("fib-by-name", "pull fib(n) {\n  if n < 2 {\n    snuff n\n  }\n  snuff fib(n - 1) + fib(n - 2)\n}\nexhale fib(15)\n");
+    add("mutual", "pull even(n) {\n  if n == 0 {\n    snuff true\n  }\n  snuff odd(n - 1)\n}\npull odd(n) {\n  if n == 0 {\n    snuff false\n  }\n  snuff even(n - 1)\n}\nexhale even(10), odd(7), even(3)\n");
+    add("deep-by-name", "pull down(n) {\n  if n == 0 {\n    snuff 0\n  }\n  snuff 1 + down(n - 1)\n}\nexhale down(5000)\n");
+    add("counter", "pull make() {\n  roll n = 0\n  snuff pack() {\n    n += 1\n    snuff n\n  }\n}\nstick a = make()\nstick b = make()\nexhale a(), a(), b(), a()\n");
+    add("per-turn-for", "roll fs = []\nfor i in 0..3 {\n  fs.push(pack() => i)\n}\nfor f in fs {\n  exhale f()\n}\n");
+    add("per-turn-for-list", "roll fs = []\nfor s in [\"a\", \"b\"] {\n  fs.push(pack() => s + s)\n}\nexhale fs[0](), fs[1]()\n");
+    add("per-turn-while", "roll fs = []\nroll k = 0\nwhile k < 3 {\n  roll j = k * 10\n  fs.push(pack() => j)\n  k += 1\n}\nexhale fs[0](), fs[1](), fs[2]()\n");
+    add("shared-before-loop", "roll fs = []\nroll n = 0\nwhile n < 3 {\n  fs.push(pack() => n)\n  n += 1\n}\nexhale fs[0](), fs[2]()\n");
+    add("three-levels", "pull outer(a) {\n  roll b = a * 2\n  pull mid(c) {\n    snuff pack(d) => a + b + c + d\n  }\n  snuff mid(100)\n}\nstick f = outer(1)\nexhale f(1000)\n");
+    add("captured-param", "pull adder(x) {\n  snuff pack(y) => x + y\n}\nstick add5 = adder(5)\nexhale add5(1), adder(10)(2)\n");
+    add("closure-writes", "roll total = 0\nstick bump = pack(x) {\n  total += x\n  snuff total\n}\nbump(3)\nbump(4)\nexhale total\n");
+    add("nested-pulls-call-each-other", "pull run(n) {\n  pull a(x) {\n    if x <= 0 {\n      snuff 0\n    }\n    snuff b(x - 1) + 1\n  }\n  pull b(x) {\n    snuff a(x - 1) + n\n  }\n  snuff a(6)\n}\nexhale run(10)\n");
+    add("callback", "roll seen = 0\nroll ys = [1, 2, 3].map(pack(x) {\n  seen += 1\n  snuff x * seen\n})\nexhale ys, seen\n");
+    add(
+        "callback-error",
+        "roll ys = [1, \"a\"].map(pack(x) => x * 2)\nexhale ys\n",
+    );
+    add(
+        "pull-as-value",
+        "pull twice(x) {\n  snuff x * 2\n}\nexhale [1, 2].map(twice)\n",
+    );
+    // ----- lists and maps -----
+    add("literals", "roll xs = [1, \"two\", [3, 4], {k: null}]\nroll m = {a: 1, \"b c\": [2], d: {e: true}}\nexhale xs, m\nexhale xs[2][1], m.d.e, m[\"b c\"][0]\n");
+    add(
+        "negative-index",
+        "roll xs = [1, 2, 3]\nroll s = \"héllo\"\nexhale xs[-1], s[1], s[-1]\n",
+    );
+    add("index-past-end", "roll xs = [1, 2]\nexhale xs[5]\n");
+    add("string-index-past-end", "roll s = \"ab\"\nexhale s[9]\n");
+    add(
+        "index-type",
+        "roll xs = [1, 2]\nroll k = \"a\"\nexhale xs[k]\n",
+    );
+    add("map-key-type", "roll m = {a: 1}\nroll k = 1\nexhale m[k]\n");
+    add("index-into-int", "roll n = 5\nexhale n[0]\n");
+    add("missing-key-index", "roll m = {a: 1}\nexhale m[\"b\"]\n");
+    add("missing-member", "roll m = {a: 1}\nexhale m.b\n");
+    add("member-of-null", "roll m = null\nexhale m.b\n");
+    add("member-of-int", "roll m = 3\nexhale m.b\n");
+    add("safe-member", "roll m = {a: 1, n: null}\nroll z = null\nroll s = \"x\"\nexhale m?.a, m?.b, m?.n, z?.a\nexhale s?.a\n");
+    add(
+        "safe-member-shadowed",
+        "roll m = {keys: 1, contains: 2, a: 3}\nexhale m?.a, m?.keys, m?.zz\n",
+    );
+    add("stores", "roll xs = [1, 2, 3]\nroll m = {a: 1}\nxs[0] = 9\nxs[-1] += 10\nm[\"b\"] = 2\nm.c = 3\nm.a += 5\nm[\"b\"] *= 7\nexhale xs, m\n");
+    add("store-past-end", "roll xs = [1]\nxs[3] = 1\n");
+    add(
+        "store-index-type",
+        "roll xs = [1]\nroll k = \"a\"\nxs[k] = 1\n",
+    );
+    add("store-map-key-type", "roll m = {}\nroll k = 2\nm[k] = 1\n");
+    add("store-into-int", "roll n = 4\nroll k = 0\nn[k] = 1\n");
+    add(
+        "store-into-string",
+        "roll s = \"ab\"\nroll k = 0\ns[k] = \"x\"\n",
+    );
+    add(
+        "compound-into-string",
+        "roll s = \"ab\"\nroll k = 0\ns[k] += \"x\"\n",
+    );
+    add("compound-missing-key", "roll m = {a: 1}\nm[\"b\"] += 1\n");
+    add("compound-missing-member", "roll m = {a: 1}\nm.b += 1\n");
+    add("compound-past-end", "roll xs = [1]\nxs[2] -= 1\n");
+    add("compound-type", "roll xs = [\"a\"]\nxs[0] -= 1\n");
+    add("set-member-on-int", "roll n = 1\nn.k = 2\n");
+    add("compound-member-on-int", "roll n = 1\nn.k += 2\n");
+    add(
+        "member-compound-type",
+        "roll m = {a: \"s\"}\nm.a *= \"t\"\n",
+    );
+    add(
+        "dynamic-keys",
+        "roll k = \"x\"\nroll n = 7\nroll m = {[k]: 1, [n]: 2, plain: 3}\nexhale m\n",
+    );
+    add(
+        "dynamic-key-type",
+        "roll f = 1.5\nroll m = {[f]: 1}\nexhale m\n",
+    );
+    add(
+        "aliasing",
+        "roll a = [1]\nroll b = a\nb.push(2)\nroll m = {l: a}\nm.l.push(3)\nexhale a, b, m\n",
+    );
+    // ----- for -----
+    add("for-range", "roll t = 0\nfor i in 0..10 {\n  if i == 3 {\n    continue\n  }\n  if i == 8 {\n    break\n  }\n  t += i\n}\nexhale t\n");
+    add("for-range-empty-and-back", "roll n = 0\nfor i in 5..5 {\n  n += 1\n}\nfor i in 5..2 {\n  n += 10\n}\nfor i in -3..-1 {\n  n += i\n}\nexhale n\n");
+    add(
+        "for-range-bounds",
+        "roll a = 2\nroll b = a * 3\nfor i in a..b {\n  i = 100\n  exhale i\n}\n",
+    );
+    add(
+        "for-range-float",
+        "roll t = 0\nfor i in 1..2.5 {\n  t += i\n}\n",
+    );
+    add(
+        "for-range-too-big",
+        "roll t = 0\nfor i in 0..100000000 {\n  t += i\n}\n",
+    );
+    add("for-nested", "roll t = 0\nfor i in 0..4 {\n  for j in 0..i {\n    if j == 2 {\n      break\n    }\n    t += i * j\n  }\n}\nexhale t\n");
+    add("for-list-map-text", "roll out = []\nfor x in [1, [2], null] {\n  out.push(x)\n}\nfor k in {b: 1, a: 2} {\n  out.push(k)\n}\nfor c in \"hé!\" {\n  out.push(c)\n}\nfor e in [] {\n  out.push(e)\n}\nexhale out\n");
+    add("for-mutating", "roll xs = [1, 2]\nfor x in xs {\n  xs.push(x * 10)\n}\nroll m = {a: 1}\nfor k in m {\n  m[k + k] = 2\n}\nexhale xs, m\n");
+    add(
+        "for-not-iterable",
+        "roll n = 5\nfor x in n {\n  exhale x\n}\n",
+    );
+    add("for-continue-list", "roll t = []\nfor x in [1, 2, 3, 4] {\n  if x % 2 == 0 {\n    continue\n  }\n  t.push(x)\n}\nexhale t\n");
+    add("for-in-pull", "pull total(xs) {\n  roll t = 0\n  for x in xs {\n    t += x\n  }\n  snuff t\n}\nroll s = 0\nfor i in 0..3 {\n  s += total([i, i])\n}\nexhale s\n");
+    // ----- interpolation, exhale, method calls -----
+    add("interp", "roll n = 3\nroll xs = [1, \"a\"]\nroll m = {k: 2.5}\nexhale \"n=${n} xs=${xs} m=${m} f=${1.0} ${null} ${true}\"\n");
+    add(
+        "interp-sees-before",
+        "roll xs = [1]\nexhale \"${xs} then ${xs.push(2)} ${xs}\"\n",
+    );
+    add(
+        "exhale-sees-before",
+        "roll xs = [1]\nexhale xs, xs.push(2), xs\n",
+    );
+    add(
+        "exhale-many",
+        "exhale 1, \"two\", 3.5, null, [true]\nexhale \"\"\n",
+    );
+    add("methods", "roll s = \"Hello\"\nroll xs = [3, 1, 2]\nexhale s.upper(), s.len(), xs.len(), xs.contains(2)\nroll ys = xs.filter(pack(x) => x > 1)\nexhale ys, xs.map(pack(x) => x * x)\n");
+    add("method-unknown", "roll xs = [1]\nexhale xs.lenn()\n");
+    add("method-arity", "roll xs = [1]\nxs.push()\n");
+    add(
+        "safe-method",
+        "roll z = null\nroll s = \"a\"\nexhale z?.upper(), s?.upper()\n",
+    );
+    add(
+        "map-holds-function",
+        "roll m = {f: pack(x) => x + 1}\nexhale m.f(1)\n",
+    );
+    add("exit", "exhale 1\nexit(3)\nexhale 2\n");
+    add(
+        "interp-lines",
+        "pull f(x) {\n  roll a = 1\n  snuff \"${a} ${x / 0}\"\n}\nexhale f(1)\n",
+    );
+    add(
+        "interp-index",
+        "roll xs = [1]\nroll k = \"a\"\nexhale \"v=${xs[k]}\"\n",
+    );
+    add(
+        "range-values",
+        "roll a = 3\nroll b = 0\nexhale 0..4, a..b, -2..1, (0..3).map(pack(x) => x * x)\n",
+    );
+    add(
+        "range-value-float",
+        "roll a = 1\nroll b = 2.5\nroll r = a..b\n",
+    );
+    add("range-value-too-big", "roll a = 0\nroll r = a..100000000\n");
+    add("range-value-extremes", "roll a = 9223372036854775807\nroll b = -9223372036854775807 - 1\nexhale a..b\nexhale b..a\n");
+    add(
+        "module-call",
+        "exhale math.floor(2.5), path.join(\"a\", \"b\"), text.split(\"a,b\", \",\")\n",
+    );
     c
 }
 
@@ -429,22 +585,6 @@ fn every_lowered_module_verifies() {
 #[test]
 fn a_program_outside_this_part_is_refused_with_its_construct() {
     let cases = [
-        ("roll a = 1\nroll l = [a]\n", "a list", 2, 10),
-        ("roll m = {k: 1}\n", "a map", 1, 10),
-        (
-            "roll a = 1\nroll s = \"n=${a}\"\n",
-            "string interpolation",
-            2,
-            10,
-        ),
-        ("for i in [1] {\n  roll x = i\n}\n", "a list", 1, 10),
-        (
-            "roll a = 0\nfor i in 0..3 {\n  a += i\n}\n",
-            "a `..` range",
-            2,
-            10,
-        ),
-        ("exhale 1\n", "`exhale`", 1, 1),
         (
             "try {\n  roll a = 1\n} ashtray e {\n  roll b = 2\n}\n",
             "`try`",
@@ -453,30 +593,43 @@ fn a_program_outside_this_part_is_refused_with_its_construct() {
         ),
         ("roll a = 1\ncough a\n", "`cough`", 2, 1),
         (
-            "roll s = \"ab\"\nroll n = s.len()\n",
-            "a method call",
-            2,
-            10,
-        ),
-        (
-            "pull f(n) {\n  snuff f(n)\n}\nroll x = 1\n",
-            "a function that captures `f` (a closure)",
-            1,
-            1,
-        ),
-        (
-            "roll k = 2\nstick g = pack(x) => x * k\n",
-            "a function that captures `k` (a closure)",
-            2,
-            11,
-        ),
-        (
             "roll f = len\n",
             "a builtin, module or `args` used as a value",
             1,
             10,
         ),
+        (
+            "roll m = math\n",
+            "a builtin, module or `args` used as a value",
+            1,
+            10,
+        ),
+        (
+            "roll a = args\n",
+            "a builtin, module or `args` used as a value",
+            1,
+            10,
+        ),
         ("burn {\n  fs.write_text(\"o\", \"x\")\n}\n", "`burn`", 1, 1),
+        (
+            "pull w() {\n  fs.write_text(\"o\", \"x\")\n}\nroll n = 1\n",
+            "a call that changes the world (a burn op)",
+            2,
+            3,
+        ),
+        ("pack { \"./build\" }\nroll n = 1\n", "`pack`", 1, 1),
+        (
+            "stick a = pack(x) => x\nstick b = pack(x) => x\nchain c { a, b }\n",
+            "a chain",
+            3,
+            1,
+        ),
+        (
+            "pull f() {\n  snuff \"k\"\n}\nroll k = \"j\"\nroll m = {[k]: f()}\n",
+            "a computed map key followed by a value that can fail or run code",
+            5,
+            10,
+        ),
     ];
     for (src, construct, line, col) in cases {
         match bc::compile(src, "t.cig", &pass::level(0)) {
@@ -646,27 +799,27 @@ fn every_cir_kind_is_lowered_or_refused() {
         "unary lowered",
         "binary lowered",
         "short lowered",
-        "list refused: a list",
-        "map refused: a map",
-        "interp refused: string interpolation",
-        "member refused: a member read",
-        "index refused: an index read",
-        "set.index refused: an index assignment",
-        "set.member refused: a member assignment",
+        "list lowered",
+        "map lowered",
+        "interp lowered",
+        "member lowered",
+        "index lowered",
+        "set.index lowered",
+        "set.member lowered",
         "closure lowered",
         "burn.op refused: a call that changes the world (a burn op)",
         "call.builtin lowered",
         "call.user lowered",
         "call.value lowered",
-        "call.method refused: a method call",
+        "call.method lowered",
         "chain refused: a chain",
         "pack refused: `pack`",
-        "exhale refused: `exhale`",
+        "exhale lowered",
         "burn refused: `burn`",
         "try refused: `try`",
         "if lowered",
         "loop lowered",
-        "foreach refused: `for`",
+        "foreach lowered",
         "yield lowered",
         "ret lowered",
         "break lowered",
@@ -674,8 +827,8 @@ fn every_cir_kind_is_lowered_or_refused() {
         "throw refused: `cough`",
     ];
     assert_eq!(table, want);
-    // Lowered, but refused for what it names: a closure or `call.user` of
-    // a function that captures, and the `..` range operator (see
+    // Lowered, but refused for what it names: a computed map key followed
+    // by code that can fail, an index or computed key a pass replaced (see
     // a_program_outside_this_part_is_refused_with_its_construct).
 }
 
@@ -693,7 +846,7 @@ fn a_frame_past_255_registers_uses_wide_operands() {
     for k in (0..300).step_by(7) {
         src.push_str(&format!("s += v{k} * 3 - v{} \n", 299 - k));
     }
-    src.push_str("log.info(repr(s + len(str(v299))))\n");
+    src.push_str("exhale s + len(str(v299))\n");
     big_stack(move || {
         let m = compile(&src, 0);
         assert!(m.main.reg_count > 256, "{}", m.main.reg_count);
@@ -711,7 +864,7 @@ fn a_jump_past_16_bits_is_wide() {
     for _ in 0..7000 {
         src.push_str("  n += i\n");
     }
-    src.push_str("}\nlog.info(repr(n))\n");
+    src.push_str("}\nexhale n\n");
     big_stack(move || {
         let m = compile(&src, 0);
         assert!(m.main.instrs.len() > 32768, "{}", m.main.instrs.len());
@@ -764,7 +917,7 @@ fn the_disassembly_matches_its_golden_text() {
 /// one load, where -O0 computes it.
 #[test]
 fn the_level_shapes_the_bytecode() {
-    let src = "stick a = 2 + 3\nlog.info(repr(a * 4))\n";
+    let src = "stick a = 2 + 3\nexhale a * 4\n";
     let o0 = compile(src, 0);
     let o1 = compile(src, 1);
     let ops = |m: &Module| bc::disassemble(m).matches(" add ").count();
@@ -809,12 +962,13 @@ fn emit_bc_prints_the_disassembly_and_refuses_what_it_does_not_cover() {
         .replace("\r\n", "\n");
     assert_eq!(String::from_utf8_lossy(&o.stdout), want);
 
-    std::fs::write(dir.path().join("list.cig"), "roll a = 1\nroll l = [a]\n").unwrap();
-    let o = cc(&["build", "list.cig", "--emit", "bc"]);
+    std::fs::write(dir.path().join("value.cig"), "roll a = 1\nroll f = len\n").unwrap();
+    let o = cc(&["build", "value.cig", "--emit", "bc"]);
     assert_eq!(o.status.code(), Some(3));
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(
-        err.contains("a list is not lowered to bytecode yet") && err.contains("list.cig:2:10"),
+        err.contains("a builtin, module or `args` used as a value is not lowered to bytecode yet")
+            && err.contains("value.cig:2:10"),
         "{err}"
     );
 }
@@ -837,4 +991,72 @@ fn a_frame_past_the_limit_is_an_error() {
         }
         other => panic!("{:?}", other.map(|_| ())),
     }
+}
+
+/// How far stage B is from real programs: every script of the CigScript
+/// checkout `CIGSCRIPT_SRC` names (`examples`, `tests/scripts`,
+/// `tests/corpus`, as the differential suite reads them) and
+/// `orchestrate.cig` of the checkout `CIGO_SRC` names, each lowered at
+/// -O1 or named by the construct that first refuses it. A count, not a
+/// gate: what lowers verifies, and nothing may fail inside the lowering.
+#[test]
+fn real_programs_lower_or_name_what_refuses_them() {
+    let mut scripts = Vec::new();
+    if let Some(src) = std::env::var_os("CIGSCRIPT_SRC").map(std::path::PathBuf::from) {
+        for dir in ["examples", "tests/scripts", "tests/corpus"] {
+            if let Ok(rd) = std::fs::read_dir(src.join(dir)) {
+                let mut found: Vec<_> = rd
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|x| x == "cig"))
+                    .collect();
+                found.sort();
+                scripts.extend(found.into_iter().map(|p| (format!("{dir}/"), p)));
+            }
+        }
+    }
+    if let Some(src) = std::env::var_os("CIGO_SRC").map(std::path::PathBuf::from) {
+        scripts.push((String::new(), src.join("orchestrate.cig")));
+    }
+    if scripts.is_empty() {
+        eprintln!("note: skipping; set CIGSCRIPT_SRC and CIGO_SRC to checkouts");
+        return;
+    }
+    let (mut lowered, mut refused, mut unchecked) = (0, 0, 0);
+    let mut firsts: std::collections::BTreeMap<String, u32> = Default::default();
+    for (dir, path) in &scripts {
+        let name = format!("{dir}{}", path.file_name().unwrap().to_string_lossy());
+        let src = std::fs::read_to_string(path).unwrap();
+        let what = match bc::compile(&src, &name, &pass::default_passes()) {
+            Ok(m) => {
+                verify_module(&m).unwrap_or_else(|e| panic!("{name}: {e}"));
+                lowered += 1;
+                // The language scripts need no files: run them both ways.
+                if dir == "tests/scripts/" {
+                    let src = src.clone();
+                    let (got, want) =
+                        big_stack(move || (vm(&m, 1_000_000), tree_walker(&src, 1_000_000)));
+                    assert_eq!(got, want, "{name}");
+                    "lowered, and runs like the tree-walker".to_string()
+                } else {
+                    "lowered".to_string()
+                }
+            }
+            Err(CompileError::Bytecode(Error::Refused { construct, span })) => {
+                refused += 1;
+                *firsts.entry(construct.clone()).or_default() += 1;
+                format!("refused at {}:{}: {construct}", span.line, span.col)
+            }
+            Err(CompileError::Lower(cigcompile::cir::LowerError::Diagnostic(d))) => {
+                unchecked += 1;
+                format!("does not check: {} {}", d.code, d.message)
+            }
+            Err(e) => panic!("{name}: {e:?}"),
+        };
+        println!("{name}: {what}");
+    }
+    println!(
+        "{} scripts: {lowered} lowered, {refused} refused, {unchecked} do not check; first refusals: {firsts:?}",
+        scripts.len()
+    );
 }

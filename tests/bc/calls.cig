@@ -9,4 +9,4 @@ pull fact(self, n) {
 }
 stick sq = pack(x) => x * x
 roll n = int("4")
-log.info(repr(add(sq(n), fact(fact, n)) + len(str(n))))
+exhale add(sq(n), fact(fact, n)) + len(str(n))
