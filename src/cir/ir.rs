@@ -140,7 +140,9 @@ pub enum ShortOp {
 
 pub enum MapKey {
     Static(String),
-    Dyn(ValueId),
+    /// A computed key: a `key` instruction's value, always a string, and
+    /// the span of the key expression, which no pass changes.
+    Dyn(ValueId, Span),
 }
 
 pub enum Piece {
@@ -231,7 +233,15 @@ pub enum Kind {
         rhs: Block,
     },
     MakeList(Vec<ValueId>),
+    /// The entries in order. Each computed key is a `key` instruction's
+    /// value, made before the entry's value is evaluated.
     MakeMap(Vec<(MapKey, ValueId)>),
+    /// A computed map key, checked where the tree-walker checks it: after
+    /// the key expression and before the entry's value. A string stays, an
+    /// int becomes its decimal text, anything else raises a type error
+    /// ("map keys must be strings") at this instruction's span, the key
+    /// expression's. Its value is a string.
+    Key(ValueId),
     Interp(Vec<Piece>),
     /// `safe`: `?.`, null for a null subject and for a map without the key.
     Member {
@@ -239,16 +249,27 @@ pub enum Kind {
         name: String,
         safe: bool,
     },
+    /// `obj[idx]`. A wrong index type is raised at `idx_at`, the index
+    /// expression's span; a value that cannot be indexed, and a missing
+    /// key or an index out of range, at the instruction's own span.
     Index {
         obj: ValueId,
         idx: ValueId,
+        idx_at: Span,
     },
-    /// The combined read-modify-write: the type errors live in it.
+    /// The combined read-modify-write: the type errors live in it. A wrong
+    /// index type is raised at `idx_at`, a value that cannot be indexed at
+    /// `obj_at` (the object expression's span), the rest at the statement.
+    /// Both spans are the expressions' own and no pass changes them, so
+    /// they hold when a pass replaces an operand with a value made
+    /// elsewhere.
     SetIndex {
         obj: ValueId,
         idx: ValueId,
         op: AssignOp,
         val: ValueId,
+        obj_at: Span,
+        idx_at: Span,
     },
     SetMember {
         obj: ValueId,
@@ -430,10 +451,11 @@ impl Kind {
             }
             Kind::MakeMap(kv) => raises_unless(kv.iter().all(|(k, _)| match k {
                 MapKey::Static(_) => true,
-                MapKey::Dyn(d) => ty(d) == Str,
+                MapKey::Dyn(d, _) => ty(d) == Str,
             })),
             Kind::Member { obj, safe, .. } => raises_unless(*safe && matches!(ty(obj), Map | Null)),
             Kind::Index { .. } => Class::MayRaise,
+            Kind::Key(k) => raises_unless(matches!(ty(k), Str | Int)),
             _ => Class::Effect,
         }
     }
@@ -552,7 +574,7 @@ impl Kind {
             Kind::MakeMap(kv) => {
                 let mut v = Vec::new();
                 for (k, x) in kv {
-                    if let MapKey::Dyn(k) = k {
+                    if let MapKey::Dyn(k, _) = k {
                         v.push(*k);
                     }
                     v.push(*x);
@@ -567,7 +589,8 @@ impl Kind {
                 })
                 .collect(),
             Kind::Member { obj, .. } => vec![*obj],
-            Kind::Index { obj, idx } => vec![*obj, *idx],
+            Kind::Index { obj, idx, .. } => vec![*obj, *idx],
+            Kind::Key(k) => vec![*k],
             Kind::SetIndex { obj, idx, val, .. } => vec![*obj, *idx, *val],
             Kind::SetMember { obj, val, .. } => vec![*obj, *val],
             Kind::BurnOp { args, .. }

@@ -93,6 +93,7 @@ pub fn refused_kind(kind: &Kind) -> Option<&'static str> {
         | Kind::Short { .. }
         | Kind::MakeList(_)
         | Kind::MakeMap(_)
+        | Kind::Key(_)
         | Kind::Interp(_)
         | Kind::Member { .. }
         | Kind::Index { .. }
@@ -859,7 +860,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
         span: Span,
     ) -> Result<(), Error> {
         let Some(k) = kv.iter().find_map(|(k, _)| match k {
-            ir::MapKey::Dyn(k) => Some(*k),
+            ir::MapKey::Dyn(k, _) => Some(*k),
             ir::MapKey::Static(_) => None,
         }) else {
             return Ok(());
@@ -868,7 +869,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
         let from = b.instrs[..j].iter().position(|i| Some(i.id) == def);
         let quiet = from.is_some_and(|p| {
             b.instrs[p + 1..j].iter().all(|i| {
-                matches!(i.kind, Kind::Load(_))
+                matches!(i.kind, Kind::Load(_) | Kind::Key(_))
                     || i.kind.class(self.f, &self.cx.m.vars) == Class::Pure
             })
         });
@@ -1003,6 +1004,12 @@ impl<'c, 'm> FnLower<'c, 'm> {
                     Slot::Reg(s) => self.abc(Op::MOV, s, x, 0)?,
                     Slot::Up(u) => self.abc(Op::SETUP, u, x, 0)?,
                 }
+            }
+            // `insertmap` checks the key, as before.
+            Kind::Key(k) => {
+                let k = self.val(*k)?;
+                let r = self.define(i)?;
+                self.abc(Op::MOV, r, k, 0)?;
             }
             Kind::Unary(op, x) => {
                 let x = self.val(*x)?;
@@ -1233,7 +1240,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
                             self.abc(Op::INSERTMAP, r, t, x)?;
                             self.free(t);
                         }
-                        ir::MapKey::Dyn(key) => {
+                        ir::MapKey::Dyn(key, _) => {
                             // A key that is not a string or an int is an
                             // error at the key's own position.
                             let at = self.part_span(*key, i.span).ok_or_else(|| {
@@ -1317,13 +1324,15 @@ impl<'c, 'm> FnLower<'c, 'm> {
                     self.abc(Op::GETFIELD, r, o, k)?;
                 }
             }
-            Kind::Index { obj, idx } => {
+            Kind::Index { obj, idx, .. } => {
                 let at = self.index_span(*idx, i.span)?;
                 let (o, x) = (self.val(*obj)?, self.val(*idx)?);
                 let r = self.define(i)?;
                 self.index_read(r, o, x, at)?;
             }
-            Kind::SetIndex { obj, idx, op, val } => {
+            Kind::SetIndex {
+                obj, idx, op, val, ..
+            } => {
                 let at = self.index_span(*idx, i.span)?;
                 let obj_at = self.part_span(*obj, i.span).unwrap_or(i.span);
                 let (o, x, v) = (self.val(*obj)?, self.val(*idx)?, self.val(*val)?);

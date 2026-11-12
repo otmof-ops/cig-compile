@@ -122,6 +122,17 @@ with its `step.iter` (V11), and a pass removes a mark only together
 with everything else in its block (T3). A compiled program stops on
 the same step, at the same line, as the interpreter.
 
+Errors come out where the interpreter puts them. A map literal is
+lowered in the interpreter's order: each computed key, then its
+`key` check, then the entry's value. A key that is not a string or
+an int raises before a later value can. An index, an indexed store
+and a map's computed keys carry the spans of their own operands
+(`--emit cir` prints them beside the instruction's span, as
+`idx@3:10`). A wrong index type is reported at the index, and a
+value that cannot be indexed at the object, even after a pass has
+replaced either operand with a value made somewhere else. The
+verifier checks every such span lies inside its instruction (V2).
+
 The passes today are
 `fold-consts`, `copy-prop`, `fold-consts`, `sccp`, `dead-pure`, in
 that order. Each is read as:

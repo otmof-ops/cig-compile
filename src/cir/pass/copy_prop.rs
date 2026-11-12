@@ -116,7 +116,7 @@ fn rewrite_kind_uses(k: &mut Kind, rename: &HashMap<ValueId, ValueId>) {
         | Kind::Continue
         | Kind::Loop { .. }
         | Kind::Try { .. } => {}
-        Kind::Decl(_, v) | Kind::Store(_, v) | Kind::Unary(_, v) => {
+        Kind::Decl(_, v) | Kind::Store(_, v) | Kind::Unary(_, v) | Kind::Key(v) => {
             *v = rn(*v);
         }
         Kind::Binary(_, a, b) => {
@@ -133,7 +133,7 @@ fn rewrite_kind_uses(k: &mut Kind, rename: &HashMap<ValueId, ValueId>) {
         }
         Kind::MakeMap(kvs) => {
             for (k, v) in kvs {
-                if let MapKey::Dyn(d) = k {
+                if let MapKey::Dyn(d, _) = k {
                     *d = rn(*d);
                 }
                 *v = rn(*v);
@@ -149,7 +149,7 @@ fn rewrite_kind_uses(k: &mut Kind, rename: &HashMap<ValueId, ValueId>) {
         Kind::Member { obj, .. } => {
             *obj = rn(*obj);
         }
-        Kind::Index { obj, idx } => {
+        Kind::Index { obj, idx, .. } => {
             *obj = rn(*obj);
             *idx = rn(*idx);
         }

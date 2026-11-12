@@ -398,6 +398,8 @@ impl Lowerer<'_> {
                                 idx,
                                 op: *op,
                                 val: v,
+                                obj_at: fix(object.span),
+                                idx_at: fix(index.span),
                             },
                             None,
                         );
@@ -847,9 +849,15 @@ impl Lowerer<'_> {
             ExprKind::Map(entries) => {
                 let mut kv = Vec::new();
                 for (k, x) in entries {
+                    // The tree-walker's order: a computed key, its check,
+                    // then the entry's value (eval.rs, the map literal).
                     let key = match k {
                         ast::MapKey::Static(s) => MapKey::Static(s.clone()),
-                        ast::MapKey::Dynamic(d) => MapKey::Dyn(self.expr(d, out)?),
+                        ast::MapKey::Dynamic(d) => {
+                            let raw = self.expr(d, out)?;
+                            let checked = self.value(out, d.span, Kind::Key(raw), Ty::Str);
+                            MapKey::Dyn(checked, fix(d.span))
+                        }
                     };
                     kv.push((key, self.expr(x, out)?));
                 }
@@ -915,7 +923,8 @@ impl Lowerer<'_> {
             ExprKind::Index { object, index } => {
                 let obj = self.expr(object, out)?;
                 let idx = self.expr(index, out)?;
-                self.value(out, span, Kind::Index { obj, idx }, Ty::Dynamic)
+                let idx_at = fix(index.span);
+                self.value(out, span, Kind::Index { obj, idx, idx_at }, Ty::Dynamic)
             }
             ExprKind::Lambda { params, body } => {
                 let fid = FuncId(self.funcs.len() as u32);

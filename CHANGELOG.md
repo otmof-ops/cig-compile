@@ -33,6 +33,17 @@ project follows semantic versioning.
   `the_marks_a_run_passes_are_the_steps_the_tree_walker_counts`, which
   checks a script's marks against cig's own count and, for every
   `--max-steps` short of the total, its stopping line.
+- **Map literals and indexes keep the interpreter's error order and
+  positions in CIR (#31).** A computed map key is checked by a new
+  `key` instruction right after it, before the entry's value, as the
+  tree-walker does, so a bad key raises before a later value can. An
+  index, an indexed store and a map's computed keys carry their
+  operands' own spans (the verifier's V2 checks them; `--emit cir`
+  prints them as `idx@`, `obj@`, `key@`), so the right line and column
+  survive copy propagation and folding. `tests/cir.rs` holds both to
+  the tree-walker: `a_computed_key_is_checked_before_the_next_value`,
+  `a_computed_key_runs_its_effects_before_the_next_value_reads_them`,
+  `an_index_keeps_its_operands_positions_through_the_passes`.
 - **The pass framework in its final shape (#33).** Each pass is its own
   module under `src/cir/pass/`. `Kind::class` sorts every instruction,
   from its kind and its operands' types, into pure, may raise, effect

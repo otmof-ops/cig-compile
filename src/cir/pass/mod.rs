@@ -236,6 +236,7 @@ fn kind_tag(k: &Kind) -> &'static str {
         Kind::Interp(_) => "interp",
         Kind::Member { .. } => "member",
         Kind::Index { .. } => "index",
+        Kind::Key(_) => "key",
         Kind::SetIndex { .. } => "set-index",
         Kind::SetMember { .. } => "set-member",
         Kind::Closure(_) => "closure",

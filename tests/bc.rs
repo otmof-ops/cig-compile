@@ -21,6 +21,7 @@ use cigscript::cig_bytecode::{verify_module, Module};
 use cigscript::diagnostics::Diagnostic;
 use cigscript::interp::Interp;
 use cigscript::syntax::ast::{AssignOp, BinOp, BurnClass, UnOp};
+use cigscript::syntax::span::Span;
 use cigscript::value::Effect;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -659,6 +660,7 @@ fn every_cir_kind_is_lowered_or_refused() {
             Kind::Short { .. } => "short",
             Kind::MakeList(_) => "list",
             Kind::MakeMap(_) => "map",
+            Kind::Key(_) => "key",
             Kind::Interp(_) => "interp",
             Kind::Member { .. } => "member",
             Kind::Index { .. } => "index",
@@ -702,18 +704,25 @@ fn every_cir_kind_is_lowered_or_refused() {
         },
         Kind::MakeList(vec![]),
         Kind::MakeMap(vec![(MapKey::Static("k".into()), v)]),
+        Kind::Key(v),
         Kind::Interp(vec![Piece::Lit("x".into())]),
         Kind::Member {
             obj: v,
             name: "k".into(),
             safe: false,
         },
-        Kind::Index { obj: v, idx: v },
+        Kind::Index {
+            obj: v,
+            idx: v,
+            idx_at: Span::default(),
+        },
         Kind::SetIndex {
             obj: v,
             idx: v,
             op: AssignOp::Set,
             val: v,
+            obj_at: Span::default(),
+            idx_at: Span::default(),
         },
         Kind::SetMember {
             obj: v,
@@ -801,6 +810,7 @@ fn every_cir_kind_is_lowered_or_refused() {
         "short lowered",
         "list lowered",
         "map lowered",
+        "key lowered",
         "interp lowered",
         "member lowered",
         "index lowered",

@@ -510,7 +510,20 @@ mod marks {
         Int(i64),
         Str(String),
         List(Vec<V>),
+        Map(Vec<(String, V)>),
         Func(FuncId),
+    }
+
+    impl V {
+        fn show(&self) -> String {
+            match self {
+                V::Null => "null".into(),
+                V::Bool(b) => b.to_string(),
+                V::Int(i) => i.to_string(),
+                V::Str(s) => s.clone(),
+                other => panic!("{other:?} is not shown in this evaluator"),
+            }
+        }
     }
 
     impl V {
@@ -544,6 +557,7 @@ mod marks {
         m: &'m Module,
         frames: Vec<Frame>,
         marks: Vec<Span>,
+        out: Vec<String>,
         max: u64,
         /// The error in flight: where it was raised.
         err: Option<Span>,
@@ -553,10 +567,17 @@ mod marks {
     /// the error that ends it was raised, if one does. `max` is the step
     /// budget, 0 for none.
     pub fn trace(m: &Module, max: u64) -> (Vec<Span>, Option<Span>) {
+        let (marks, _, stop) = run(m, max);
+        (marks, stop)
+    }
+
+    /// `trace`, and the lines the run's `exhale`s wrote.
+    pub fn run(m: &Module, max: u64) -> (Vec<Span>, Vec<String>, Option<Span>) {
         let mut r = Run {
             m,
             frames: Vec::new(),
             marks: Vec::new(),
+            out: Vec::new(),
             max,
             err: None,
         };
@@ -564,7 +585,7 @@ mod marks {
             .call(FuncId(0), Vec::new())
             .is_none()
             .then(|| r.err.expect("raised"));
-        (r.marks, stop)
+        (r.marks, r.out, stop)
     }
 
     impl Run<'_> {
@@ -618,6 +639,11 @@ mod marks {
                 }
             }
             Flow::Next
+        }
+
+        fn raise(&mut self, at: Span) -> Flow {
+            self.err = Some(at);
+            Flow::Throw
         }
 
         fn set(&mut self, i: &Instr, v: V) {
@@ -678,6 +704,8 @@ mod marks {
                         BinOp::Add => V::Int(a.int() + b.int()),
                         BinOp::Sub => V::Int(a.int() - b.int()),
                         BinOp::Mul => V::Int(a.int() * b.int()),
+                        BinOp::Div if b.int() == 0 => return self.raise(i.span),
+                        BinOp::Div => V::Int(a.int() / b.int()),
                         BinOp::Eq => V::Bool(a == b),
                         BinOp::Ne => V::Bool(a != b),
                         BinOp::Lt => V::Bool(a.int() < b.int()),
@@ -694,6 +722,60 @@ mod marks {
                     self.set(i, V::List(v));
                 }
                 Kind::Closure(f) => self.set(i, V::Func(*f)),
+                // The tree-walker's checks and the positions it raises at.
+                Kind::Key(k) => match self.val(*k) {
+                    V::Str(s) => self.set(i, V::Str(s)),
+                    V::Int(n) => self.set(i, V::Str(n.to_string())),
+                    _ => return self.raise(i.span),
+                },
+                Kind::MakeMap(kv) => {
+                    let mut map = Vec::new();
+                    for (k, x) in kv {
+                        let k = match k {
+                            MapKey::Static(s) => s.clone(),
+                            MapKey::Dyn(d, _) => self.val(*d).show(),
+                        };
+                        map.push((k, self.val(*x)));
+                    }
+                    self.set(i, V::Map(map));
+                }
+                Kind::Member { obj, name, .. } => {
+                    let V::Map(map) = self.val(*obj) else {
+                        panic!("not a map")
+                    };
+                    let v = map
+                        .iter()
+                        .find(|(k, _)| k == name)
+                        .expect("the key")
+                        .1
+                        .clone();
+                    self.set(i, v);
+                }
+                Kind::Index { obj, idx, idx_at } => {
+                    let v = match (self.val(*obj), self.val(*idx)) {
+                        (V::List(xs), V::Int(n)) => xs[n as usize].clone(),
+                        (V::Map(map), V::Str(k)) => map
+                            .iter()
+                            .find(|(x, _)| *x == k)
+                            .expect("the key")
+                            .1
+                            .clone(),
+                        (V::List(_) | V::Map(_) | V::Str(_), _) => return self.raise(*idx_at),
+                        _ => return self.raise(i.span),
+                    };
+                    self.set(i, v);
+                }
+                Kind::SetIndex {
+                    obj,
+                    idx,
+                    obj_at,
+                    idx_at,
+                    ..
+                } => match (self.val(*obj), self.val(*idx)) {
+                    (V::List(_), V::Int(_)) | (V::Map(_), V::Str(_)) => {}
+                    (V::List(_) | V::Map(_), _) => return self.raise(*idx_at),
+                    _ => return self.raise(*obj_at),
+                },
                 Kind::CallUser { func, args } => {
                     let args = args.iter().map(|a| self.val(*a)).collect();
                     let v = self.call(*func, args);
@@ -707,7 +789,10 @@ mod marks {
                     let v = self.call(func, args);
                     return self.called(i, v);
                 }
-                Kind::Exhale(_) => {}
+                Kind::Exhale(vs) => {
+                    let line: Vec<String> = vs.iter().map(|v| self.val(*v).show()).collect();
+                    self.out.push(line.join(" "));
+                }
                 Kind::If {
                     cond,
                     then,
@@ -781,6 +866,36 @@ mod marks {
             Flow::Next
         }
     }
+}
+
+/// What the tree-walker writes for a script, and where an error stops it.
+fn walker_run(src: &str) -> (Vec<String>, Option<(u32, u32)>) {
+    use cigscript::burn::{Kernel, Mode};
+    use cigscript::interp::Interp;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    #[derive(Clone, Default)]
+    struct Sink(Rc<RefCell<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let program = cigscript::syntax::parse(src).expect("parses");
+    let sink = Sink::default();
+    let mut interp = Interp::new(Kernel::ephemeral(Mode::Run));
+    interp.out = Box::new(sink.clone());
+    interp.set_max_steps(0);
+    let stop = interp
+        .run_program(&program)
+        .err()
+        .map(|d| (d.line.unwrap_or(0), d.col.unwrap_or(0)));
+    let text = String::from_utf8(sink.0.borrow().clone()).unwrap();
+    (text.lines().map(str::to_string).collect(), stop)
 }
 
 /// The tree-walker's own count for a script, and where it stops when the
@@ -1121,5 +1236,107 @@ fn a_pure_read_moved_above_its_declaration_is_caught_v1() {
             .any(|x| x.code == "V1" && x.message.contains("before its declaration")),
         "{:#?}",
         e.errors
+    );
+}
+
+/// A run of `src` through the CIR evaluator after `passes` gives what the
+/// tree-walker gives: the same lines out, the same error position.
+fn same_as_the_walker(src: &str) {
+    let (want_out, want_stop) = walker_run(src);
+    for (n, passes) in [pass::level(0), pass::level(1)].into_iter().enumerate() {
+        let mut m = lower_source(src, "w.cig").unwrap();
+        run_passes(&mut m, &passes).unwrap();
+        let (_, out, stop) = marks::run(&m, 0);
+        let stop = stop.map(|s| (s.line, s.col));
+        assert_eq!((&out, stop), (&want_out, want_stop), "-O{n}: {src}");
+    }
+}
+
+#[test]
+fn a_computed_key_is_checked_before_the_next_value() {
+    // The first key is not a valid key; the second value would raise too.
+    // The tree-walker raises the key's error, at the key.
+    let src = "roll k = true\nexhale {[k]: 1, b: 1 / 0}\n";
+    assert_eq!(walker_run(src).1, Some((2, 10)));
+    same_as_the_walker(src);
+    let m = lower_source(src, "k.cig").unwrap();
+    let text = print::print(&m);
+    let key = text.find("key %").expect("a key instruction");
+    let div = text.find("bin /").expect("the division");
+    assert!(key < div, "the check comes before the next value: {text}");
+    // An int key is its text; a list key raises, after copy propagation
+    // put a value made elsewhere in its place.
+    same_as_the_walker("stick n = 7\nstick m = {[n]: 1}\nexhale m[\"7\"]\n");
+    same_as_the_walker("stick k = [1]\nexhale {[k]: 1}\n");
+}
+
+#[test]
+fn a_computed_key_runs_its_effects_before_the_next_value_reads_them() {
+    let src = "roll n = 0\npull bump() {\n  n += 1\n  snuff \"k\"\n}\nstick m = {[bump()]: n, b: n + 1}\nexhale m.k, m.b\n";
+    assert_eq!(walker_run(src), (vec!["1 2".to_string()], None));
+    same_as_the_walker(src);
+}
+
+#[test]
+fn an_index_keeps_its_operands_positions_through_the_passes() {
+    // Copy propagation puts a constant made on another line in place of
+    // each operand: the error positions stay the tree-walker's.
+    for src in [
+        // A wrong index type: at the index.
+        "stick xs = [1, 2]\nstick k = \"a\"\nexhale xs[k]\n",
+        // A value that cannot be indexed: at the whole expression.
+        "stick n = 5\nstick k = 0\nexhale n[k]\n",
+        // A store with a wrong index type: at the index.
+        "stick xs = [1]\nstick k = \"a\"\nxs[k] = 2\n",
+        // A store into a value that cannot be indexed: at the object.
+        "stick n = 5\nn[0] = 1\n",
+    ] {
+        assert!(walker_run(src).1.is_some(), "{src}");
+        same_as_the_walker(src);
+    }
+    let mut m = lower_source("stick xs = [1]\nstick k = \"a\"\nxs[k] = 2\n", "s.cig").unwrap();
+    run_passes(&mut m, &pass::default_passes()).unwrap();
+    let text = print::print(&m);
+    assert!(
+        !text.contains("load "),
+        "the operands were replaced: {text}"
+    );
+    assert!(text.contains("obj@3:1 idx@3:4"), "{text}");
+}
+
+#[test]
+fn an_operand_span_outside_its_instruction_is_caught_v2() {
+    let mut m = lower_source("stick xs = [1]\nexhale xs[0]\n", "v.cig").unwrap();
+    let outside = m.funcs[0].span;
+    for i in &mut m.funcs[0].body.instrs {
+        if let Kind::Index { idx_at, .. } = &mut i.kind {
+            *idx_at = outside;
+        }
+    }
+    let found = verify(&m);
+    assert!(
+        found
+            .iter()
+            .any(|e| e.code == "V2" && e.message.contains("index span")),
+        "{found:#?}"
+    );
+}
+
+/// Golden: a map literal lowered in the tree-walker's order (each
+/// computed key, its `key` check, then the entry's value), and the
+/// operand spans an index and a map's computed keys carry.
+#[test]
+fn a_map_and_an_index_match_their_golden_text() {
+    golden_for_pass("lower", "map-and-index", &[]);
+}
+
+/// Golden: `copy-prop` replaces every operand of an index and an indexed
+/// store; the operands' own spans stay on the instructions.
+#[test]
+fn copy_prop_keeps_index_operand_spans_golden() {
+    golden_for_pass(
+        "copy-prop",
+        "index-operands",
+        &[&pass::CopyProp as &dyn Pass],
     );
 }

@@ -9,7 +9,7 @@
 //! | rule | holds |
 //! |---|---|
 //! | V1 | ids are unique, and a value is used only where it is defined; a slot read as pure (a `stick` read in the function that owns it) is read only after its declaration |
-//! | V2 | every instruction and function has a span |
+//! | V2 | every instruction and function has a span; an index, an indexed store and a map's computed keys carry their operands' own spans, each inside the instruction's |
 //! | V3 | a terminator ends its block; `yield` ends a value block, and only one; `break` and `continue` sit in loops; the top level does not `ret` |
 //! | V4 | a `burn.op` sits in a burn, or in a function that requires one |
 //! | V5 | `requires_burn` is what the call graph says |
@@ -141,6 +141,23 @@ fn each<'a>(b: &'a Block, f: &mut dyn FnMut(&'a Instr)) {
         for blk in i.kind.blocks() {
             each(blk, f);
         }
+    }
+}
+
+/// The operand spans an instruction carries, by name: where the
+/// tree-walker raises an error about that operand.
+fn operand_spans(k: &Kind) -> Vec<(&'static str, Span)> {
+    match k {
+        Kind::Index { idx_at, .. } => vec![("index", *idx_at)],
+        Kind::SetIndex { obj_at, idx_at, .. } => vec![("object", *obj_at), ("index", *idx_at)],
+        Kind::MakeMap(kv) => kv
+            .iter()
+            .filter_map(|(k, _)| match k {
+                MapKey::Dyn(_, at) => Some(("key", *at)),
+                MapKey::Static(_) => None,
+            })
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -419,6 +436,19 @@ impl Walk<'_> {
             // V2: spans.
             if i.span.line < 1 || i.span.start > i.span.end {
                 self.err("V2", i.span, "an instruction without a span".to_string());
+            }
+            for (name, at) in operand_spans(&i.kind) {
+                let inside = at.start >= i.span.start && at.end <= i.span.end;
+                if at.line < 1 || at.start > at.end || !inside {
+                    self.err(
+                        "V2",
+                        i.span,
+                        format!(
+                            "the {name} span {}:{} is not a span inside the instruction's",
+                            at.line, at.col
+                        ),
+                    );
+                }
             }
             // V3: terminators.
             if i.kind.is_terminator() && !last {
@@ -924,6 +954,7 @@ fn tag(k: &Kind) -> &'static str {
         Kind::MakeMap(_) => "map",
         Kind::Member { .. } => "member",
         Kind::Index { .. } => "index",
+        Kind::Key(_) => "key",
         Kind::SetIndex { .. } => "set.index",
         Kind::SetMember { .. } => "set.member",
         Kind::BurnOp { .. } => "burn.op",

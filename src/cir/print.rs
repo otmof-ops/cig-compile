@@ -6,6 +6,7 @@
 
 use super::ir::*;
 use cigscript::syntax::ast::{AssignOp, BinOp, BurnClass, UnOp};
+use cigscript::syntax::span::Span;
 use std::fmt::Write as _;
 
 pub fn print(m: &Module) -> String {
@@ -73,14 +74,18 @@ fn konst(c: &Const) -> String {
 }
 
 fn line(out: &mut String, depth: usize, text: &str, i: &Instr) {
+    line_at(out, depth, text, i, &[]);
+}
+
+/// A line whose span column also carries the operands' own spans, by
+/// name (`idx@3:10`): the positions an error is raised at.
+fn line_at(out: &mut String, depth: usize, text: &str, i: &Instr, parts: &[(&str, Span)]) {
     let pad = "  ".repeat(depth);
-    let _ = writeln!(
-        out,
-        "{:<60} @{}:{}",
-        format!("{pad}{text}"),
-        i.span.line,
-        i.span.col
-    );
+    let mut at = format!("@{}:{}", i.span.line, i.span.col);
+    for (name, s) in parts {
+        let _ = write!(at, " {name}@{}:{}", s.line, s.col);
+    }
+    let _ = writeln!(out, "{:<60} {at}", format!("{pad}{text}"));
 }
 
 fn close(out: &mut String, depth: usize, text: &str) {
@@ -134,16 +139,25 @@ fn block(m: &Module, b: &Block, depth: usize, out: &mut String) {
                     .iter()
                     .map(|(k, v)| match k {
                         MapKey::Static(s) => format!("{s:?}: %{}", v.0),
-                        MapKey::Dyn(d) => format!("[%{}]: %{}", d.0, v.0),
+                        MapKey::Dyn(d, _) => format!("[%{}]: %{}", d.0, v.0),
                     })
                     .collect();
-                line(
+                let keys: Vec<(&str, Span)> = kv
+                    .iter()
+                    .filter_map(|(k, _)| match k {
+                        MapKey::Dyn(_, at) => Some(("key", *at)),
+                        MapKey::Static(_) => None,
+                    })
+                    .collect();
+                line_at(
                     out,
                     depth,
                     &simple(format!("map {{{}}}", parts.join(", "))),
                     i,
+                    &keys,
                 )
             }
+            Kind::Key(k) => line(out, depth, &simple(format!("key %{}", k.0)), i),
             Kind::Interp(p) => {
                 let parts: Vec<String> = p
                     .iter()
@@ -169,13 +183,21 @@ fn block(m: &Module, b: &Block, depth: usize, out: &mut String) {
                 )),
                 i,
             ),
-            Kind::Index { obj, idx } => line(
+            Kind::Index { obj, idx, idx_at } => line_at(
                 out,
                 depth,
                 &simple(format!("index %{}[%{}]", obj.0, idx.0)),
                 i,
+                &[("idx", *idx_at)],
             ),
-            Kind::SetIndex { obj, idx, op, val } => line(
+            Kind::SetIndex {
+                obj,
+                idx,
+                op,
+                val,
+                obj_at,
+                idx_at,
+            } => line_at(
                 out,
                 depth,
                 &format!(
@@ -186,6 +208,7 @@ fn block(m: &Module, b: &Block, depth: usize, out: &mut String) {
                     val.0
                 ),
                 i,
+                &[("obj", *obj_at), ("idx", *idx_at)],
             ),
             Kind::SetMember { obj, name, op, val } => line(
                 out,
