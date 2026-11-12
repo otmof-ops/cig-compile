@@ -1797,9 +1797,36 @@ mod tests {
 
     /// A child's peak memory is its own: the bench's earlier peak (here a
     /// 96 MiB buffer, touched and freed) does not show in the child's row.
+    /// The probe runs in a process of its own: a forked child starts with
+    /// what its parent has resident, and beside this test the harness runs
+    /// others that hold a runtime's bytes each.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_benchmarks_peak_memory_is_its_own_not_the_benchs() {
+        let exe = std::env::current_exe().expect("the test binary");
+        let out = Command::new(exe)
+            .args([
+                "--exact",
+                "bench::tests::the_peak_probe_in_a_process_of_its_own",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .expect("run the probe");
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && said.contains("1 passed"),
+            "the probe failed or did not run:\n{said}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// The probe `a_benchmarks_peak_memory_is_its_own_not_the_benchs` starts.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "started by a_benchmarks_peak_memory_is_its_own_not_the_benchs, alone in its process"]
+    fn the_peak_probe_in_a_process_of_its_own() {
         const BIG: usize = 96 << 20;
         let mut big = vec![0u8; BIG];
         for i in (0..BIG).step_by(4096) {
