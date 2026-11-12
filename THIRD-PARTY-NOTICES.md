@@ -1,6 +1,6 @@
 # Third-party notices
 
-cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothing is vendored); cig-runtime is cig itself, built from the `cigscript` crate (CigScript, https://github.com/otmof-ops/cig-script, Apache-2.0, whose NOTICE travels with it). Every crate is under a permissive license compatible with Apache-2.0; where a crate offers a choice (`OR`), the permissive option is the one taken. Holder names come from each crate's metadata; `unrecorded` means the crate publishes no author field. Regenerate with `cargo license --avoid-dev-deps --json` (cargo-license) and `ci/gen-third-party.py`.
+cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothing is vendored); cig-runtime is cig itself, built from the `cigscript` crate (CigScript, https://github.com/otmof-ops/cig-script, FSL-1.1-ALv2 from v1.21.0, Apache-2.0 for releases through v1.20.0). Every linked crate is under a permissive or source-available license whose use in cigcompile and in a compiled program is allowed; where a crate offers a choice (`OR`), the permissive option is the one taken. Holder names come from each crate's metadata; `unrecorded` means the crate publishes no author field. Regenerate with `cargo license --avoid-dev-deps --json` (cargo-license) and `ci/gen-third-party.py`.
 
 ## Apache-2.0 OR MIT
 
@@ -97,6 +97,7 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 | inout | 0.1.4 | RustCrypto Developers | https://github.com/RustCrypto/utils |
 | is_terminal_polyfill | 1.70.2 | unrecorded | https://github.com/polyfill-rs/is_terminal_polyfill |
 | itoa | 1.0.18 | David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/itoa |
+| jobserver | 0.1.35 | Alex Crichton <alex@alexcrichton.com> | https://github.com/rust-lang/jobserver-rs |
 | js-sys | 0.3.107 | The wasm-bindgen Developers | https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys |
 | keyring | 3.6.3 | Walther Chen <walther.chen@gmail.com>, Daniel Brotsky <dev@brotsky.com> | https://github.com/hwchen/keyring-rs.git |
 | libc | 0.2.191 | unrecorded | https://github.com/rust-lang/libc |
@@ -211,7 +212,9 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 | endi | 1.1.1 | Zeeshan Ali Khan <zeenix@gmail.com> | https://github.com/zeenix/endi |
 | fastcdc | 3.2.1 | Nathan Fiedler <nathanfiedler@fastmail.fm> | https://github.com/nlfiedler/fastcdc-rs |
 | generic-array | 0.14.7 | Bartłomiej Kamiński <fizyk20@gmail.com>, Aaron Trent <novacrazy@gmail.com> | https://github.com/fizyk20/generic-array.git |
+| libmimalloc-sys | 0.1.49 | Octavian Oncescu <octavonce@gmail.com> | https://github.com/purpleprotocol/mimalloc_rust/tree/master/libmimalloc-sys |
 | memoffset | 0.9.1 | Gilad Naaman <gilad.naaman@gmail.com> | https://github.com/Gilnaa/memoffset |
+| mimalloc | 0.1.52 | Octavian Oncescu <octavonce@gmail.com>, Vincent Rouillé <vincent@speedy37.fr>, Thom Chiovoloni <chiovolonit@gmail.com> | https://github.com/purpleprotocol/mimalloc_rust |
 | nix | 0.29.0 | The nix-rust Project Developers | https://github.com/nix-rust/nix |
 | simd-adler32 | 0.3.10 | Marvin Countryman <me@maar.vin> | https://github.com/mcountryman/simd-adler32 |
 | slab | 0.4.12 | Carl Lerche <me@carllerche.com> | https://github.com/tokio-rs/slab |
@@ -243,14 +246,6 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 | walkdir | 2.5.0 | Andrew Gallant <jamslam@gmail.com> | https://github.com/BurntSushi/walkdir |
 | winapi-util | 0.1.11 | Andrew Gallant <jamslam@gmail.com> | https://github.com/BurntSushi/winapi-util |
 
-## Apache-2.0 OR Apache-2.0 WITH LLVM-exception OR MIT
-
-| crate | version | holder | source |
-|---|---|---|---|
-| linux-raw-sys | 0.12.1 | Dan Gohman <dev@sunfishcode.online> | https://github.com/sunfishcode/linux-raw-sys |
-| rustix | 1.1.6 | Dan Gohman <dev@sunfishcode.online>, Jakub Konka <kubkon@jakubkonka.com> | https://github.com/bytecodealliance/rustix |
-| wasi | 0.11.1+wasi-snapshot-preview1 | The Cranelift Project Developers | https://github.com/bytecodealliance/wasi |
-
 ## BSD-3-Clause
 
 | crate | version | holder | source |
@@ -258,6 +253,26 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 | curve25519-dalek | 4.1.3 | Isis Lovecruft <isis@patternsinthevoid.net>, Henry de Valence <hdevalence@hdevalence.ca> | https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25519-dalek |
 | ed25519-dalek | 2.2.0 | isis lovecruft <isis@patternsinthevoid.net>, Tony Arcieri <bascule@gmail.com>, Michael Rosenberg <michael@mrosenberg.pub> | https://github.com/dalek-cryptography/curve25519-dalek/tree/main/ed25519-dalek |
 | subtle | 2.6.1 | Isis Lovecruft <isis@patternsinthevoid.net>, Henry de Valence <hdevalence@hdevalence.ca> | https://github.com/dalek-cryptography/subtle |
+| zstd | 0.13.4 | Alexandre Bury <alexandre.bury@gmail.com> | https://github.com/gyscos/zstd-rs |
+| zstd-safe | 7.4.0 | Alexandre Bury <alexandre.bury@gmail.com> | https://github.com/gyscos/zstd-rs |
+| zstd-sys | 2.1.2+zstd.1.5.7 | Alexandre Bury <alexandre.bury@gmail.com> | https://github.com/gyscos/zstd-rs |
+
+## FSL-1.1-ALv2
+
+| crate | version | holder | source |
+|---|---|---|---|
+| cig-pass | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
+| cig-vault | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
+| cigarscript | 0.1.0 | unrecorded | https://github.com/otmof-ops/cigar-script |
+| cigscript | 1.21.0 | unrecorded | https://github.com/otmof-ops/cig-script |
+
+## Apache-2.0 OR Apache-2.0 WITH LLVM-exception OR MIT
+
+| crate | version | holder | source |
+|---|---|---|---|
+| linux-raw-sys | 0.12.1 | Dan Gohman <dev@sunfishcode.online> | https://github.com/sunfishcode/linux-raw-sys |
+| rustix | 1.1.6 | Dan Gohman <dev@sunfishcode.online>, Jakub Konka <kubkon@jakubkonka.com> | https://github.com/bytecodealliance/rustix |
+| wasi | 0.11.1+wasi-snapshot-preview1 | The Cranelift Project Developers | https://github.com/bytecodealliance/wasi |
 
 ## Apache-2.0
 

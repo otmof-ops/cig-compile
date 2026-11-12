@@ -366,7 +366,7 @@ impl Lowerer<'_> {
                 // The value first, then the target (eval.rs).
                 let v = self.expr(value, out)?;
                 match target {
-                    AssignTarget::Var(name) => {
+                    AssignTarget::Var(name, _) => {
                         let Name::Var(var, _) = self.resolve(name)? else {
                             return Err(format!("assignment to the prelude name `{name}`"));
                         };
@@ -394,7 +394,7 @@ impl Lowerer<'_> {
                             None,
                         );
                     }
-                    AssignTarget::Member { object, name } => {
+                    AssignTarget::Member { object, name, .. } => {
                         let obj = self.expr(object, out)?;
                         self.emit(
                             out,
@@ -882,7 +882,9 @@ impl Lowerer<'_> {
                 args,
                 safe,
             } => self.method(receiver, name, args, *safe, span, out, None)?,
-            ExprKind::Member { object, name, safe } => {
+            ExprKind::Member {
+                object, name, safe, ..
+            } => {
                 // `a?.k` evaluates nothing after `a`, and is null for a null
                 // `a` and for a map without `k` (eval.rs member()): one
                 // instruction carries both rules.
@@ -934,6 +936,7 @@ impl Lowerer<'_> {
                         object,
                         name,
                         safe: false,
+                        ..
                     } if self.module_ident(object) => {
                         self.method(object, name, &[], false, rhs.span, out, Some(l))?
                     }
