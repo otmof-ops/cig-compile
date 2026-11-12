@@ -6,7 +6,7 @@
 
 1. **Output first.** Each implementation runs once, and its output is compared with the benchmark's `.expect` file. One that differs is WRONG, gets no time, and fails the run: a fast wrong answer is a bug, not a result.
 2. **Samples.** Each side then runs until it has `--runs` samples (10 by default), or until it has three and has run for three seconds.
-3. **Statistics.** The report gives the median, the 10th and 90th percentiles, the coefficient of variation, and the peak resident set (from `wait4`, on Unix). A side whose CV is over 5% is marked `~`, noisy.
+3. **Statistics.** The report gives the median, the 10th and 90th percentiles, the coefficient of variation, and the peak resident set (from `wait4`, on Unix). A side whose CV is over 5% is marked `~`, noisy. **The peak is the program's own.** Linux folds the parent's peak into a child's at `exec`, so a run started by the bench reports at least the bench's own peak: before 0.4.1 every row did (the bench held the runtime it had read, 15.8 MB for cig 1.21.0, and CI's table read 24.7 to 25.0 MB on cig 1.20.0's runtime and 28.3 to 28.4 MB on 1.21.0's, the same figure for every program that uses less than the bench). Now the bench lets go of the runtime's bytes before it runs anything, and takes each side's peak from one more run that is not timed: on Linux that run forks (sharing no file pages with the bench) and sets the child's mark back to what it has resident (`5` to `/proc/self/clear_refs`) before `exec`; elsewhere it is that run's `wait4`. The timed runs are started as before. `a_benchmarks_peak_memory_is_its_own_not_the_benchs` holds it. A program just written by `cigcompile build` can map its code in large page-cache folios on a kernel that has them (Linux 6.17 on ext4: hello 10.9 MB just built, 5.4 MB once the file is rewritten); both sides of a gate run just-built programs, so they compare like with like.
 4. **Conditions.** Every report starts with the CPU, cores, kernel, CPU governor, the cig and cigcompile versions, `CIG_SEAL_KEY` and the runtime's sha256.
 5. **References.** `--ref` runs the Python, Node and Rust versions in `bench/ref/` too, where `python3`, `node` and `rustc` are installed (`rustc -O`), and gives cig's ratio to each. Each reference is held to the same `.expect` file.
 
@@ -104,6 +104,16 @@ A benchmark whose CV is over 5% on either side is **noisy**: it is in the table,
 
 **Trend.** `bench.yml` runs nightly: the set against its references, then `bench --json` into `history/<date>.json`, joined with the last run's history, kept as the `bench-history` artifact (thirty nights, 90 days), and `bench --trend history` fails the run at five slower nights. The step is 0.5% and the length five because #30 says "five nightlies in a row each slower" and a night-to-night difference under the harness's own noise is the same night. The nightly also runs `references_agree_with_the_expect_files`.
 
+### Compiled peak memory: the budget
+
+The memory gate holds a pull request to `main`; the budget holds a compiled program to a number (CigCompile 1.0 row 6). `cigcompile bench` reports it with the other budgets, and `--budgets` fails the run when it is missed:
+
+| what | budget | held | measured |
+|---|---|---|---|
+| peak memory of a compiled hello, real run, just built | under 14 MB | Linux | 5.9 MB on the runtime whose heap starts in 4 KiB pages, the file cold; 11.5 MB just built on Linux 6.17 (large page-cache folios); 17.5 MB on cig 1.21.0 as released, whose heap was in 2 MiB pages |
+
+The runtime's own share is held in cig-script (`tests/heap_pages.rs`: a dry-run hello under 9 MiB, and the heap's first 8 MiB in 4 KiB pages). Data-heavy programs are held by the memory gate, against `main`.
+
 ### Tests
 
 | test | what it holds |
@@ -115,6 +125,8 @@ A benchmark whose CV is over 5% on either side is **noisy**: it is in the table,
 | `the_geomean_gate_trips_at_two_percent` | every benchmark 3% slower fails the set, 1% does not |
 | `the_regression_gate_stays_quiet_on_noise` | 200 seeds of the same program measured twice: no failure |
 | `the_memory_gate_trips_over_ten_percent` | peak RSS and allocations |
+| `a_benchmarks_peak_memory_is_its_own_not_the_benchs` | a row's peak is the program's, not the bench's (Linux) |
+| `a_compiled_hello_over_its_memory_budget_is_missed` | the compiled hello's memory budget |
 | `the_regression_gate_trips_from_the_command_line` | `--against` and `--current` exit codes, pooling, a file that is not a result |
 | `the_nightly_trend_fails_after_five_slower_nights` | five fail, four do not, a faster night ends the run |
 | `the_markdown_report_renders` | the pull request table |

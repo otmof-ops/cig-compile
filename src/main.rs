@@ -507,9 +507,12 @@ fn run() -> i32 {
             let found = runtime::find(runtime::host(), a.runtime.as_deref(), &mut index);
             index.save();
             match found {
-                Ok(rt) => bench::bench(
+                Ok(mut rt) => bench::bench(
                     &ctx,
-                    &rt,
+                    &{
+                        rt.release_bytes();
+                        rt
+                    },
                     &bench::Opts {
                         runs: a.runs.max(1),
                         budgets: a.budgets,

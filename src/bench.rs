@@ -783,7 +783,10 @@ fn sample(runs: usize, expect: &str, mut make: impl FnMut(usize) -> Command) -> 
             Err(e) => return Side::Wrong(e),
         }
     }
-    Side::Timed(Stats::of(&ms, rss))
+    // The peak from one more run of its own (see `peak_rss`); the timed
+    // runs' figure only where that run has none.
+    let peak = peak_rss(&mut make(runs.max(1) + 1)).or(rss);
+    Side::Timed(Stats::of(&ms, peak))
 }
 
 fn clip(s: &str) -> String {
@@ -800,6 +803,45 @@ struct Measured {
     ms: f64,
     stdout: String,
     rss: Option<u64>,
+}
+
+/// A command's peak resident set, from one more run that is not timed.
+///
+/// Linux folds the parent's peak into a child's `ru_maxrss` when the child
+/// execs (the old address space's high-water mark is kept), so the peak a
+/// timed run reports is at least the bench's own: the bench holds its code,
+/// the runtime it read when it loaded it (15.8 MB for cig 1.21.0) and its
+/// results. On Linux this run forks (no shared address space) and, in the
+/// child before `exec`, sets the child's mark back to what it has resident
+/// (`5` to `/proc/self/clear_refs`): a forked child shares no file pages and
+/// little else, so the peak is the program's own. Elsewhere it is `wait4`'s
+/// figure for the run.
+fn peak_rss(c: &mut Command) -> Option<u64> {
+    c.stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: the closure runs in the forked child before `exec` and
+        // makes only async-signal-safe calls (open, write, close) on a
+        // constant path, touching no memory of the parent's.
+        unsafe {
+            c.pre_exec(|| {
+                let fd = libc::open(c"/proc/self/clear_refs".as_ptr(), libc::O_WRONLY);
+                if fd >= 0 {
+                    libc::write(fd, b"5".as_ptr().cast(), 1);
+                    libc::close(fd);
+                }
+                Ok(())
+            });
+        }
+    }
+    let mut child = c.spawn().ok()?;
+    let (ok, _, rss) = wait(&mut child);
+    if ok {
+        rss
+    } else {
+        None
+    }
 }
 
 /// Run a command to its end; a command that fails is an error, never a time.
@@ -1076,6 +1118,13 @@ impl Conditions {
 
 type Check = (String, String, String, bool, bool);
 
+/// A compiled hello's peak resident set, real run: 4.4 MB on cig 1.20.0's
+/// runtime once the file is cold, 5.9 MB on the runtime whose heap starts in
+/// 4 KiB pages; 11.5 MB straight after `cigcompile build` on a kernel that
+/// maps the new file in large page-cache folios (Linux 6.17, ext4). cig
+/// 1.21.0 as released peaked at 17.5 MB there (its heap in 2 MiB pages).
+const HELLO_PEAK_BUDGET: u64 = 14_000_000;
+
 fn budgets(rows: &[Row], noop_ms: Option<f64>, orchestrate_ms: Option<f64>) -> Vec<Check> {
     let median_of = |r: &Row, compiled: bool| {
         (if compiled {
@@ -1128,6 +1177,19 @@ fn budgets(rows: &[Row], noop_ms: Option<f64>, orchestrate_ms: Option<f64>) -> V
             hello.is_some_and(|h| h.bytes < 4_000_000),
         ),
     ]);
+    // Compiled peak memory has a budget of its own (cig-compile#30): held on
+    // Linux, where the peak is the program's own (see `peak_rss`); a side
+    // with no figure is not measured, never missed.
+    let hello_peak = hello.and_then(|h| h.compiled.stats()).and_then(|s| s.rss);
+    if let Some(bytes) = hello_peak {
+        checks.push((
+            "peak memory of a compiled hello".into(),
+            format!("under {} MB (Linux)", HELLO_PEAK_BUDGET / 1_000_000),
+            format!("{:.1} MB", bytes as f64 / 1e6),
+            cfg!(target_os = "linux"),
+            bytes < HELLO_PEAK_BUDGET,
+        ));
+    }
     if let Some(ms) = orchestrate_ms {
         checks.push((
             "full build of orchestrate.cig".into(),
@@ -1731,6 +1793,58 @@ mod tests {
         assert_eq!((n.p10, n.median, n.p90), (7.0, 10.0, 14.0));
         assert_eq!(n.rss, Some(5));
         assert_eq!(Stats::of(&[], None), Stats::default());
+    }
+
+    /// A child's peak memory is its own: the bench's earlier peak (here a
+    /// 96 MiB buffer, touched and freed) does not show in the child's row.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_benchmarks_peak_memory_is_its_own_not_the_benchs() {
+        const BIG: usize = 96 << 20;
+        let mut big = vec![0u8; BIG];
+        for i in (0..BIG).step_by(4096) {
+            big[i] = 1;
+        }
+        std::hint::black_box(&big);
+        drop(big);
+        let rss = peak_rss(Command::new("true").stdin(Stdio::null())).expect("a peak on Linux");
+        assert!(
+            rss < (BIG as u64) / 2,
+            "the child's peak is {rss} bytes, which carries the bench's own {BIG}"
+        );
+    }
+
+    /// Compiled peak memory has an explicit budget (cig-compile#30): a hello
+    /// over it is missed where it is held, one under it is met, and a hello
+    /// with no figure has no row.
+    #[test]
+    fn a_compiled_hello_over_its_memory_budget_is_missed() {
+        let row = |rss: Option<u64>| Row {
+            name: "hello".into(),
+            build_ms: 1.0,
+            bytes: 1,
+            interpreted: Side::Timed(Stats::of(&[5.0], rss)),
+            compiled: Side::Timed(Stats::of(&[4.0], rss)),
+            interpreted_5x: None,
+            compiled_5x: None,
+            refs: Vec::new(),
+            refs_5x: Vec::new(),
+            allocs: None,
+        };
+        let peak = |rss| {
+            budgets(&[row(rss)], None, None)
+                .into_iter()
+                .find(|c| c.0 == "peak memory of a compiled hello")
+        };
+        let over = peak(Some(17_500_000)).expect("a row");
+        assert_eq!(
+            (over.3, over.4),
+            (cfg!(target_os = "linux"), false),
+            "{over:?}"
+        );
+        let under = peak(Some(5_000_000)).expect("a row");
+        assert!(under.4, "{under:?}");
+        assert!(peak(None).is_none());
     }
 
     #[test]

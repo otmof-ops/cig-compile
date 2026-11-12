@@ -192,6 +192,14 @@ impl Runtime {
         Ok(self.bytes.get().expect("set above"))
     }
 
+    /// Let go of the bytes read when the runtime was checked; the next
+    /// [`Runtime::bytes`] reads them again. `cigcompile bench` does this
+    /// before it runs anything, so the runtime it holds is not part of the
+    /// resident set every benchmark starts from.
+    pub fn release_bytes(&mut self) {
+        self.bytes = std::cell::OnceCell::new();
+    }
+
     /// The runtime's sha256, hex, worked out once a build.
     pub fn sha256(&self) -> std::io::Result<&str> {
         if self.sha256.get().is_none() {

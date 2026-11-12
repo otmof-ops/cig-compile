@@ -38,6 +38,24 @@ project follows semantic versioning.
   twins. `each_pass_has_a_negative_test_that_is_caught` runs the twin of
   every pass in `pass::NAMES`, and `remarks_name_their_sites` holds
   `--remarks` to a golden.
+- **The bench's peak memory is the program's own (#30; carton 0.2.0 row 10).** Linux folds
+  the parent's peak into a child's at `exec`, and the bench held the runtime it had read
+  (15.8 MB for cig 1.21.0), so every row's peak was at least the bench's: CI read 24.7 to
+  25.0 MB on cig 1.20.0's runtime and 28.3 to 28.4 MB on 1.21.0's for hello and every other
+  small program alike. That is the "+3.5 MB on every program" 0.4.0 shipped as an accepted
+  exception; the programs' own peaks had moved more (hello 5.2 to 13.9 MB, a dry run). The
+  bench now lets go of the runtime's bytes before it runs anything, and takes each side's
+  peak from one more run that is not timed: on Linux it forks and sets the child's mark back
+  to what it has resident (`/proc/self/clear_refs`) before `exec`. Timed runs start as
+  before. `a_benchmarks_peak_memory_is_its_own_not_the_benchs` holds it (docs/BENCHMARKS.md,
+  "How a benchmark is measured").
+- **Compiled peak memory has a budget (CigCompile 1.0 row 6).** `cigcompile bench` reports
+  "peak memory of a compiled hello", under 14 MB, held on Linux: 5.9 MB on the runtime whose
+  heap starts in small pages once the file is cold, 11.5 MB straight after the build on a
+  kernel that maps a new file in large page-cache folios, 17.5 MB on cig 1.21.0 as released.
+  `a_compiled_hello_over_its_memory_budget_is_missed` holds it. It needs the runtime from
+  cig-script's next release (a short program's heap in small pages again); on cig 1.21.0 as
+  released it is missed.
 
 ## 0.4.0 — 2026-11-12
 
