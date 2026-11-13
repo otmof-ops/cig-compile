@@ -68,6 +68,8 @@ fn interp(max_steps: u64) -> Run {
     i.out = Box::new(out.clone());
     i.err = Box::new(err.clone());
     i.set_max_steps(max_steps);
+    // `args`, read as a value by the prelude programs.
+    i.set_args(&["one".to_string(), "two".to_string()]);
     Run {
         interp: i,
         out,
@@ -490,6 +492,97 @@ fn corpus() -> Vec<(String, String)> {
         "module-call",
         "exhale math.floor(2.5), path.join(\"a\", \"b\"), text.split(\"a,b\", \",\")\n",
     );
+
+    // ----- try, ashtray, finally, cough -----
+    add("try-catch", "try {\n  cough \"boom\"\n} ashtray e {\n  exhale e.message, e.kind, e.line\n}\nexhale \"after\"\n");
+    add("try-catch-map", "try {\n  cough {message: \"m\", code: 7}\n} ashtray e {\n  exhale e.message, e.code, e\n}\n");
+    add(
+        "try-catch-value",
+        "try {\n  cough [1, 2]\n} ashtray e {\n  exhale e\n}\n",
+    );
+    add(
+        "try-no-binding",
+        "try {\n  roll x = 1 / 0\n} ashtray {\n  exhale \"caught\"\n}\nexhale \"after\"\n",
+    );
+    add(
+        "try-builtin-error",
+        "try {\n  exhale int(\"x\")\n} ashtray e {\n  exhale e.kind, e.message, e.line\n}\n",
+    );
+    add(
+        "try-no-error",
+        "try {\n  exhale 1\n} ashtray e {\n  exhale 2\n} finally {\n  exhale 3\n}\nexhale 4\n",
+    );
+    add(
+        "try-empty-body",
+        "try {\n} finally {\n  exhale 1\n}\ntry {\n} ashtray e {\n  exhale 2\n}\n",
+    );
+    add(
+        "finally-fall-through",
+        "try {\n  exhale \"body\"\n} finally {\n  exhale \"fin\"\n}\nexhale \"after\"\n",
+    );
+    add(
+        "finally-error",
+        "try {\n  roll x = 1 / 0\n} finally {\n  exhale \"fin\"\n}\nexhale \"never\"\n",
+    );
+    add("finally-after-catch", "try {\n  cough \"a\"\n} ashtray e {\n  exhale \"caught\", e.message\n} finally {\n  exhale \"fin\"\n}\n");
+    add("finally-break", "roll i = 0\nwhile true {\n  try {\n    i += 1\n    if i == 3 {\n      break\n    }\n  } finally {\n    exhale \"fin\", i\n  }\n}\nexhale \"out\", i\n");
+    add("finally-continue", "roll t = []\nfor i in 0..4 {\n  try {\n    if i % 2 == 0 {\n      continue\n    }\n    t.push(i)\n  } finally {\n    t.push(i * 10)\n  }\n}\nexhale t\n");
+    add("finally-snuff", "pull f(x) {\n  try {\n    snuff x * 2\n  } finally {\n    exhale \"fin\"\n    roll y = 100\n    roll z = y + 1\n    exhale z\n  }\n}\nexhale f(5)\n");
+    add("finally-snuff-keeps-value", "pull f() {\n  roll x = 1\n  try {\n    snuff x\n  } finally {\n    x = 2\n  }\n}\nexhale f()\n");
+    add("snuff-in-catch", "pull f() {\n  try {\n    cough \"x\"\n  } ashtray e {\n    snuff \"from catch \" + e.message\n  } finally {\n    exhale \"fin\"\n  }\n  snuff \"never\"\n}\nexhale f()\n");
+    add("snuff-in-try-in-loop", "pull find(xs, t) {\n  for x in xs {\n    try {\n      if x == t {\n        snuff x * 100\n      }\n    } finally {\n      exhale \"check\", x\n    }\n  }\n  snuff null\n}\nexhale find([1, 2, 3], 2), find([4], 9)\n");
+    add("snuff-in-try-in-while", "pull f(n) {\n  roll i = 0\n  while true {\n    i += 1\n    try {\n      if i == n {\n        snuff i\n      }\n    } ashtray e {\n      exhale \"no\"\n    }\n  }\n}\nexhale f(4)\n");
+    add("break-from-finally", "roll n = 0\nwhile n < 5 {\n  n += 1\n  try {\n    cough \"x\"\n  } finally {\n    break\n  }\n}\nexhale n\n");
+    add("continue-from-finally", "roll n = 0\nfor i in 0..3 {\n  try {\n    cough \"x\"\n  } finally {\n    n += 1\n    continue\n  }\n}\nexhale n\n");
+    add("snuff-from-finally", "pull f() {\n  try {\n    snuff 1\n  } finally {\n    snuff 2\n  }\n}\npull g() {\n  try {\n    cough \"lost\"\n  } finally {\n    snuff 3\n  }\n}\nexhale f(), g()\n");
+    add("break-crosses-two", "for i in 0..3 {\n  try {\n    try {\n      if i == 1 {\n        break\n      }\n    } finally {\n      exhale \"a\", i\n    }\n  } finally {\n    exhale \"b\", i\n  }\n}\nexhale \"out\"\n");
+    add("continue-in-catch", "for i in 0..3 {\n  try {\n    cough i\n  } ashtray e {\n    if e.value == 1 {\n      continue\n    }\n    exhale \"c\", i\n  } finally {\n    exhale \"f\", i\n  }\n}\n");
+    add("nested-handlers", "try {\n  try {\n    cough \"inner\"\n  } ashtray e {\n    exhale \"in\", e.message\n    cough \"again\"\n  } finally {\n    exhale \"inner fin\"\n  }\n} ashtray e {\n  exhale \"out\", e.message\n} finally {\n  exhale \"outer fin\"\n}\n");
+    add("try-in-catch", "try {\n  cough 1\n} ashtray e {\n  try {\n    cough 2\n  } ashtray f {\n    exhale e.value, f.value\n  }\n}\n");
+    add("error-in-finally-replaces", "try {\n  try {\n    cough \"first\"\n  } finally {\n    cough \"second\"\n  }\n} ashtray e {\n  exhale e.message\n}\n");
+    add(
+        "error-in-finally-uncaught",
+        "try {\n  exhale 1\n} finally {\n  roll x = [1][5]\n}\n",
+    );
+    add(
+        "error-in-handler",
+        "try {\n  cough 1\n} ashtray e {\n  roll x = e.nope\n}\nexhale \"never\"\n",
+    );
+    add(
+        "error-in-handler-finally",
+        "try {\n  cough 1\n} ashtray e {\n  roll x = 1 / 0\n} finally {\n  exhale \"fin\"\n}\n",
+    );
+    add("error-in-callee", "pull bad(x) {\n  snuff x / 0\n}\ntry {\n  exhale bad(1)\n} ashtray e {\n  exhale e.message, e.line\n}\n");
+    add("error-through-callee-finally", "pull f() {\n  try {\n    cough \"deep\"\n  } finally {\n    exhale \"f fin\"\n  }\n}\npull g() {\n  f()\n}\ng()\n");
+    add("error-in-callback", "try {\n  roll ys = [1, \"a\"].map(pack(x) => x - 1)\n} ashtray e {\n  exhale e.message, e.line\n}\n");
+    add("cough-in-callback", "try {\n  [1, 2].map(pack(x) {\n    cough \"cb ${x}\"\n  })\n} ashtray e {\n  exhale e.message\n}\n");
+    add("catch-in-callback", "exhale [1, 2].map(pack(x) {\n  try {\n    cough x\n  } ashtray e {\n    snuff e.value * 10\n  }\n})\n");
+    add("try-in-loop", "roll t = 0\nfor i in 0..5 {\n  try {\n    if i % 2 == 0 {\n      cough i\n    }\n    t += 1\n  } ashtray e {\n    t += e.value * 10\n  }\n}\nexhale t\n");
+    add("captured-binding", "roll fs = []\nfor i in 0..3 {\n  try {\n    cough i\n  } ashtray e {\n    fs.push(pack() => e.value)\n  }\n}\nexhale fs[0](), fs[1](), fs[2]()\n");
+    add("catch-out-of-loops", "try {\n  for i in 0..3 {\n    roll n = 0\n    while true {\n      n += 1\n      if n > 2 {\n        cough \"x\"\n      }\n    }\n  }\n} ashtray e {\n  exhale e.message\n}\nroll k = 0\nwhile k < 2 {\n  k += 1\n}\nexhale \"done\", k\n");
+    add("exit-in-try", "try {\n  exhale \"a\"\n  exit(3)\n} ashtray e {\n  exhale \"caught?\"\n} finally {\n  exhale \"fin\"\n}\n");
+    add("cough-top", "roll a = 1\ncough \"top ${a}\"\n");
+    add(
+        "cough-map-top",
+        "cough {message: \"structured\", code: 7}\n",
+    );
+    add("cough-int-top", "cough 5\n");
+    add("recursion-caught", "pull r(n) {\n  snuff r(n + 1)\n}\ntry {\n  r(0)\n} ashtray e {\n  exhale e.kind, e.message\n}\n");
+    add("try-in-pull-many", "pull safe(x) {\n  try {\n    snuff 10 / x\n  } ashtray e {\n    snuff -1\n  }\n}\nroll t = []\nfor x in [1, 0, 5, 0] {\n  t.push(safe(x))\n}\nexhale t\n");
+
+    // ----- a prelude value used as a value -----
+    add("prelude-builtin", "roll f = len\nstick p = path\nexhale f(\"abc\"), p.join(\"a\", \"b\"), type_of(f), type_of(p)\n");
+    add("prelude-module", "roll m = math\nexhale m.floor(2.7), m\n");
+    add(
+        "prelude-args",
+        "exhale args, len(args)\nroll a = args\na.push(\"x\")\nexhale args\n",
+    );
+    add("prelude-callback", "roll g = str\nexhale [1, 2].map(g)\n");
+    add("prelude-wrong-arg", "roll f = len\nexhale f(5)\n");
+    add(
+        "prelude-shadowed",
+        "roll len = 5\nexhale len\npull f(path) {\n  snuff path\n}\nexhale f(1)\n",
+    );
     c
 }
 
@@ -518,6 +611,43 @@ fn the_lowered_program_runs_like_the_interpreter() {
             corpus().len()
         );
     });
+}
+
+/// A spent step budget (E515) is an error a `try` catches like any other:
+/// the catch runs, and its first step mark raises it again; a catch with
+/// no mark swallows it and the next mark after the `try` raises it. A
+/// loop that never ends inside the body, so only the budget stops it.
+#[test]
+fn a_spent_budget_is_caught_and_raised_again_at_the_next_mark() {
+    let cases = [
+        (
+            "try {\n  while true {\n    roll n = 1\n  }\n} ashtray e {\n  exhale e.message\n}\nexhale \"after\"\n",
+            6,
+        ),
+        (
+            "try {\n  while true {\n    roll n = 1\n  }\n} ashtray e {\n}\nexhale \"after\"\n",
+            7,
+        ),
+        (
+            "for i in 0..3 {\n  try {\n    while true {\n    }\n  } finally {\n    exhale i\n  }\n}\n",
+            6,
+        ),
+    ];
+    for (src, line) in cases {
+        for level in [0, 1] {
+            let m = compile(src, level);
+            for max in [1, 2, 3, 10, 51, 200] {
+                let (want, want_steps) = tree_walker(src, max);
+                let (got, got_steps) = vm(&m, max);
+                assert_eq!(got, want, "-O{level} --max-steps {max}:\n{src}");
+                assert_eq!(got_steps, want_steps, "-O{level} --max-steps {max}: steps");
+                if max >= 10 {
+                    let end = got.end.as_ref().expect("the budget stops it");
+                    assert_eq!((end.0.as_str(), end.3), ("E515", Some(line)), "{src}");
+                }
+            }
+        }
+    }
 }
 
 /// For each corpus program and every `--max-steps` from 1 to its total
@@ -626,31 +756,6 @@ fn every_lowered_module_verifies() {
 #[test]
 fn a_program_outside_this_part_is_refused_with_its_construct() {
     let cases = [
-        (
-            "try {\n  roll a = 1\n} ashtray e {\n  roll b = 2\n}\n",
-            "`try`",
-            1,
-            1,
-        ),
-        ("roll a = 1\ncough a\n", "`cough`", 2, 1),
-        (
-            "roll f = len\n",
-            "a builtin, module or `args` used as a value",
-            1,
-            10,
-        ),
-        (
-            "roll m = math\n",
-            "a builtin, module or `args` used as a value",
-            1,
-            10,
-        ),
-        (
-            "roll a = args\n",
-            "a builtin, module or `args` used as a value",
-            1,
-            10,
-        ),
         ("burn {\n  fs.write_text(\"o\", \"x\")\n}\n", "`burn`", 1, 1),
         (
             "pull w() {\n  fs.write_text(\"o\", \"x\")\n}\nroll n = 1\n",
@@ -836,7 +941,7 @@ fn every_cir_kind_is_lowered_or_refused() {
     let want = [
         "step lowered",
         "const lowered",
-        "prelude refused: a builtin, module or `args` used as a value",
+        "prelude lowered",
         "load lowered",
         "decl lowered",
         "store lowered",
@@ -861,7 +966,7 @@ fn every_cir_kind_is_lowered_or_refused() {
         "pack refused: `pack`",
         "exhale lowered",
         "burn refused: `burn`",
-        "try refused: `try`",
+        "try lowered",
         "if lowered",
         "loop lowered",
         "foreach lowered",
@@ -869,7 +974,7 @@ fn every_cir_kind_is_lowered_or_refused() {
         "ret lowered",
         "break lowered",
         "continue lowered",
-        "throw refused: `cough`",
+        "throw lowered",
     ];
     assert_eq!(table, want);
 }
@@ -1004,13 +1109,16 @@ fn emit_bc_prints_the_disassembly_and_refuses_what_it_does_not_cover() {
         .replace("\r\n", "\n");
     assert_eq!(String::from_utf8_lossy(&o.stdout), want);
 
-    std::fs::write(dir.path().join("value.cig"), "roll a = 1\nroll f = len\n").unwrap();
-    let o = cc(&["build", "value.cig", "--emit", "bc"]);
+    std::fs::write(
+        dir.path().join("chain.cig"),
+        "stick a = pack(x) => x\nstick b = pack(x) => x\nchain c { a, b }\n",
+    )
+    .unwrap();
+    let o = cc(&["build", "chain.cig", "--emit", "bc"]);
     assert_eq!(o.status.code(), Some(3));
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(
-        err.contains("a builtin, module or `args` used as a value is not lowered to bytecode yet")
-            && err.contains("value.cig:2:10"),
+        err.contains("a chain is not lowered to bytecode yet") && err.contains("chain.cig:3:1"),
         "{err}"
     );
 }

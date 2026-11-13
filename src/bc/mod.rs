@@ -7,8 +7,8 @@
 //! `break`, `continue`; pulls and lambdas, closures that capture (cells),
 //! calls by name, by value, to builtins and to methods, `snuff`; lists,
 //! maps, members, indexes and their stores; interpolation and `exhale`;
-//! step marks. `try`, `cough`, burns, `pack`, chains and a prelude name
-//! used as a value are refused.
+//! `try`/`ashtray`/`finally` and `cough`; a prelude name used as a value
+//! (`loadg`); step marks. Burns, `pack` and chains are refused.
 //!
 //! A program lowers completely or is refused: a construct outside this
 //! part stops the lowering with [`Error::Refused`], which names it and
@@ -31,6 +31,11 @@
 //!   body's own first mark, after the condition's test;
 //! - a captured slot's register carries a cell, fresh each time its
 //!   block runs, in a register nothing else uses;
+//! - a `try` is `try.enter`, the body (the handler's range), the catch
+//!   and the finally, each ending with `try.leave 0`; `break`, `continue`
+//!   and `snuff` leave each `try` they cross first (`try.leave 1` for one
+//!   whose finally they leave), a snuffed value waiting in a register no
+//!   finally writes. No tail call is emitted, so none sits in a try;
 //! - an index read or store, and a compound member store, check their
 //!   operands' types first (`type_of`) so each error is raised at the
 //!   position the tree-walker gives it;
@@ -42,8 +47,8 @@ use crate::cir::ir::{
     self, Block, Const, Func, FuncId, Instr, Kind, Piece, ShortOp, Ty, ValueId, VarId,
 };
 use cigscript::cig_bytecode::{
-    self as bc, verify_module, wide_prefix, Constant, Instr as Word, LineEntry, Op, SpanBase,
-    UpvalDesc, UpvalKind, MAX_FUNCTION_DEPTH, MAX_REG_COUNT,
+    self as bc, verify_module, wide_prefix, Constant, HandlerEntry, Instr as Word, LineEntry, Op,
+    SpanBase, UpvalDesc, UpvalKind, MAX_FUNCTION_DEPTH, MAX_REG_COUNT, RESERVED_U32,
 };
 use cigscript::syntax::ast::{AssignOp, BinOp, UnOp};
 use cigscript::syntax::span::Span;
@@ -111,14 +116,14 @@ pub fn refused_kind(kind: &Kind) -> Option<&'static str> {
         | Kind::Yield(_)
         | Kind::Ret(_)
         | Kind::Break
-        | Kind::Continue => return None,
-        Kind::Prelude(_) => "a builtin, module or `args` used as a value",
+        | Kind::Continue
+        | Kind::Prelude(_)
+        | Kind::Try { .. }
+        | Kind::Throw(_) => return None,
         Kind::BurnOp { .. } => "a call that changes the world (a burn op)",
         Kind::MakeChain { .. } => "a chain",
         Kind::PackDecl(_) => "`pack`",
         Kind::Burn(_) => "`burn`",
-        Kind::Try { .. } => "`try`",
-        Kind::Throw(_) => "`cough`",
     })
 }
 
@@ -271,6 +276,16 @@ struct LoopCx {
     cont: Label,
     cont_op: Op,
     exit: Label,
+    /// How many tries were open in this function when the loop started:
+    /// `break` and `continue` leave every one opened since.
+    tries: usize,
+}
+
+/// A `try` the code being lowered sits in.
+struct TryCx {
+    /// In its finally: a way out drops what the finally had pending
+    /// (`try.leave 1`) instead of running it (`try.leave 0`).
+    in_finally: bool,
 }
 
 /// Where a slot lives in the function that names it.
@@ -324,6 +339,14 @@ struct FnLower<'c, 'm> {
     text_of: HashMap<(ir::InstrId, ValueId), u32>,
     loops: Vec<LoopCx>,
     yields: Vec<YieldTo>,
+    /// The function's handler table, and the tries open where the
+    /// lowering is, innermost last.
+    handlers: Vec<HandlerEntry>,
+    tries: Vec<TryCx>,
+    /// Where a `snuff` inside a try puts its value before the finallys it
+    /// crosses run: a register from `fresh`, which no other value is ever
+    /// given, so no finally writes it.
+    ret_reg: Option<u32>,
     span: Span,
 }
 
@@ -354,6 +377,9 @@ impl<'c, 'm> FnLower<'c, 'm> {
             text_of: HashMap::new(),
             loops: Vec::new(),
             yields: Vec::new(),
+            handlers: Vec::new(),
+            tries: Vec::new(),
+            ret_reg: None,
             span: f.span,
         }
     }
@@ -415,7 +441,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
             constants: self.consts,
             children: self.children,
             regions: Vec::new(),
-            handlers: Vec::new(),
+            handlers: self.handlers,
             instrs: self.code,
             span_base,
             lines,
@@ -1124,6 +1150,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
                     cont: head,
                     cont_op: Op::LOOP,
                     exit,
+                    tries: self.tries.len(),
                 });
                 self.place(head);
                 self.yields.push(YieldTo::Exit(exit));
@@ -1154,7 +1181,22 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 }
             }
             Kind::Ret(v) => {
-                let x = self.val(*v)?;
+                let mut x = self.val(*v)?;
+                if !self.tries.is_empty() {
+                    // The finallys the `snuff` crosses run before the
+                    // `ret`: the value waits where none of them writes.
+                    let r = match self.ret_reg {
+                        Some(r) => r,
+                        None => {
+                            let r = self.fresh(1);
+                            self.ret_reg = Some(r);
+                            r
+                        }
+                    };
+                    self.abc(Op::MOV, r, x, 0)?;
+                    self.leave_tries(0)?;
+                    x = r;
+                }
                 self.abc(Op::RET, x, 0, 0)?;
             }
             Kind::Break | Kind::Continue => {
@@ -1167,8 +1209,24 @@ impl<'c, 'm> FnLower<'c, 'm> {
                     Kind::Break => (Op::JMP, l.exit),
                     _ => (l.cont_op, l.cont),
                 };
+                let opened = l.tries;
+                self.leave_tries(opened)?;
                 self.jump(op, 0, to)?;
             }
+            Kind::Throw(v) => {
+                let x = self.val(*v)?;
+                self.abc(Op::THROW, x, 0, 0)?;
+            }
+            Kind::Prelude(name) => {
+                let r = self.define(i)?;
+                let k = self.konst(ConstKey::Str(name));
+                self.abx(Op::LOADG, r, k)?;
+            }
+            Kind::Try {
+                body,
+                catch,
+                finally,
+            } => self.try_stmt(i, body, catch.as_ref(), finally.as_ref())?,
             Kind::ForEach { iter, var, body } => self.for_each(i, *iter, *var, body)?,
             Kind::MakeList(vs) => {
                 let regs = self.vals(vs)?;
@@ -1612,6 +1670,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 cont,
                 cont_op: Op::JMP,
                 exit,
+                tries: self.tries.len(),
             });
             if captured {
                 self.abc(Op::CELLNEW, a + 3, 0, 0)?;
@@ -1634,6 +1693,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 cont,
                 cont_op: Op::JMP,
                 exit,
+                tries: self.tries.len(),
             });
             if captured {
                 self.abc(Op::CELLNEW, a + 3, 0, 0)?;
@@ -1653,6 +1713,103 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 self.free(a + k);
             }
         }
+        Ok(())
+    }
+
+    /// Leave the tries opened since `down_to`, innermost first: one in its
+    /// body or catch runs its finally (`try.leave 0`), one in its finally
+    /// drops what it had pending (`try.leave 1`).
+    fn leave_tries(&mut self, down_to: usize) -> Result<(), Error> {
+        for k in (down_to..self.tries.len()).rev() {
+            let a = u32::from(self.tries[k].in_finally);
+            self.abc(Op::TRY_LEAVE, a, 0, 0)?;
+        }
+        Ok(())
+    }
+
+    /// `try`/`ashtray`/`finally` as `docs/BYTECODE.md` lays it out:
+    /// `try.enter H`; the body, which is the handler's range and ends with
+    /// its `try.leave 0`; a jump past the rest; the catch, ending with
+    /// `try.leave 0` (and a jump past the finally); the finally, ending
+    /// with `try.leave 0`. The catch and the finally lie outside the range.
+    /// The binding's register is the catch slot's, taken before the body;
+    /// a captured binding takes its cell at the catch's first pc.
+    fn try_stmt(
+        &mut self,
+        i: &'m Instr,
+        body: &'m Block,
+        catch: Option<&'m (Option<VarId>, Block)>,
+        finally: Option<&'m Block>,
+    ) -> Result<(), Error> {
+        if catch.is_none() && finally.is_none() {
+            // Nothing to catch or run after: the body as it is.
+            return self.block(body);
+        }
+        let binding = catch.and_then(|c| c.0);
+        let catch_reg = match binding {
+            Some(v) => self.var(v)?,
+            None => RESERVED_U32,
+        };
+        let h = self.handlers.len();
+        self.handlers.push(HandlerEntry {
+            pc_start: 0,
+            pc_end: 0,
+            handler_pc: 0,
+            catch_reg,
+            finally_pc: RESERVED_U32,
+        });
+        self.span = i.span;
+        self.abx(Op::TRY_ENTER, 0, h as u32)?;
+        let pc_start = self.code.len() as u32;
+        let end = self.label();
+        self.tries.push(TryCx { in_finally: false });
+        self.block(body)?;
+        let open = !ends(body);
+        if open {
+            self.span = i.span;
+            self.abc(Op::TRY_LEAVE, 0, 0, 0)?;
+        }
+        let pc_end = self.code.len() as u32;
+        if open {
+            self.jump(Op::JMP, 0, end)?;
+        }
+        let mut handler_pc = None;
+        if let Some((_, cb)) = catch {
+            handler_pc = Some(self.code.len() as u32);
+            if binding.is_some_and(|v| self.captured(v)) {
+                self.span = i.span;
+                self.abc(Op::CELLNEW, catch_reg, 0, 0)?;
+            }
+            self.block(cb)?;
+            if !ends(cb) {
+                self.span = i.span;
+                self.abc(Op::TRY_LEAVE, 0, 0, 0)?;
+                if finally.is_some() {
+                    self.jump(Op::JMP, 0, end)?;
+                }
+            }
+        }
+        let mut finally_pc = RESERVED_U32;
+        if let Some(fb) = finally {
+            finally_pc = self.code.len() as u32;
+            if let Some(t) = self.tries.last_mut() {
+                t.in_finally = true;
+            }
+            self.block(fb)?;
+            if !ends(fb) {
+                self.span = i.span;
+                self.abc(Op::TRY_LEAVE, 0, 0, 0)?;
+            }
+        }
+        self.tries.pop();
+        self.place(end);
+        self.handlers[h] = HandlerEntry {
+            pc_start,
+            pc_end,
+            handler_pc: handler_pc.unwrap_or(finally_pc),
+            catch_reg,
+            finally_pc,
+        };
         Ok(())
     }
 

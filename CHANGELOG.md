@@ -13,6 +13,13 @@ project follows semantic versioning.
   that replaces an operand no longer makes the lowering refuse it. A
   member store (`obj.k = v`) now stores its object's span too, and a
   store into something that is not a map is reported there.
+- **The bytecode lowering, third part (#31).** `try`/`ashtray`/`finally`
+  lower to the VM's handlers (`try.enter`, `try.leave`), with `break`,
+  `continue` and `snuff` running every `finally` they leave; `cough` is
+  `throw`; a builtin, a module or `args` used as a value (`roll f =
+  len`) is `loadg`. Only burns, `pack` and chains are still refused.
+  `tests/bc.rs` holds every way out of a `try` to the tree-walker,
+  output, error, position and step count, at every step budget.
 - **The bytecode lowering, second part (#31).** Closures that capture
   (cells, a fresh one per loop turn) and pulls that call themselves or
   each other by name; lists and maps with the interpreter's errors at

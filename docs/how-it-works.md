@@ -195,9 +195,14 @@ taking those positions from the spans the IR stores, and an `exhale`
 part or interpolation piece is turned to text where the interpreter
 shows it, before a later part can change it. A computed map key is
 checked by its own `key` instruction, before the entry's value runs.
-`try`, `cough`, burns, `pack`, chains, and a builtin, a module or
-`args` used as a value are refused with
-their construct and position. `tests/bc.rs` runs what it lowers in the
+A `try` is laid out as the format sets out: `try.enter`, the body
+(the handler's range), the `ashtray` block, then the `finally` block,
+each ending with `try.leave`; `break`, `continue` and `snuff` leave
+every `try` they cross first, so each `finally` runs, and a snuffed
+value waits in a register no `finally` writes. `cough` is `throw`, and
+a builtin, a module or `args` used as a value is `loadg`, read from
+the prelude by name. Burns, `pack` and chains are refused with their
+construct and position. `tests/bc.rs` runs what it lowers in the
 VM and holds its output, errors, positions and step count to the
 tree-walker's.
 
