@@ -177,11 +177,25 @@ there will shape the bytecode a program runs.
 runs the format crate's verifier on every module it makes (a module
 that does not verify is the compiler's bug). A slot is a register for
 the whole function; a value has a register from its definition to its
-last use. A call moves its callee and arguments into consecutive
+last use. A read of a slot no closure captures is the slot's register
+itself, with no copy, when nothing writes the slot before the read's
+last reader, and a value whose one reader stores it into such a slot is
+made in that slot's register (`add R1, R1, R8`); an operation that fails
+writes nothing, so the slot keeps its value as in the interpreter. A
+constant right operand is the instruction's own (`addk` to `modk`,
+`eqk`, `ltk`, `lek`); a constant left operand swaps over only where the
+value and the error are the same either way (`==`, `!=`, and `+` or `*`
+of two numbers), and a constant every reader takes this way is never
+loaded. A call moves its callee and arguments into consecutive
 registers. `a > b` is `le a, b` then `not`, so the operands keep the
-order the interpreter's errors name. A step mark is one `steps`
+order the interpreter's errors name. A comparison read only by the
+`if` or loop condition after it is that branch's jump (`nej`, `eqj`,
+`lej`, `ltj`; `a < b` and `a <= b` jump over a `jmp`), with the same
+operator, operands and position; one too far for the jump's 8-bit
+offset is a comparison and a `test`. A step mark is one `steps`
 instruction, a loop sets its nesting before its condition and back
-after it, and the line table keeps the IR's span for every instruction.
+after it (folded into the next statement's mark when that follows at
+once), and the line table keeps the IR's span for every instruction.
 A slot a closure captures lives in a cell: a fresh one each time its
 block runs (each turn of a loop), so a closure made in a turn keeps
 that turn's value, and a pull calls itself or a sibling through the

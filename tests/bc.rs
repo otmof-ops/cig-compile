@@ -1076,7 +1076,7 @@ fn a_frame_past_255_registers_uses_wide_operands() {
 #[test]
 fn a_jump_past_16_bits_is_wide() {
     let mut src = String::from("roll n = 0\nroll i = 0\nwhile i < 3 {\n  i += 1\n");
-    for _ in 0..7000 {
+    for _ in 0..17000 {
         src.push_str("  n += i\n");
     }
     src.push_str("}\nexhale n\n");
@@ -1129,13 +1129,13 @@ fn the_disassembly_matches_its_golden_text() {
 }
 
 /// The passes shape the bytecode: a constant expression -O1 folds is
-/// one load, where -O0 computes it.
+/// one load, where -O0 computes it (`addk`, the constant an operand).
 #[test]
 fn the_level_shapes_the_bytecode() {
     let src = "stick a = 2 + 3\nexhale a * 4\n";
     let o0 = compile(src, 0);
     let o1 = compile(src, 1);
-    let ops = |m: &Module| bc::disassemble(m).matches(" add ").count();
+    let ops = |m: &Module| bc::disassemble(m).matches(" add").count();
     assert_eq!(ops(&o0), 1);
     assert_eq!(ops(&o1), 0);
     let _: &[&dyn Pass] = &pass::level(1);
@@ -1206,7 +1206,8 @@ fn a_frame_past_the_limit_is_an_error() {
                 what,
                 "the function needs more than 65536 registers, the frame limit"
             );
-            assert_eq!(span.line, 65_536);
+            // Each slot is made in its own register, the first at R0.
+            assert_eq!(span.line, 65_537);
         }
         other => panic!("{:?}", other.map(|_| ())),
     }
@@ -2455,4 +2456,108 @@ fn the_top_levels_names_cost_two_instructions_each() {
             light_agrees(&src, name);
         }
     });
+}
+
+// ----- tight code: operands in place, constants, fused branches, steps ----------
+
+/// Programs for the lowering's tight forms: a slot read with no copy, a
+/// value made in its slot, a constant operand (`addk` ... `lek`, a
+/// constant left operand swapped only where that is exact), a comparison
+/// fused with its branch, and a loop's end folded into the next mark.
+/// Each one's errors are the tree-walker's: code, message, line, column.
+fn tight_corpus() -> Vec<(&'static str, String)> {
+    let mut long_then = String::from("roll a = 1\nif a == 1 {\n");
+    for _ in 0..80 {
+        long_then.push_str("  exhale a\n");
+    }
+    long_then.push_str("} else {\n  exhale 0\n}\nif a != 1 {\n  exhale 2\n}\n");
+    vec![
+        ("addk-overflow", "roll a = 9223372036854775807\nexhale a + 1\n".into()),
+        ("subk-type", "roll s = \"x\"\nexhale s - 1\n".into()),
+        ("divk-zero", "roll a = 5\nexhale a / 0\n".into()),
+        ("modk-zero", "roll a = 5\nexhale a % 0\n".into()),
+        ("mulk-string", "roll n = 3\nexhale n * \"ab\"\n".into()),
+        ("left-const-dynamic", "roll s = \"a\"\nexhale 1 + s\n".into()),
+        ("left-const-eq", "roll s = \"a\"\nexhale 1 == s, \"a\" != s, 2 * 3.5\n".into()),
+        ("ltk-type", "roll s = \"a\"\nexhale s < 1\n".into()),
+        ("gt-nan", "roll n = math.sqrt(-1.0)\nexhale n > 1.0\n".into()),
+        (
+            "branch-type",
+            "roll s = \"a\"\nif s > 1 {\n  exhale 1\n} else {\n  exhale 2\n}\n".into(),
+        ),
+        (
+            "branch-nan",
+            "roll n = math.sqrt(-1.0)\nroll m = 1.0\nif n <= m {\n  exhale 1\n}\n".into(),
+        ),
+        (
+            "every-branch",
+            "roll i = 0\nroll seen = []\nwhile i < 6 {\n  if i == 2 {\n    seen.push(\"eq\")\n  }\n  if i != 3 {\n    seen.push(\"ne\")\n  }\n  if i < 1 {\n    seen.push(\"lt\")\n  }\n  if i <= 1 {\n    seen.push(\"le\")\n  }\n  if i > 4 {\n    seen.push(\"gt\")\n  } else {\n    seen.push(\"ngt\")\n  }\n  if i >= 4 {\n    seen.push(\"ge\")\n  }\n  if not (i == 5) {\n    seen.push(\"not\")\n  }\n  i += 1\n}\nroll j = 9\nwhile j >= 7 {\n  j -= 1\n}\nroll k = 0\nwhile k != 3 {\n  k += 1\n}\nroll done = false\nwhile not done {\n  done = true\n}\nexhale seen, j, k\n".into(),
+        ),
+        (
+            "failing-op-keeps-slot",
+            "roll a = 9223372036854775807\ntry {\n  a = a + 1\n} ashtray e {\n  exhale e.message\n}\nroll b = 4\ntry {\n  b = b / 0\n} ashtray e {\n  exhale e.code\n}\nroll c = 2\nfor i in 0..3 {\n  try {\n    c *= 4611686018427387904\n  } ashtray e {\n    exhale i, e.message\n  }\n}\nexhale a, b, c\n".into(),
+        ),
+        (
+            "read-then-written",
+            "roll a = 1\nroll b = a\na = 5\nexhale a, b\nroll i = 0\nroll prev = 0\nwhile i < 3 {\n  prev = i\n  i += 1\n  exhale prev, i\n}\nroll x = 1\nx = x + x * x\nroll y = x\nx = y - x\nexhale x, y\nroll p = 1\nstick q = p\np = 7\nexhale p, q\nroll u = 2\nstick w = u * u\nu += 1\nexhale w + u, u\n".into(),
+        ),
+        (
+            "loop-end-then-mark",
+            "roll k = 0\nif k == 0 {\n  while k < 2 {\n    k += 1\n  }\n} else {\n  k = 9\n}\nroll n = 0\nfor i in 0..3 {\n  roll j = 0\n  while j < i {\n    j += 1\n    n += j\n  }\n  n += 1\n}\nexhale k, n\n".into(),
+        ),
+        ("long-then", long_then),
+    ]
+}
+
+/// Every tight-corpus program at -O0 and -O1 runs as the tree-walker
+/// does, with every step budget from 1 to one past its total.
+#[test]
+fn the_tight_forms_run_like_the_interpreter() {
+    big_stack(|| {
+        for (name, src) in tight_corpus() {
+            let (_, total) = tree_walker(&src, 0);
+            for level in [0, 1] {
+                let m = compile(&src, level);
+                for max in std::iter::once(0).chain(1..=total + 1) {
+                    let (want, want_steps) = tree_walker(&src, max);
+                    let (got, got_steps) = vm(&m, max);
+                    assert_eq!(got, want, "{name} -O{level} --max-steps {max}:\n{src}");
+                    assert_eq!(got_steps, want_steps, "{name} -O{level} --max-steps {max}");
+                }
+            }
+        }
+    });
+}
+
+/// The forms are there: a constant operand, a fused branch of each kind,
+/// a slot updated in place, and a branch too far for the fused jump's
+/// 8-bit offset in the long form.
+#[test]
+fn the_lowering_writes_the_tight_forms() {
+    let text = |src: &str, level| bc::disassemble(&compile(src, level));
+    for level in [0, 1] {
+        let t = text(
+            "roll i = 0\nwhile i < 9 {\n  i += 1\n}\nexhale i % 7\n",
+            level,
+        );
+        assert!(t.contains("ltj       R0,"), "-O{level}:\n{t}");
+        assert!(t.contains("addk      R0, R0,"), "-O{level}:\n{t}");
+        assert!(t.contains("modk"), "-O{level}:\n{t}");
+        let t = text(
+            "roll a = 1\nroll b = 2\nif a == b {\n  exhale 1\n}\nif a != b {\n  exhale 2\n}\nif a > b {\n  exhale 3\n}\nif a >= b {\n  exhale 4\n}\n",
+            level,
+        );
+        for op in ["nej", "eqj", "lej", "ltj"] {
+            assert!(t.contains(op), "-O{level} {op}:\n{t}");
+        }
+        assert!(!t.contains("not "), "-O{level}:\n{t}");
+        let far = tight_corpus()
+            .into_iter()
+            .find(|(n, _)| *n == "long-then")
+            .map(|(_, s)| s)
+            .expect("long-then");
+        let t = text(&far, level);
+        assert!(!t.contains("nej"), "-O{level}: too far for nej:\n{t}");
+        assert!(t.contains("eqj"), "-O{level}: `a != 1` near:\n{t}");
+    }
 }

@@ -5,6 +5,16 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **The bytecode lowering writes tight code (#31, step 9).** A slot
+  read needs no copy and a value stored into a slot is made in its
+  register, where nothing can tell the difference; a constant operand
+  is the instruction's (`addk` ... `lek`); a comparison that only
+  decides an `if` or a loop is a fused compare-and-jump; a loop's end
+  folds into the next statement's step mark; a call reads its closure
+  straight into its window. Output, errors (code, message, position)
+  and every step budget stay the interpreter's. The VM executes 25%
+  fewer instructions at the median of cig's `bench/compute` (`loop`
+  45% fewer).
 - **The bytecode lowering, fifth part (#31).** A burn whose label is
   computed (`burn (s, name)`) lowers: the label is evaluated before the
   state map and the region reads it from its register each time the
@@ -143,7 +153,7 @@ the licence moves to FSL-1.1-ALv2 for every release from this one on.
   `cigcompile verify` row prints `cig-v1.21.0-<target>`, and the pass,
   the SBOM and `cigcompile audit` name the same version. **The licence
   travels with the runtime.** Cig 1.21.0 is the first FSL-1.1-ALv2
-  cig release (cig-installer DECISIONS 19), so the cig inside a 0.4.0
+  cig release, so the cig inside a 0.4.0
   program carries FSL-1.1-ALv2 too, not Apache-2.0; the SBOM reports
   it (`src/sbom.rs::runtime_license`) and the shipping guide's
   licence block has the split by cig release. A program built on an

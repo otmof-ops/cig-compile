@@ -21,16 +21,23 @@
 //! - a slot (`roll`, `stick`, a parameter) is one register for the whole
 //!   function; a CIR value is a register from its definition to its last
 //!   use, then the register is free again. A value defined before a loop
-//!   and read inside it lives to the loop's end;
+//!   and read inside it lives to the loop's end. A read of a slot no closure captures is the slot's register, with
+//!   no copy, and a value stored into such a slot right after it is made
+//!   is made in the slot's register, where that is exact (`plan`);
 //! - a call's callee and arguments are moved into a fresh window of
-//!   consecutive registers (`call A, B, 0`, `callb A, idx, n`);
+//!   consecutive registers (`call A, B, 0`, `callb A, idx, n`); a pull
+//!   called by name has its closure read straight into the window;
+//! - a constant operand is the instruction's `K` (`addk` ... `lek`);
 //! - `a > b` is `le a, b` then `not`, `a >= b` is `lt a, b` then `not`,
 //!   `a != b` is `eq` then `not`: the operands keep their order, so the
-//!   interpreter's error wording does too;
+//!   interpreter's error wording does too. A comparison only a branch
+//!   reads is the branch's fused jump, with the same operator on the
+//!   same operands (`compare_jump`);
 //! - a step mark is `steps k, 1` (k the loop nesting where it sits), a
 //!   loop starts with `steps k, 0` before its condition and ends with
-//!   `steps k-1, 0`, where `break` lands. The iteration's tick is the
-//!   body's own first mark, after the condition's test;
+//!   `steps k-1, 0`, where `break` lands, folded into the next
+//!   statement's mark when that follows at once. The iteration's tick is
+//!   the body's own first mark, after the condition's test;
 //! - a captured slot's register carries a cell, fresh each time its
 //!   block runs, in a register nothing else uses;
 //! - a `try` is `try.enter`, the body (the handler's range), the catch
@@ -238,7 +245,10 @@ struct Cx<'m> {
 
 impl<'m> Cx<'m> {
     /// Lower one function, narrow jumps first; if a jump's offset does not
-    /// fit 16 bits, again with every jump wide.
+    /// fit 16 bits, again with every jump wide. A fused compare-and-jump
+    /// whose offset does not fit its signed 8-bit field is lowered again
+    /// as a compare into a register and a `test`, which reaches as far as
+    /// any jump.
     fn function(&self, f: &'m Func, depth: u32) -> Result<bc::Function, Error> {
         if depth > MAX_FUNCTION_DEPTH {
             return Err(Error::Limit {
@@ -248,21 +258,34 @@ impl<'m> Cx<'m> {
                 span: f.span,
             });
         }
-        match FnLower::new(self, f, depth, false).run() {
-            Err(Retry::Wide) => FnLower::new(self, f, depth, true)
-                .run()
-                .map_err(|r| match r {
-                    Retry::Error(e) => e,
-                    Retry::Wide => Error::Internal("a wide jump that does not fit".into()),
-                }),
-            Err(Retry::Error(e)) => Err(e),
-            Ok(x) => Ok(x),
+        let (mut wide, mut far) = (false, HashSet::new());
+        loop {
+            match FnLower::new(self, f, depth, wide, far.clone()).run() {
+                Ok(x) => return Ok(x),
+                Err(Retry::Error(e)) => return Err(e),
+                Err(Retry::Wide) if !wide => wide = true,
+                Err(Retry::Wide) => {
+                    return Err(Error::Internal("a wide jump that does not fit".into()))
+                }
+                // Each retry takes at least one more site to the long form,
+                // so this ends.
+                Err(Retry::Far(sites)) => {
+                    let before = far.len();
+                    far.extend(sites);
+                    if far.len() == before {
+                        return Err(Error::Internal("a fused jump that does not fit".into()));
+                    }
+                }
+            }
         }
     }
 }
 
 enum Retry {
     Wide,
+    /// These fused compare-and-jump sites (numbered in the order they are
+    /// lowered) are too far from their targets.
+    Far(Vec<usize>),
     Error(Error),
 }
 
@@ -289,6 +312,19 @@ struct Patch {
     a: u32,
     wide: bool,
     target: Label,
+    /// A fused compare-and-jump (ABC, the offset in a signed 8-bit `C`):
+    /// its `B` and its site number.
+    fused: Option<(u32, usize)>,
+}
+
+/// A comparison whose only reader is the branch right after it: lowered
+/// there, as a jump, with the comparison's own position.
+#[derive(Clone, Copy)]
+struct PendingCmp {
+    op: BinOp,
+    a: ValueId,
+    b: ValueId,
+    span: Span,
 }
 
 struct LoopCx {
@@ -414,10 +450,37 @@ struct FnLower<'c, 'm> {
     /// given, so no finally writes it.
     ret_reg: Option<u32>,
     span: Span,
+    /// The fused compare-and-jump sites lowered so far, and the ones to
+    /// lower in the long form (too far for a signed 8-bit offset).
+    fused_sites: usize,
+    far: HashSet<usize>,
+    /// Slot reads with no copy: the value is the slot's own register
+    /// (`plan` says when that is exact).
+    alias: HashSet<ValueId>,
+    /// Values made straight into the register of the slot their one
+    /// reader, the `decl` or store right after, writes.
+    dest: HashMap<ValueId, VarId>,
+    /// Values whose register is a slot's: never freed with the value.
+    pinned: HashSet<ValueId>,
+    /// Binary operations lowered with a constant operand (`addk`, `eqk`,
+    /// ...): `true` when the constant is the left operand of an operation
+    /// whose operands may swap.
+    kform: HashMap<ir::InstrId, bool>,
+    /// Constants every reader takes as an operand: never loaded.
+    unloaded: HashSet<ValueId>,
+    /// Comparisons and `not`s whose one reader is the branch right after
+    /// them, and that reader.
+    fused: HashMap<ValueId, ir::InstrId>,
+    pending: HashMap<ValueId, PendingCmp>,
+    pending_not: HashMap<ValueId, ValueId>,
+    /// The last instruction is `steps k, 0` at this pc.
+    steps0: Option<(usize, u32)>,
+    /// The pc the last label was placed at.
+    last_placed: Option<usize>,
 }
 
 impl<'c, 'm> FnLower<'c, 'm> {
-    fn new(cx: &'c Cx<'m>, f: &'m Func, depth: u32, wide_jumps: bool) -> Self {
+    fn new(cx: &'c Cx<'m>, f: &'m Func, depth: u32, wide_jumps: bool, far: HashSet<usize>) -> Self {
         FnLower {
             cx,
             f,
@@ -456,6 +519,18 @@ impl<'c, 'm> FnLower<'c, 'm> {
             top_level: HashSet::new(),
             ret_reg: None,
             span: f.span,
+            fused_sites: 0,
+            far,
+            alias: HashSet::new(),
+            dest: HashMap::new(),
+            pinned: HashSet::new(),
+            kform: HashMap::new(),
+            unloaded: HashSet::new(),
+            fused: HashMap::new(),
+            pending: HashMap::new(),
+            pending_not: HashMap::new(),
+            steps0: None,
+            last_placed: None,
         }
     }
 
@@ -477,6 +552,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
             self.top_level = f.body.instrs.iter().map(|i| i.id).collect();
         }
         self.prepass();
+        self.plan();
         self.liveness();
         // A captured parameter is a cell from the call's start.
         for p in &f.params {
@@ -691,6 +767,13 @@ impl<'c, 'm> FnLower<'c, 'm> {
         let v = i
             .result
             .ok_or_else(|| Error::Internal(format!("instruction {} has no result", i.id.0)))?;
+        if let Some(var) = self.dest.get(&v).copied() {
+            if let Slot::Reg(r) = self.slot(var)? {
+                self.val_reg.insert(v, r);
+                self.pinned.insert(v);
+                return Ok(r);
+            }
+        }
         let r = self.alloc();
         self.val_reg.insert(v, r);
         Ok(r)
@@ -725,6 +808,217 @@ impl<'c, 'm> FnLower<'c, 'm> {
         }
     }
 
+    /// Where the lowering writes tighter code than one register per value
+    /// and a copy per slot read, decided before it starts. Each rule says
+    /// why the code it saves could not be observed:
+    /// - a comparison (or a `not`) whose one reader is the `if` or the
+    ///   loop condition's `yield` right after it is that branch's jump
+    ///   (`fused`): nothing runs between them, and the jump runs the same
+    ///   operator on the same operands, in the same order, at the
+    ///   comparison's position;
+    /// - a binary operation with a constant right operand takes it as `K`
+    ///   (`kform`); one with a constant left operand does too when the
+    ///   operation gives the same value and the same error either way
+    ///   round (`==` and `!=`, which never fail; `+` and `*` of two
+    ///   numbers, whose only error, `E503`, names the operator alone). A
+    ///   constant every reader takes as `K` is never loaded (`unloaded`);
+    /// - a read of a slot this function owns and no function captures is
+    ///   the slot's register itself (`alias`) when every reader is in the
+    ///   same block, after it, and nothing from the read to the last
+    ///   reader writes the slot. Only an instruction of this function can
+    ///   write such a slot (a `decl` or a store, a `for` item, a catch
+    ///   binding, a burn's state, a chain's name): a call cannot, nor can a
+    ///   closure. The last reader may write it after reading it (a store,
+    ///   an `if`'s branches, a value block's right side, a `for`'s body);
+    /// - a value whose one reader is the `decl` or store right after it,
+    ///   into such a slot, is made in the slot's register (`dest`). The
+    ///   operations that make it write their result only once they have
+    ///   it: one that fails leaves the slot as it was, as the tree-walker
+    ///   does.
+    fn plan(&mut self) {
+        let f = self.f;
+        let mut readers: HashMap<ValueId, Vec<ir::InstrId>> = HashMap::new();
+        walk(&f.body, &mut |i| {
+            for u in i.kind.uses() {
+                readers.entry(u).or_default().push(i.id);
+            }
+        });
+        let reader_count = |v: ValueId| readers.get(&v).map_or(0, Vec::len);
+        let mut blocks: Vec<(&'m Block, bool)> = Vec::new();
+        all_blocks(&f.body, false, &mut blocks);
+        let mut at: HashMap<ir::InstrId, (usize, usize)> = HashMap::new();
+        for (n, (b, _)) in blocks.iter().enumerate() {
+            for (j, i) in b.instrs.iter().enumerate() {
+                at.insert(i.id, (n, j));
+            }
+        }
+        let def_of = |v: ValueId| {
+            f.vals
+                .get(v.0 as usize)
+                .and_then(|x| self.instr_of.get(&x.def).copied())
+        };
+        let ty = |v: ValueId| f.vals.get(v.0 as usize).map_or(Ty::Dynamic, |x| x.ty);
+        let own = |v: VarId| {
+            self.var_info(v)
+                .is_some_and(|x| x.owner == f.id && !x.captured)
+        };
+
+        // Comparisons and `not`s read only by the branch right after them.
+        let mut fused = HashMap::new();
+        for (b, is_cond) in &blocks {
+            for w in b.instrs.windows(2) {
+                let (i, next) = (&w[0], &w[1]);
+                let Some(r) = i.result else { continue };
+                let compare = matches!(
+                    i.kind,
+                    Kind::Binary(
+                        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge,
+                        ..
+                    ) | Kind::Unary(UnOp::Not, _)
+                );
+                if !compare || reader_count(r) != 1 {
+                    continue;
+                }
+                let branch = match &next.kind {
+                    Kind::If { cond, .. } => *cond == r,
+                    Kind::Yield(v) => *is_cond && *v == r,
+                    _ => false,
+                };
+                if branch {
+                    fused.insert(r, next.id);
+                }
+            }
+        }
+
+        // Constant operands.
+        let konst = |v: ValueId| {
+            matches!(
+                def_of(v).map(|d| &d.kind),
+                Some(Kind::Const(Const::Int(_) | Const::Float(_) | Const::Str(_)))
+            )
+        };
+        let numeric = |v: ValueId| {
+            matches!(
+                def_of(v).map(|d| &d.kind),
+                Some(Kind::Const(Const::Int(_) | Const::Float(_)))
+            )
+        };
+        let mut kform = HashMap::new();
+        let mut kreads: HashMap<ValueId, usize> = HashMap::new();
+        walk(&f.body, &mut |i| {
+            let Kind::Binary(op, a, b) = &i.kind else {
+                return;
+            };
+            if i.result.is_some_and(|r| fused.contains_key(&r)) || k_op(*op).is_none() {
+                return;
+            }
+            if konst(*b) {
+                kform.insert(i.id, false);
+                *kreads.entry(*b).or_default() += 1;
+            } else if konst(*a)
+                && match op {
+                    BinOp::Eq | BinOp::Ne => true,
+                    BinOp::Add | BinOp::Mul => numeric(*a) && matches!(ty(*b), Ty::Int | Ty::Float),
+                    _ => false,
+                }
+            {
+                kform.insert(i.id, true);
+                *kreads.entry(*a).or_default() += 1;
+            }
+        });
+        let unloaded: HashSet<ValueId> = kreads
+            .into_iter()
+            .filter(|(v, n)| reader_count(*v) == *n)
+            .map(|(v, _)| v)
+            .collect();
+
+        // Slot reads with no copy.
+        let mut alias = HashSet::new();
+        for (n, (b, _)) in blocks.iter().enumerate() {
+            for (j, i) in b.instrs.iter().enumerate() {
+                let (Kind::Load(var), Some(v)) = (&i.kind, i.result) else {
+                    continue;
+                };
+                if !own(*var) {
+                    continue;
+                }
+                let mut last = j;
+                let mut ok = true;
+                for r in readers.get(&v).into_iter().flatten() {
+                    // Where the reader reads it: a fused comparison at its
+                    // branch, a `for`'s range at the `for`.
+                    let reader = self.instr_of.get(r).copied();
+                    // A burn reads a register label again each time it
+                    // enters: it keeps its copy.
+                    if reader.is_some_and(|x| matches!(x.kind, Kind::Burn(_))) {
+                        ok = false;
+                    }
+                    let eff = match reader {
+                        Some(x) if x.result.is_some_and(|r| fused.contains_key(&r)) => {
+                            x.result.and_then(|r| fused.get(&r).copied())
+                        }
+                        Some(x)
+                            if matches!(x.kind, Kind::Binary(BinOp::Range, ..))
+                                && x.result.is_some_and(|r| self.ranges.contains_key(&r)) =>
+                        {
+                            b.instrs.iter().find_map(|y| match y.kind {
+                                Kind::ForEach { iter, .. } if Some(iter) == x.result => Some(y.id),
+                                _ => None,
+                            })
+                        }
+                        Some(x) => Some(x.id),
+                        None => None,
+                    };
+                    match eff.and_then(|e| at.get(&e)) {
+                        Some(&(m, k)) if m == n && k > j => last = last.max(k),
+                        _ => ok = false,
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                let between = b.instrs[j + 1..last].iter().any(|x| writes(x, *var, true));
+                let at_last = last > j && writes(&b.instrs[last], *var, false);
+                if !between && !at_last {
+                    alias.insert(v);
+                }
+            }
+        }
+
+        // Values made in the slot their one reader stores them into.
+        let mut dest = HashMap::new();
+        for (b, _) in &blocks {
+            for w in b.instrs.windows(2) {
+                let (i, next) = (&w[0], &w[1]);
+                let Some(v) = i.result else { continue };
+                let (Kind::Decl(var, x) | Kind::Store(var, x)) = &next.kind else {
+                    continue;
+                };
+                if *x != v || reader_count(v) != 1 || !own(*var) {
+                    continue;
+                }
+                let makes = match &i.kind {
+                    Kind::Const(_) => !unloaded.contains(&v),
+                    Kind::Load(_) => !alias.contains(&v),
+                    Kind::Unary(..) => !fused.contains_key(&v),
+                    Kind::Binary(op, ..) => {
+                        !matches!(op, BinOp::Range | BinOp::And | BinOp::Or | BinOp::Coalesce)
+                            && !fused.contains_key(&v)
+                    }
+                    _ => false,
+                };
+                if makes {
+                    dest.insert(v, *var);
+                }
+            }
+        }
+        self.fused = fused;
+        self.kform = kform;
+        self.unloaded = unloaded;
+        self.alias = alias;
+        self.dest = dest;
+    }
+
     /// Every value's last use, as the position after which its register
     /// is free. A use inside a loop of a value defined before the loop
     /// keeps it to the loop's end: the next turn reads it again.
@@ -739,11 +1033,21 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 .unwrap_or(0)
         };
         let mut uses: Vec<(ValueId, usize)> = Vec::new();
+        // A fused comparison reads its operands at its branch.
+        let remap: HashMap<ir::InstrId, usize> = self
+            .fused
+            .iter()
+            .filter_map(|(r, at)| {
+                let def = self.f.vals.get(r.0 as usize)?.def;
+                Some((def, *self.start.get(at)?))
+            })
+            .collect();
         collect_uses(
             &self.f.body,
             &self.start,
             &self.end,
             &self.ranges,
+            &remap,
             &mut Vec::new(),
             &mut |v, pos, loops: &[LoopRange]| {
                 uses.push((v, pos));
@@ -782,7 +1086,9 @@ impl<'c, 'm> FnLower<'c, 'm> {
             if let Some(vs) = self.dies_at.remove(&pos) {
                 for v in vs {
                     if let Some(r) = self.val_reg.remove(&v) {
-                        self.free(r);
+                        if !self.pinned.remove(&v) {
+                            self.free(r);
+                        }
                     }
                 }
             }
@@ -842,6 +1148,34 @@ impl<'c, 'm> FnLower<'c, 'm> {
 
     fn place(&mut self, l: Label) {
         self.labels[l.0] = Some(self.code.len());
+        self.last_placed = Some(self.code.len());
+    }
+
+    /// `steps k, n`. A `steps k, 1` right after a `steps k, 0` (a loop's
+    /// end, then the next statement's mark) is that one instruction,
+    /// `steps k, 1` at the mark's position: the first only sets the
+    /// nesting the second sets again, charges nothing and raises nothing,
+    /// so nothing can be observed between them, and no run reaches the
+    /// second but through the first (no label sits on it).
+    fn steps(&mut self, k: u32, n: u32) -> Result<(), Error> {
+        let pc = self.code.len();
+        if n == 1 && self.last_placed != Some(pc) {
+            if let Some((p, j)) = self.steps0 {
+                if p + 1 == pc && j == k {
+                    self.code[p] = Word::abx(Op::STEPS, k as u8, 1);
+                    if let Some(last) = self.rows.last_mut() {
+                        if last.0 as usize == p {
+                            last.1 = self.span;
+                        }
+                    }
+                    self.steps0 = None;
+                    return Ok(());
+                }
+            }
+        }
+        self.abx(Op::STEPS, k, n)?;
+        self.steps0 = (n == 0 && k <= 0xFF).then_some((pc, k));
+        Ok(())
     }
 
     /// An AsBx jump (`jmp`, `loop`, `test`, `testn`) to `target`.
@@ -862,16 +1196,175 @@ impl<'c, 'm> FnLower<'c, 'm> {
             a,
             wide,
             target,
+            fused: None,
         });
         Ok(())
     }
 
+    /// A fused compare-and-jump (`eqj`, `nej`, `ltj`, `lej`) to `target`,
+    /// its signed 8-bit offset written once the target is placed.
+    fn fused_jump(&mut self, op: Op, a: u32, b: u32, target: Label, site: usize) {
+        self.row();
+        let pc = self.code.len();
+        self.code.push(Word::abc(op, a as u8, b as u8, 0));
+        self.patches.push(Patch {
+            pc,
+            op,
+            a,
+            wide: false,
+            target,
+            fused: Some((b, site)),
+        });
+    }
+
+    /// Go to `to` unless the value `v` is truthy: a comparison read only
+    /// here is a fused compare-and-jump, a `not` read only here tests its
+    /// operand, anything else is `testn`.
+    fn leave_unless(&mut self, v: ValueId, to: Label) -> Result<(), Error> {
+        if let Some(c) = self.pending.remove(&v) {
+            return self.compare_jump(c, to);
+        }
+        if let Some(x) = self.pending_not.remove(&v) {
+            let x = self.val(x)?;
+            return self.jump(Op::TEST, x, to);
+        }
+        let c = self.val(v)?;
+        self.jump(Op::TESTN, c, to)
+    }
+
+    /// Go to `to` unless the comparison holds. The operator runs on the
+    /// operands in their order, at the comparison's position, as `eq`,
+    /// `lt` and `le` run it; there is no `gt`/`ge`, so `a > b` leaves when
+    /// `a <= b` holds (`lej`) and `a >= b` when `a < b` does (`ltj`): the
+    /// same operator on the same operands, and a NaN raises either way.
+    /// `a < b` and `a <= b` jump over a `jmp` to `to` when they hold. A
+    /// register past 255, or a target too far for the 8-bit offset, takes
+    /// the long form: the comparison into a register, then `test` or
+    /// `testn`.
+    fn compare_jump(&mut self, c: PendingCmp, to: Label) -> Result<(), Error> {
+        let (a, b) = (self.val(c.a)?, self.val(c.b)?);
+        let keep = self.span;
+        let narrow = a <= 0xFF && b <= 0xFF;
+        let (base, leave_if) = match c.op {
+            BinOp::Eq => (Op::EQ, false),
+            BinOp::Ne => (Op::EQ, true),
+            BinOp::Lt => (Op::LT, false),
+            BinOp::Le => (Op::LE, false),
+            BinOp::Gt => (Op::LE, true),
+            BinOp::Ge => (Op::LT, true),
+            op => {
+                return Err(Error::Internal(format!(
+                    "`{}` as a branch's comparison",
+                    op.symbol()
+                )))
+            }
+        };
+        self.span = c.span;
+        let r = if narrow && matches!(c.op, BinOp::Lt | BinOp::Le) {
+            // Over the `jmp`: one word, or two with a `WIDE` prefix.
+            let over = if self.wide_jumps { 2 } else { 1 };
+            let op = if c.op == BinOp::Lt { Op::LTJ } else { Op::LEJ };
+            self.abc(op, a, b, over).and_then(|()| {
+                self.span = keep;
+                self.jump(Op::JMP, 0, to)
+            })
+        } else {
+            let site = self.fused_sites;
+            if narrow {
+                self.fused_sites += 1;
+            }
+            if narrow && !self.far.contains(&site) {
+                let op = match (base, leave_if) {
+                    (Op::EQ, false) => Op::NEJ,
+                    (Op::EQ, true) => Op::EQJ,
+                    (Op::LT, _) => Op::LTJ,
+                    _ => Op::LEJ,
+                };
+                self.fused_jump(op, a, b, to, site);
+                Ok(())
+            } else {
+                let t = self.alloc();
+                self.abc(base, t, a, b).and_then(|()| {
+                    self.span = keep;
+                    self.jump(if leave_if { Op::TEST } else { Op::TESTN }, t, to)
+                })?;
+                self.free(t);
+                Ok(())
+            }
+        };
+        self.span = keep;
+        r
+    }
+
+    /// `a op K` with a constant operand. A constant index past 16 bits (a
+    /// pool that large) takes the register form, the constant loaded.
+    fn binary_k(&mut self, i: &'m Instr, op: BinOp, x: ValueId, k: ValueId) -> Result<(), Error> {
+        let key = match self
+            .f
+            .vals
+            .get(k.0 as usize)
+            .and_then(|v| self.instr_of.get(&v.def))
+            .map(|d| &d.kind)
+        {
+            Some(Kind::Const(Const::Int(n))) => ConstKey::Int(*n),
+            Some(Kind::Const(Const::Float(f))) => ConstKey::Float(f.to_bits()),
+            Some(Kind::Const(Const::Str(s))) => ConstKey::Str(s),
+            _ => return Err(Error::Internal(format!("%{} is not a constant", k.0))),
+        };
+        let (code, negate) =
+            k_op(op).ok_or_else(|| Error::Internal("a binary operator with no K form".into()))?;
+        let xr = self.val(x)?;
+        let c = self.konst(key);
+        let r = self.define(i)?;
+        if c <= 0xFFFF {
+            self.abc(code, r, xr, c)?;
+        } else {
+            // The register form, operands in the source's order.
+            let kr = match self.val_reg.get(&k) {
+                Some(kr) => (*kr, false),
+                None => {
+                    let t = self.alloc();
+                    self.abx(Op::LOADK, t, c)?;
+                    (t, true)
+                }
+            };
+            let (l, rr) = match i.kind {
+                Kind::Binary(_, a, _) if a == k => (kr.0, xr),
+                _ => (xr, kr.0),
+            };
+            let base = match code {
+                Op::ADDK => Op::ADD,
+                Op::SUBK => Op::SUB,
+                Op::MULK => Op::MUL,
+                Op::DIVK => Op::DIV,
+                Op::MODK => Op::MOD,
+                Op::EQK => Op::EQ,
+                Op::LTK => Op::LT,
+                _ => Op::LE,
+            };
+            self.abc(base, r, l, rr)?;
+            if kr.1 {
+                self.free(kr.0);
+            }
+        }
+        if negate {
+            self.abc(Op::NOT, r, r, 0)?;
+        }
+        Ok(())
+    }
+
     fn patch(&mut self) -> Result<(), Retry> {
+        let mut far = Vec::new();
         for p in &self.patches {
             let target = self.labels[p.target.0]
                 .ok_or_else(|| Error::Internal("a jump to a label never placed".into()))?;
             let off = target as i64 - p.pc as i64 - 1;
-            if p.wide {
+            if let Some((b, site)) = p.fused {
+                match i8::try_from(off) {
+                    Ok(o) => self.code[p.pc] = Word::abc(p.op, p.a as u8, b as u8, o as u8),
+                    Err(_) => far.push(site),
+                }
+            } else if p.wide {
                 let off = i32::try_from(off).map_err(|_| Error::Limit {
                     what: "a jump past 32 bits".into(),
                     span: self.f.span,
@@ -885,6 +1378,9 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 };
                 self.code[p.pc] = Word::asbx(p.op, p.a as u8, off);
             }
+        }
+        if !far.is_empty() {
+            return Err(Retry::Far(far));
         }
         Ok(())
     }
@@ -1183,8 +1679,9 @@ impl<'c, 'm> FnLower<'c, 'm> {
         match &i.kind {
             Kind::Step(_) => {
                 let k = self.nest();
-                self.abx(Op::STEPS, k, 1)?;
+                self.steps(k, 1)?;
             }
+            Kind::Const(_) if i.result.is_some_and(|v| self.unloaded.contains(&v)) => {}
             Kind::Const(c) => {
                 let r = self.define(i)?;
                 match c {
@@ -1201,13 +1698,22 @@ impl<'c, 'm> FnLower<'c, 'm> {
                     }
                 }
             }
-            Kind::Load(v) => {
-                let r = self.define(i)?;
-                self.read_slot(r, *v)?;
-            }
+            Kind::Load(v) => match i.result.filter(|r| self.alias.contains(r)) {
+                Some(r) => {
+                    let s = self.var(*v)?;
+                    self.val_reg.insert(r, s);
+                    self.pinned.insert(r);
+                }
+                None => {
+                    let r = self.define(i)?;
+                    self.read_slot(r, *v)?;
+                }
+            },
             Kind::Decl(v, x) | Kind::Store(v, x) => {
                 let x = self.val(*x)?;
                 match self.slot(*v)? {
+                    // Made in place.
+                    Slot::Reg(s) if s == x => {}
                     Slot::Reg(s) => self.abc(Op::MOV, s, x, 0)?,
                     Slot::Up(u) => self.abc(Op::SETUP, u, x, 0)?,
                 }
@@ -1226,6 +1732,11 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 self.free(t);
                 self.abc(Op::INTERP, r, k, 0)?;
             }
+            Kind::Unary(UnOp::Not, x) if i.result.is_some_and(|r| self.fused.contains_key(&r)) => {
+                if let Some(r) = i.result {
+                    self.pending_not.insert(r, *x);
+                }
+            }
             Kind::Unary(op, x) => {
                 let x = self.val(*x)?;
                 let r = self.define(i)?;
@@ -1234,6 +1745,24 @@ impl<'c, 'm> FnLower<'c, 'm> {
                     UnOp::Not => Op::NOT,
                 };
                 self.abc(op, r, x, 0)?;
+            }
+            Kind::Binary(op, a, b) if i.result.is_some_and(|r| self.fused.contains_key(&r)) => {
+                if let Some(r) = i.result {
+                    self.pending.insert(
+                        r,
+                        PendingCmp {
+                            op: *op,
+                            a: *a,
+                            b: *b,
+                            span: i.span,
+                        },
+                    );
+                }
+            }
+            Kind::Binary(op, a, b) if self.kform.contains_key(&i.id) => {
+                let swap = self.kform[&i.id];
+                let (x, k) = if swap { (*b, *a) } else { (*a, *b) };
+                self.binary_k(i, *op, x, k)?;
             }
             Kind::Binary(op, a, b) => {
                 let (a, b) = (self.val(*a)?, self.val(*b)?);
@@ -1344,10 +1873,9 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 let slot = *self.cx.pull_slot.get(func).ok_or_else(|| {
                     Error::Internal(format!("no slot holds the closure of function {}", func.0))
                 })?;
-                let t = self.alloc();
-                self.read_slot(t, slot)?;
-                let w = self.window(Some(t), args)?;
-                self.free(t);
+                // The closure is read straight into the window.
+                let w = self.window(None, args)?;
+                self.read_slot(w, slot)?;
                 self.abc(Op::CALL, w, args.len() as u32, 0)?;
                 self.call_result(i, w, args.len());
             }
@@ -1362,9 +1890,8 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 then,
                 otherwise,
             } => {
-                let c = self.val(*cond)?;
                 let other = self.label();
-                self.jump(Op::TESTN, c, other)?;
+                self.leave_unless(*cond, other)?;
                 self.block(then)?;
                 match otherwise {
                     Some(o) => {
@@ -1383,7 +1910,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
             Kind::Loop { cond, body } => {
                 let outer = self.nest();
                 let (head, exit) = (self.label(), self.label());
-                self.abx(Op::STEPS, outer + 1, 0)?;
+                self.steps(outer + 1, 0)?;
                 self.loops.push(LoopCx {
                     cont: head,
                     cont_op: Op::LOOP,
@@ -1402,22 +1929,20 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 self.loops.pop();
                 self.place(exit);
                 self.span = i.span;
-                self.abx(Op::STEPS, outer, 0)?;
+                self.steps(outer, 0)?;
             }
-            Kind::Yield(v) => {
-                let x = self.val(*v)?;
-                match self.yields.last() {
-                    Some(YieldTo::Reg(r)) => {
-                        let r = *r;
-                        self.abc(Op::MOV, r, x, 0)?;
-                    }
-                    Some(YieldTo::Exit(l)) => {
-                        let l = *l;
-                        self.jump(Op::TESTN, x, l)?;
-                    }
-                    None => return Err(Error::Internal("a `yield` outside a value block".into())),
+            Kind::Yield(v) => match self.yields.last() {
+                Some(YieldTo::Reg(r)) => {
+                    let r = *r;
+                    let x = self.val(*v)?;
+                    self.abc(Op::MOV, r, x, 0)?;
                 }
-            }
+                Some(YieldTo::Exit(l)) => {
+                    let l = *l;
+                    self.leave_unless(*v, l)?;
+                }
+                None => return Err(Error::Internal("a `yield` outside a value block".into())),
+            },
             Kind::Ret(v) => {
                 let mut x = self.val(*v)?;
                 // `ret` closes every burn of the frame, and `try.leave` the
@@ -2096,7 +2621,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
             self.abc(Op::MOV, a, lo, 0)?;
             self.abc(Op::MOV, a + 1, hi, 0)?;
             self.load_int(a + 2, 1)?;
-            self.abx(Op::STEPS, outer + 1, 0)?;
+            self.steps(outer + 1, 0)?;
             // `E403` and `E512` are the range's, at its position.
             self.span = range_span;
             self.jump(Op::FORPREP, a, exit)?;
@@ -2122,7 +2647,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
             self.abc(Op::MOV, a, it, 0)?;
             // `E405` is at the `for`.
             self.abc(Op::ITERPREP, a, 0, 0)?;
-            self.abx(Op::STEPS, outer + 1, 0)?;
+            self.steps(outer + 1, 0)?;
             let head = self.label();
             self.place(head);
             self.jump(Op::ITERNEXT, a, exit)?;
@@ -2143,7 +2668,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
         }
         self.place(exit);
         self.span = i.span;
-        self.abx(Op::STEPS, outer, 0)?;
+        self.steps(outer, 0)?;
         if !captured {
             self.var_reg.remove(&var);
             for k in 0..4 {
@@ -2294,6 +2819,66 @@ impl<'c, 'm> FnLower<'c, 'm> {
     }
 }
 
+/// A binary operator's form with a constant right operand, and whether a
+/// `not` follows it.
+fn k_op(op: BinOp) -> Option<(Op, bool)> {
+    Some(match op {
+        BinOp::Add => (Op::ADDK, false),
+        BinOp::Sub => (Op::SUBK, false),
+        BinOp::Mul => (Op::MULK, false),
+        BinOp::Div => (Op::DIVK, false),
+        BinOp::Rem => (Op::MODK, false),
+        BinOp::Eq => (Op::EQK, false),
+        BinOp::Ne => (Op::EQK, true),
+        BinOp::Lt => (Op::LTK, false),
+        BinOp::Le => (Op::LEK, false),
+        BinOp::Gt => (Op::LEK, true),
+        BinOp::Ge => (Op::LTK, true),
+        _ => return None,
+    })
+}
+
+/// Every block of a function, nested ones included, each with whether it
+/// is a `while` loop's condition.
+fn all_blocks<'a>(b: &'a Block, is_cond: bool, out: &mut Vec<(&'a Block, bool)>) {
+    out.push((b, is_cond));
+    for i in &b.instrs {
+        match &i.kind {
+            Kind::Loop { cond, body } => {
+                all_blocks(cond, true, out);
+                all_blocks(body, false, out);
+            }
+            k => {
+                for nested in k.blocks() {
+                    all_blocks(nested, false, out);
+                }
+            }
+        }
+    }
+}
+
+/// Does `i` write the slot `v`: anywhere in it (`deep`), or before it has
+/// read its operands (the last reader of a slot read with no copy reads
+/// first: a store writes after, an `if`, a value block or a loop's body
+/// runs after; only a burn makes its state map before its label is read).
+fn writes(i: &Instr, v: VarId, deep: bool) -> bool {
+    if !deep {
+        return matches!(&i.kind, Kind::Burn(b) if b.state == Some(v));
+    }
+    let mut hit = false;
+    walk_one(i, &mut |x| {
+        hit |= match &x.kind {
+            Kind::Decl(w, _) | Kind::Store(w, _) => *w == v,
+            Kind::MakeChain { name, .. } => *name == v,
+            Kind::ForEach { var, .. } => *var == v,
+            Kind::Try { catch, .. } => catch.as_ref().is_some_and(|c| c.0 == Some(v)),
+            Kind::Burn(b) => b.state == Some(v),
+            _ => false,
+        };
+    });
+    hit
+}
+
 /// The operator of a compound assignment.
 fn compound(op: AssignOp) -> Option<Op> {
     match op {
@@ -2349,11 +2934,12 @@ fn collect_uses(
     start: &HashMap<ir::InstrId, usize>,
     end: &HashMap<ir::InstrId, usize>,
     ranges: &HashMap<ValueId, (ValueId, ValueId, Span)>,
+    remap: &HashMap<ir::InstrId, usize>,
     loops: &mut Vec<LoopRange>,
     f: &mut dyn FnMut(ValueId, usize, &[LoopRange]),
 ) {
     for i in &b.instrs {
-        let s = start.get(&i.id).copied().unwrap_or(0);
+        let s = remap.get(&i.id).or(start.get(&i.id)).copied().unwrap_or(0);
         for v in i.kind.uses() {
             f(v, s, loops);
             // A `for` over `a..b` reads the bounds itself.
@@ -2367,7 +2953,7 @@ fn collect_uses(
             loops.push((s, end.get(&i.id).copied().unwrap_or(s)));
         }
         for nested in i.kind.blocks() {
-            collect_uses(nested, start, end, ranges, loops, f);
+            collect_uses(nested, start, end, ranges, remap, loops, f);
         }
         if is_loop {
             loops.pop();
