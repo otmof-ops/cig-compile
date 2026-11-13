@@ -1,6 +1,6 @@
 ; module: calls.cig
 
-fn 0 <anonymous> (0 args, 12 regs, main, 5 consts, 3 children, 0 upvals, 0 handlers, 20 lines, 0 regions, 0 region rows):
+fn 0 <anonymous> (0 args, 11 regs, main, 5 consts, 3 children, 0 upvals, 0 handlers, 17 lines, 0 regions, 0 region rows):
   0000   closure   R0, Fn0
   0001   mov       R1, R0
   0002   closure   R0, Fn1
@@ -14,77 +14,62 @@ fn 0 <anonymous> (0 args, 12 regs, main, 5 consts, 3 children, 0 upvals, 0 handl
   0010   callb     R6, B3, n=1
   0011   mov       R5, R6
   0012   steps     0, 1
-  0013   mov       R6, R5
-  0014   mov       R7, R3
-  0015   mov       R8, R6
-  0016   call      R7, n=1, n=0
-  0017   mov       R3, R5
-  0018   mov       R6, R2
-  0019   mov       R8, R6
-  0020   mov       R9, R0
-  0021   mov       R10, R3
-  0022   call      R8, n=2, n=0
-  0023   mov       R0, R1
-  0024   mov       R9, R0
-  0025   mov       R10, R7
-  0026   mov       R11, R8
-  0027   call      R9, n=2, n=0
-  0028   mov       R0, R5
-  0029   mov       R7, R0
-  0030   callb     R6, B1, n=1
-  0031   mov       R8, R6
-  0032   callb     R7, B0, n=1
-  0033   add       R0, R9, R7
-  0034   mov       R3, R0
-  0035   exhale    R3, x1
-  0036   newmap    R0, 4
-  0037   loadk     R3, K1 ("add")
-  0038   insertmap R0, R3, R1
-  0039   loadk     R3, K2 ("fact")
-  0040   insertmap R0, R3, R2
-  0041   loadk     R3, K3 ("sq")
-  0042   insertmap R0, R3, R4
-  0043   loadk     R3, K4 ("n")
-  0044   insertmap R0, R3, R5
-  0045   ret       R0
+  0013   mov       R6, R3
+  0014   mov       R7, R5
+  0015   call      R6, n=1, n=0
+  0016   mov       R8, R0
+  0017   mov       R9, R5
+  0018   mov       R7, R2
+  0019   call      R7, n=2, n=0
+  0020   mov       R9, R6
+  0021   mov       R10, R7
+  0022   mov       R8, R1
+  0023   call      R8, n=2, n=0
+  0024   mov       R7, R5
+  0025   callb     R6, B1, n=1
+  0026   mov       R10, R6
+  0027   callb     R9, B0, n=1
+  0028   add       R0, R8, R9
+  0029   mov       R3, R0
+  0030   exhale    R3, x1
+  0031   newmap    R0, 4
+  0032   loadk     R3, K1 ("add")
+  0033   insertmap R0, R3, R1
+  0034   loadk     R3, K2 ("fact")
+  0035   insertmap R0, R3, R2
+  0036   loadk     R3, K3 ("sq")
+  0037   insertmap R0, R3, R4
+  0038   loadk     R3, K4 ("n")
+  0039   insertmap R0, R3, R5
+  0040   ret       R0
 
-  fn 1 add (2 args, 5 regs, pull, 0 consts, 0 children, 0 upvals, 0 handlers, 5 lines, 0 regions, 0 region rows):
+  fn 1 add (2 args, 3 regs, pull, 0 consts, 0 children, 0 upvals, 0 handlers, 3 lines, 0 regions, 0 region rows):
     0000   steps     0, 1
-    0001   mov       R2, R0
-    0002   mov       R3, R1
-    0003   add       R4, R2, R3
-    0004   ret       R4
+    0001   add       R2, R0, R1
+    0002   ret       R2
 
-  fn 2 fact (2 args, 11 regs, pull, 0 consts, 0 children, 0 upvals, 0 handlers, 18 lines, 0 regions, 0 region rows):
+  fn 2 fact (2 args, 6 regs, pull, 1 consts, 0 children, 0 upvals, 0 handlers, 12 lines, 0 regions, 0 region rows):
     0000   steps     0, 1
-    0001   mov       R2, R1
-    0002   loadint   R3, 1
-    0003   le        R4, R2, R3
-    0004   testn     R4, -> 8
-    0005   steps     0, 1
-    0006   loadint   R2, 1
-    0007   ret       R2
-    0008   steps     0, 1
-    0009   mov       R2, R1
-    0010   mov       R3, R0
-    0011   mov       R4, R0
-    0012   mov       R5, R1
-    0013   loadint   R6, 1
-    0014   sub       R7, R5, R6
-    0015   mov       R8, R3
-    0016   mov       R9, R4
-    0017   mov       R10, R7
-    0018   call      R8, n=2, n=0
-    0019   mul       R3, R2, R8
-    0020   ret       R3
+    0001   loadint   R2, 1
+    0002   lej       R1, R2, -> 4
+    0003   jmp       0, -> 7
+    0004   steps     0, 1
+    0005   loadint   R3, 1
+    0006   ret       R3
+    0007   steps     0, 1
+    0008   subk      R2, R1, K0 (int 1)
+    0009   mov       R3, R0
+    0010   mov       R4, R0
+    0011   mov       R5, R2
+    0012   call      R3, n=2, n=0
+    0013   mul       R2, R1, R3
+    0014   ret       R2
 
-  fn 3 <anonymous> (1 args, 4 regs, lambda, 0 consts, 0 children, 0 upvals, 0 handlers, 3 lines, 0 regions, 0 region rows):
-    0000   mov       R1, R0
-    0001   mov       R2, R0
-    0002   mul       R3, R1, R2
-    0003   ret       R3
+  fn 3 <anonymous> (1 args, 2 regs, lambda, 0 consts, 0 children, 0 upvals, 0 handlers, 1 lines, 0 regions, 0 region rows):
+    0000   mul       R1, R0, R0
+    0001   ret       R1
 
-; fn 0 lines: 0@1:1 2@4:1 4@10:1 5@10:12 6@10:1 7@11:1 8@11:14 9@11:10 11@11:1 12@12:1 13@12:15 14@12:12 17@12:30 18@12:19 23@12:8 28@12:44 29@12:40 31@12:36 33@12:8 34@12:1
-; fn 1 lines: 0@2:3 1@2:9 2@2:13 3@2:9 4@2:3
-; fn 2 lines: 0@5:3 1@5:6 2@5:11 3@5:6 4@5:3 5@6:5 6@6:11 7@6:5 8@8:3 9@8:9 10@8:13 11@8:18 12@8:24 13@8:28 14@8:24 15@8:13 19@8:9 20@8:3
-; fn 3 lines: 0@10:23 1@10:27 2@10:23
+; fn 0 lines: 0@1:1 2@4:1 4@10:1 5@10:12 6@10:1 7@11:1 8@11:14 9@11:10 11@11:1 12@12:1 13@12:12 16@12:19 20@12:8 24@12:40 26@12:36 28@12:8 29@12:1
+; fn 1 lines: 0@2:3 1@2:9 2@2:3
+; fn 2 lines: 0@5:3 1@5:11 2@5:6 3@5:3 4@6:5 5@6:11 6@6:5 7@8:3 8@8:24 9@8:13 13@8:9 14@8:3
+; fn 3 lines: 0@10:23

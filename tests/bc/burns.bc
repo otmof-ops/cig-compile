@@ -1,6 +1,6 @@
 ; module: burns.cig
 
-fn 0 <anonymous> (0 args, 16 regs, main, 17 consts, 2 children, 0 upvals, 0 handlers, 66 lines, 3 regions, 3 region rows):
+fn 0 <anonymous> (0 args, 15 regs, main, 17 consts, 2 children, 0 upvals, 0 handlers, 61 lines, 3 regions, 3 region rows):
   0000   closure   R0, Fn0
   0001   mov       R1, R0
   0002   steps     0, 1
@@ -18,7 +18,7 @@ fn 0 <anonymous> (0 args, 16 regs, main, 17 consts, 2 children, 0 upvals, 0 hand
   0014   mov       R5, R3
   0015   loadint   R6, 1
   0016   steps     1, 0
-  0017   forprep   R4, -> 47
+  0017   forprep   R4, -> 42
   0018   steps     1, 1
   0019   steps     1, 1
   0020   loadk     R8, K2 ("step")
@@ -29,106 +29,95 @@ fn 0 <anonymous> (0 args, 16 regs, main, 17 consts, 2 children, 0 upvals, 0 hand
   "), K4 ("s")
   0024   steps     1, 1
   0025   loadk     R10, K5 ("./build/x")
-  0026   mov       R11, R9
-  0027   setfield  R11, K6 ("p"), R10
-  0028   steps     1, 1
-  0029   mov       R10, R9
-  0030   getfield  R11, R10, K6 ("p")
-  0031   mov       R10, R1
-  0032   mov       R12, R10
-  0033   mov       R13, R11
-  0034   call      R12, n=1, n=0
+  0026   setfield  R9, K6 ("p"), R10
+  0027   steps     1, 1
+  0028   getfield  R10, R9, K6 ("p")
+  0029   mov       R12, R10
+  0030   mov       R11, R1
+  0031   call      R11, n=1, n=0
+  0032   steps     1, 1
+  0033   loadint   R10, 1
+  0034   nej       R7, R10, -> 39
   0035   steps     1, 1
-  0036   mov       R10, R7
-  0037   loadint   R11, 1
-  0038   eq        R12, R10, R11
-  0039   testn     R12, -> 44
-  0040   steps     1, 1
-  0041   comp.leave
-  0042   burn.leave
-  0043   jmp       0, -> 47
-  0044   comp.leave
-  0045   burn.leave
-  0046   forloop   R4, -> 18
-  0047   steps     0, 0
-  0048   steps     0, 1
-  0049   burn.enter class=unlit, Rg1
-  0050   steps     0, 1
-  0051   loadk     R2, K7 ("./logs/d")
-  0052   mov       R4, R2
-  0053   burn.op   R3, K8 ("fs.mkdir"), kind=5, argc=1
-  0054   burn.leave
-  0055   steps     0, 1
-  0056   closure   R2, Fn1
-  0057   loadk     R4, K9 ("ship")
-  0058   loadk     R5, K10 ("deploy")
-  0059   mov       R6, R0
-  0060   loadnull  R7
-  0061   mov       R8, R2
-  0062   chain.make R3, x5
-  0063   nop       
-  0064   nop       
-  0065   mov       R10, R3
-  0066   steps     0, 1
-  0067   loadk     R2, K11 ("a")
-  0068   loadk     R3, K12 ("b")
-  0069   newlist   R4, 2
-  0070   appendlist R4, R2
-  0071   appendlist R4, R3
-  0072   mov       R5, R4
-  0073   iterprep  R5
-  0074   steps     1, 0
-  0075   iternext  R5, -> 94
-  0076   steps     1, 1
+  0036   comp.leave
+  0037   burn.leave
+  0038   jmp       0, -> 42
+  0039   comp.leave
+  0040   burn.leave
+  0041   forloop   R4, -> 18
+  0042   steps     0, 1
+  0043   burn.enter class=unlit, Rg1
+  0044   steps     0, 1
+  0045   loadk     R2, K7 ("./logs/d")
+  0046   mov       R4, R2
+  0047   burn.op   R3, K8 ("fs.mkdir"), kind=5, argc=1
+  0048   burn.leave
+  0049   steps     0, 1
+  0050   closure   R2, Fn1
+  0051   loadk     R4, K9 ("ship")
+  0052   loadk     R5, K10 ("deploy")
+  0053   mov       R6, R0
+  0054   loadnull  R7
+  0055   mov       R8, R2
+  0056   chain.make R3, x5
+  0057   nop       
+  0058   nop       
+  0059   mov       R10, R3
+  0060   steps     0, 1
+  0061   loadk     R2, K11 ("a")
+  0062   loadk     R3, K12 ("b")
+  0063   newlist   R4, 2
+  0064   appendlist R4, R2
+  0065   appendlist R4, R3
+  0066   mov       R5, R4
+  0067   iterprep  R5
+  0068   steps     1, 0
+  0069   iternext  R5, -> 86
+  0070   steps     1, 1
+  0071   steps     1, 1
+  0072   loadk     R2, K13 ("turn-")
+  0073   add       R3, R2, R8
+  0074   newmap    R2, 0
+  0075   burn.enter class=normal, Rg2 (label R3)
+  0076   nop       
   0077   steps     1, 1
-  0078   loadk     R2, K13 ("turn-")
-  0079   mov       R3, R8
-  0080   add       R11, R2, R3
-  0081   newmap    R2, 0
-  0082   burn.enter class=normal, Rg2 (label R11)
-  0083   nop       
-  0084   steps     1, 1
-  0085   loadk     R3, K14 ("./logs/turns")
-  0086   mov       R12, R8
-  0087   mov       R14, R3
-  0088   mov       R15, R12
-  0089   burn.op   R13, K15 ("fs.append_text"), kind=1, argc=2
-  0090   steps     1, 1
-  0091   burn.leave
-  0092   jmp       0, -> 93
-  0093   loop      0, -> 75
-  0094   steps     0, 0
-  0095   steps     0, 1
-  0096   loadbool  R3, 1
-  0097   testn     R3, -> 105
-  0098   steps     0, 1
-  0099   loadk     R5, K16 ("inner")
-  0100   loadk     R6, K10 ("deploy")
-  0101   mov       R7, R0
-  0102   chain.make R4, x3
-  0103   nop       
-  0104   mov       R8, R4
-  0105   newmap    R0, 2
-  0106   loadk     R3, K10 ("deploy")
-  0107   insertmap R0, R3, R1
-  0108   loadk     R3, K9 ("ship")
-  0109   insertmap R0, R3, R10
-  0110   ret       R0
+  0078   loadk     R11, K14 ("./logs/turns")
+  0079   mov       R13, R11
+  0080   mov       R14, R8
+  0081   burn.op   R12, K15 ("fs.append_text"), kind=1, argc=2
+  0082   steps     1, 1
+  0083   burn.leave
+  0084   jmp       0, -> 85
+  0085   loop      0, -> 69
+  0086   steps     0, 1
+  0087   loadbool  R3, 1
+  0088   testn     R3, -> 96
+  0089   steps     0, 1
+  0090   loadk     R5, K16 ("inner")
+  0091   loadk     R6, K10 ("deploy")
+  0092   mov       R7, R0
+  0093   chain.make R4, x3
+  0094   nop       
+  0095   mov       R8, R4
+  0096   newmap    R0, 2
+  0097   loadk     R3, K10 ("deploy")
+  0098   insertmap R0, R3, R1
+  0099   loadk     R3, K9 ("ship")
+  0100   insertmap R0, R3, R10
+  0101   ret       R0
 
-  fn 1 deploy (1 args, 6 regs, pull, requires_burn, 2 consts, 0 children, 0 upvals, 0 handlers, 5 lines, 0 regions, 0 region rows):
+  fn 1 deploy (1 args, 5 regs, pull, requires_burn, 2 consts, 0 children, 0 upvals, 0 handlers, 4 lines, 0 regions, 0 region rows):
     0000   steps     0, 1
-    0001   mov       R1, R0
-    0002   loadk     R2, K0 ("a")
+    0001   loadk     R1, K0 ("a")
+    0002   mov       R3, R0
     0003   mov       R4, R1
-    0004   mov       R5, R2
-    0005   burn.op   R3, K1 ("fs.write_text"), kind=0, argc=2
-    0006   loadnull  R1
-    0007   ret       R1
+    0004   burn.op   R2, K1 ("fs.write_text"), kind=0, argc=2
+    0005   loadnull  R1
+    0006   ret       R1
 
-  fn 2 <anonymous> (1 args, 2 regs, lambda, 0 consts, 0 children, 0 upvals, 0 handlers, 1 lines, 0 regions, 0 region rows):
-    0000   mov       R1, R0
-    0001   ret       R1
+  fn 2 <anonymous> (1 args, 1 regs, lambda, 0 consts, 0 children, 0 upvals, 0 handlers, 1 lines, 0 regions, 0 region rows):
+    0000   ret       R0
 
-; fn 0 lines: 0@2:1 2@1:1 3@1:8 4@1:19 5@1:1 8@1:8 9@1:19 10@5:1 11@5:10 12@5:13 13@5:1 17@5:10 18@5:1 19@6:3 20@6:12 21@6:3 23@12:12 24@7:5 25@7:11 26@7:5 28@8:5 29@8:12 30@8:12 31@8:5 35@9:5 36@9:8 37@9:13 38@9:8 39@9:5 40@10:7 44@6:3 46@5:1 48@16:1 50@17:3 51@17:12 52@17:3 54@16:1 55@19:1 56@19:22 57@19:1 63@19:14 64@19:22 65@19:1 66@20:1 67@20:11 68@20:16 69@20:10 72@20:1 77@21:3 78@21:12 79@21:22 80@21:12 81@21:3 83@21:12 84@22:5 85@22:20 86@22:36 87@22:5 90@23:5 93@20:1 95@26:1 96@26:4 97@26:1 98@27:3 103@27:17 104@27:3
-; fn 1 lines: 0@3:3 1@3:17 2@3:20 3@3:3 6@2:1
+; fn 0 lines: 0@2:1 2@1:1 3@1:8 4@1:19 5@1:1 8@1:8 9@1:19 10@5:1 11@5:10 12@5:13 13@5:1 17@5:10 18@5:1 19@6:3 20@6:12 21@6:3 23@12:12 24@7:5 25@7:11 26@7:5 27@8:5 28@8:12 29@8:5 32@9:5 33@9:13 34@9:8 35@10:7 39@6:3 41@5:1 42@16:1 44@17:3 45@17:12 46@17:3 48@16:1 49@19:1 50@19:22 51@19:1 57@19:14 58@19:22 59@19:1 60@20:1 61@20:11 62@20:16 63@20:10 66@20:1 71@21:3 72@21:12 73@21:12 74@21:3 76@21:12 77@22:5 78@22:20 79@22:5 82@23:5 85@20:1 86@26:1 87@26:4 88@26:1 89@27:3 94@27:17 95@27:3
+; fn 1 lines: 0@3:3 1@3:20 2@3:3 5@2:1
 ; fn 2 lines: 0@19:33
