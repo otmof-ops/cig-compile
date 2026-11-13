@@ -201,10 +201,23 @@ each ending with `try.leave`; `break`, `continue` and `snuff` leave
 every `try` they cross first, so each `finally` runs, and a snuffed
 value waits in a register no `finally` writes. `cough` is `throw`, and
 a builtin, a module or `args` used as a value is `loadg`, read from
-the prelude by name. Burns, `pack` and chains are refused with their
-construct and position. `tests/bc.rs` runs what it lowers in the
-VM and holds its output, errors, positions and step count to the
-tree-walker's.
+the prelude by name. A burn is its state map, `burn.enter` with its
+region (class and label), `comp.enter` with the `unburn` block's source
+and line, the body, `comp.leave` and `burn.leave`; `break` and
+`continue` leave every `try` and burn they cross, innermost first, and
+`snuff` leaves the tries (its `ret` closes the burns). A call that
+changes the world is `burn.op` with the VM's own kind for its builtin,
+and a function with one outside its own burns is marked
+`requires_burn`, so it runs inside a caller's burn and is refused with
+`E701` outside one, as in the interpreter. `pack` and `chain` check each
+root and step right after it is evaluated, as the interpreter does, so
+a bad root is reported before a later one runs. Two things the bytecode
+cannot carry are refused with their construct and position: a burn
+whose label is not a string literal (a region's label is a constant),
+and a `pack` root that runs a pull or a function. `tests/bc.rs` runs
+what it lowers in the VM and holds its output, errors, positions and
+step count to the tree-walker's, and for burns the files, the journal,
+a dry run's plan and what a rollback puts back.
 
 ## The box is Linux's
 

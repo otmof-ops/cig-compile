@@ -13,6 +13,20 @@ project follows semantic versioning.
   that replaces an operand no longer makes the lowering refuse it. A
   member store (`obj.k = v`) now stores its object's span too, and a
   store into something that is not a map is reported there.
+- **The bytecode lowering, fourth part (#31).** Burns, their ops and
+  compensations, `pack` and chains lower to the VM's burn instructions,
+  so a whole script lowers: every generated program and every CigScript
+  example and test script but one does. A burn is `burn.enter` with its
+  region, `comp.enter` with its `unburn` block, `comp.leave` and
+  `burn.leave`, left innermost first by `break` and `continue` across
+  tries; an effect is `burn.op` with the VM's kind; a pull with an effect
+  outside its own burns is `requires_burn`. `pack` roots and chain steps
+  are checked as each is evaluated, as the interpreter checks them.
+  Refused with their position: a burn whose label is not a string
+  literal (`orchestrate.cig`'s `burn (s, name)`), and a `pack` root that
+  runs a pull or a function. The IR's burn now keeps its `unburn`
+  block's span. `tests/bc.rs` holds burns to the tree-walker on output,
+  errors, steps, files, journal, plan and rollback, at every step budget.
 - **The bytecode lowering, third part (#31).** `try`/`ashtray`/`finally`
   lower to the VM's handlers (`try.enter`, `try.leave`), with `break`,
   `continue` and `snuff` running every `finally` they leave; `cough` is

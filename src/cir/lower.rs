@@ -581,6 +581,7 @@ impl Lowerer<'_> {
                     body: b,
                     compensate,
                     unburn_src: unburn_src.clone(),
+                    unburn_at: unburn.as_ref().map(|u| u.span),
                 };
                 self.emit(out, *span, Kind::Burn(Box::new(node)), None);
             }

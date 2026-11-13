@@ -208,6 +208,10 @@ pub struct BurnNode {
     pub body: Block,
     pub compensate: Option<Block>,
     pub unburn_src: Option<String>,
+    /// The `unburn { }` block's own span: the line the journal records for
+    /// the compensation (the tree-walker's), which a back end needs at run
+    /// time.
+    pub unburn_at: Option<Span>,
 }
 
 pub enum Kind {
