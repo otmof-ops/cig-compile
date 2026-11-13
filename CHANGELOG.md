@@ -5,6 +5,13 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **Payload format 2 is decided (#31, #71, #8, #40).** One container
+  holds a program's bytecode, its archives, its own flags and its
+  provenance: a short record, a table of hashed sections and a 56-byte
+  trailer, so a start hashes a constant amount whatever the script's
+  size. The record, with the order the parts land in, is
+  [docs/decisions/0004-payload-format-2.md](docs/decisions/0004-payload-format-2.md).
+  No built program changes yet.
 - **The bytecode lowering uses the IR's `key` and stored spans (#31).**
   A computed map key is checked where the interpreter checks it, before
   the entry's value, so a map with a computed key no longer needs to be
