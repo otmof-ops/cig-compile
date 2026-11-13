@@ -19,7 +19,7 @@ Four pieces of work each change that payload:
 
 | issue | wants in the payload |
 |---|---|
-| #31 stage B | the verified bytecode module, a stage field, the optimization level, the source kept for `--interp` |
+| #31 stage B | the bytecode module with its own hash, the optimization level, the source kept for errors, `--cig-program` and `--interp` (the `stage` key is this record's, for #31's `--stage`) |
 | #71 archives | named sections (`tree`, `snap`, the source compressed) with hashes computed at build, so start-up is flat in the script's size |
 | #8 own flags | `own_flags`, so a program takes every argument without `--` (`pack { own_flags: true }`) |
 | #40 trust | the target, the level and the runtime's sha256 in the record; the SBOM in the program |
@@ -32,7 +32,7 @@ Facts the design rests on, from the code as it is:
 - The runtime runs a program only when the record's `cig` equals its own version (`E1051`).
   The writer is the cigscript library at the version cigcompile pins, so a runtime always knows
   every section its own writer emits. Unknown sections matter only to tools that read programs
-  of other versions (`cigcompile verify`, `audit`) and to programs moved between runtimes.
+  of other versions (`cigcompile verify`) and to programs moved between runtimes.
 - A program knows it is one even with its trailer gone: its record starts at the runtime's
   image end with `{"format":` (#135). Any new layout must keep that, or a cut program could run
   as a general `cig`.
@@ -143,17 +143,20 @@ bytes, encoding, sha256) beside the record.
 - The SBOM lists the runtime (asset, version, `runtime_sha256`), its crates with versions and
   licenses, the compiler, and the script's sha256. The crate list is read from the runtime's own
   bytes, where cig writes it at build time beside its version mark, never from cigcompile's copy
-  of the library, which is built under another lock file. `build --sbom` keeps writing the same
-  bytes beside the program as a sidecar.
+  of the library, which is built under another lock file. The embedded document names the
+  program by its record (its name, the script's sha256, `runtime_sha256`): it cannot hold the
+  sha256 of the file that holds it. `build --sbom` keeps writing a sidecar beside the program:
+  the embedded document plus the program file's own sha256, which only a file outside the
+  program can carry.
 
 ### 3. Compatibility
 
 - **A format 1 program on a runtime that reads format 2** reads, checks and runs as it does
   today: the reader looks for `CIGPROG1` (48 bytes) and `CIGPROG2` (56 bytes) at the end, after
   any zero padding or PE certificate table. Format 1 is read and run for as long as programs
-  exist, since the code is small and `cigcompile verify` and `audit` need it for old programs.
+  exist, since the code is small and `cigcompile verify` needs it for old programs.
   Format 1 is stage `a` with no own flags. A format 1 program for another cig is still `E1051`.
-- **A format 2 program on a runtime that reads only format 1** (every cig through 1.21.x) is
+- **A format 2 program on a runtime that reads only format 1** (cig 1.15.1 through 1.21.x) is
   refused, never run as `cig`: the old reader does not know `CIGPROG2`, finds `{"format":` at
   its image end and stops with `E1050` ("its trailer is not at its end"). The wording is the
   damaged-program one, not "format 2". Making old runtimes say more would need a patch release of
@@ -220,12 +223,13 @@ still reported, without the quoted line and with a note that the source section 
   the run does not use is never read.
 - `CIG_VALIDATE=1` makes a start hash and validate every section before running, for tests.
 - `verify` names the part that differs: `runtime`, `record`, `section table`, `section <id>`,
-  `padding` or `trailer`. Format 1 programs keep `runtime`, `payload`, `trailer`.
+  `padding` or `trailer`. Format 1 programs keep today's names: `runtime`, `payload`, `script`
+  and `whole`.
 - `E1050` covers every integrity failure (head, table, a body, the bytecode's verifier and
   loader); `E1051` a program for another cig. The registry's `E1050` text gains "a section's
   bytes do not match the table, or the table does not read".
 - As in format 1 the hashes are integrity, not authenticity: they catch damage, not an edit.
-  Authenticity is signing (#10) and program passes.
+  Authenticity is signing (#40) and program passes.
 
 ### 6. Size
 
@@ -234,13 +238,13 @@ Estimated from the layouts above (the first package measures and records the rea
 | part | hello, stage `b` |
 |---|---:|
 | record (with `stage`, `opt`, `target`, `runtime_sha256`) | about 330 bytes |
-| `source` body, stored as is | about 15 bytes |
+| `source` body, stored as is | about 50 bytes |
 | `bytecode` body (header 40, one function of about five instructions, one line row) | about 160 bytes |
 | padding | at most 45 bytes |
-| table, three entries | 192 bytes |
+| table, two entries (`source`, `bytecode`) | 128 bytes |
 | trailer | 56 bytes |
-| **without the SBOM** | **about 0.8 KB, against 488 bytes in format 1** |
-| `sbom` body, deflated from at most 20 KB (#40's budget) | about 5 KB |
+| **without the SBOM** | **about 0.75 KB, against the 488 bytes decision 0001 measured in format 1** |
+| `sbom` body, deflated from at most 20 KB (#40's budget), and its table entry | about 5 KB |
 | **with the SBOM** | **about 6 KB** |
 
 Against the roadmap's hello budgets of 4 MB and then 2 MB, format 2 is 0.15% and 0.3%. The
@@ -261,11 +265,12 @@ cigcompile after it repins.
 | 2 | cig-script | own flags (#8): `pack { own_flags: true }`, the record key, `CIG_RUN_FLAGS` | same release as step 1 | `a_program_with_own_flags_gets_every_argument`, `run_flags_come_from_the_environment`, `an_old_program_keeps_its_bytes` (a format 1 fixture still runs) |
 | 3 | cig-script | the SBOM's runtime half (#40): the crate list in the runtime's bytes, `--cig-program --sbom` | same release if ready, else the next; the container needs no change | `the_sbom_lists_the_runtime_crates`, the 20 KB budget |
 | 4 | cig-script | stage `b` at run time (#31): the `bytecode` body, the start in 4, `--interp` | in the release that carries the VM; the container already reserves the section | `a_program_with_damaged_bytecode_is_e1050`, `interp_fallback_gives_the_same_bytes` |
-| 5 | cig-compile | after the repin: the writer fills `stage`, `opt`, `target`, `runtime_sha256` and `own_flags` (`--args direct` is the build-side name for the same bit); the `sbom` section from `sbom.rs`, the sidecar unchanged; `verify` by section | no: it needs the release with steps 1 to 3 | `verify_detects_a_changed_byte` (runtime, record, table, each section, trailer), `args_direct`, `the_sbom_lists_the_runtime_crates` |
+| 5 | cig-compile | after the repin: the writer fills `stage`, `opt`, `target`, `runtime_sha256` and `own_flags` (`--args direct` is the build-side name for the same bit); the `sbom` section from `sbom.rs`, the sidecar as that document plus the program's own sha256; `verify` by section | no: it needs the release with steps 1 to 3 | `verify_detects_a_changed_byte` (runtime, record, table, each section, trailer), `args_direct`, `the_sbom_lists_the_runtime_crates` |
 | 6 | cig-compile | after the repin to the VM release: `vm` on by default, `--stage a\|b`, the `bytecode` body at the recorded `opt` | no: it needs the release with step 4 | `differential_stage_b_is_identical`, `the_step_budget_stops_on_the_same_line`, `the_budget_table_holds` |
 | 7 | both | `tree` and `snap` (#71, after cig-script#185's archive) | in a later release; additive, no format change | `programs_start_without_parsing`, `startup_flat_in_script_size`, `archive_tamper_refused` (on `tree`), `same_archive_as_cig`, `snapshot_restores_constants`, `impure_top_level_runs_live` |
 
-Steps 1 and 2 touch the same two files (`src/program.rs`, `src/cli/compiled.rs`); they land one
+Steps 1 and 2 touch the same two files (`src/program.rs`, `src/cli/compiled.rs`; step 2 the
+parser too, for `own_flags`); they land one
 after the other, step 1 first. Before a release exists, cigcompile's side of steps 5 and 6 can
 be written and tested only against a CigScript branch outside main; nothing on cigcompile's main
 depends on an unreleased cig.
@@ -275,7 +280,7 @@ depends on an unreleased cig.
 | option | why not |
 |---|---|
 | The bytecode as base64 inside the JSON record (#31's first sketch) | It adds a third to the bytecode, makes every start parse the whole record, and gives no aligned body for an archive. |
-| Native object sections (ELF sections, a Mach-O segment, PE sections) written by rewriting the runtime's headers | It needs a header rewriter per format; it belongs to signing (#10), which can move this container into a section unchanged, since its offsets are relative to `P`. |
+| Native object sections (ELF sections, a Mach-O segment, PE sections) written by rewriting the runtime's headers | It needs a header rewriter per format; it belongs to signing (#40), which can move this container into a section unchanged, since its offsets are relative to `P`. |
 | A section table inside the JSON record | Tools would need a JSON parser to find a body, and the table's fixed entries are simpler to bound-check. |
 | zstd for the source and the SBOM | The runtime links zstd for the tin, but a tool that reads a program from outside (a verifier or an auditor in another language) is likelier to have DEFLATE at hand, and on a few KB of text the gain is small. The encoding field leaves room: zstd can become encoding `2` later without a format change. |
 | Falling back to the source when the bytecode does not load | It hides a damaged program; `--interp` is the only way the source runs at stage `b`. |
@@ -291,7 +296,7 @@ depends on an unreleased cig.
   of using a body, which #71's archive and #31's VM then shrink.
 - Every program's bytes change once, at the release that carries the container, as they do at
   any cig release.
-- `verify` and `audit` read both formats and name parts by section.
+- `verify` reads both formats and names parts by section.
 
 ## Questions settled with this record
 
