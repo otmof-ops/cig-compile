@@ -11,10 +11,10 @@
 //! (`loadg`); burns, their ops and compensations; `pack`; chains; step
 //! marks.
 //!
-//! A program lowers completely or is refused: a construct the bytecode
-//! cannot carry (a burn whose label is not a string literal, a `pack` root
-//! that runs a pull or a function) stops the lowering with
-//! [`Error::Refused`], which names it and its span. Every module that leaves is verified by the format crate's
+//! A program lowers completely or is refused: the one construct the
+//! bytecode cannot carry, a `pack` root that runs a pull or a function,
+//! stops the lowering with [`Error::Refused`], which names it and its
+//! span. Every module that leaves is verified by the format crate's
 //! verifier; one that does not verify is [`Error::Internal`], a bug here.
 //!
 //! How each piece reads:
@@ -40,11 +40,19 @@
 //!   finally writes. No tail call is emitted, so none sits in a try;
 //! - a burn is the state map, `burn.enter`, `comp.enter` (with an
 //!   `unburn`), the body, `comp.leave`, `burn.leave`, with its region and
-//!   the region's pc range. `break` and `continue` leave every try and
-//!   burn they cross, innermost first; `snuff` leaves only the tries (its
-//!   `ret` closes the burns, and a `try.leave` the burns inside its try).
-//!   A `burn.op` outside every burn of its function marks the function
+//!   the region's row. A string literal label is the region's constant;
+//!   any other is the region's register, the label's value, evaluated
+//!   before the state map, with a `nop` after `burn.enter` at the label's
+//!   position. `break` and `continue` leave every try and burn they cross,
+//!   innermost first, then jump, with nothing after the jump; `snuff`
+//!   leaves only the tries (its `ret` closes the burns, and a `try.leave`
+//!   the burns inside its try). A body that ends in one of those (or in
+//!   `cough`) ends the row there, with no closing pair no run reaches. A
+//!   `burn.op` outside every burn of its function marks the function
 //!   `requires_burn`;
+//! - the top level's `chain` statements are `chain.make` with `C = 1`, and
+//!   its one normal end returns a map of every name its statements
+//!   declare, so a run can answer `--light` as the tree-walker does;
 //! - each `pack` root and chain step but the last is checked where the
 //!   tree-walker checks it, right after it is evaluated: one that fails
 //!   goes straight to `pack` or `chain.make`, which raises its error;
@@ -60,8 +68,8 @@ use crate::cir::ir::{
 };
 use cigscript::cig_bytecode::{
     self as bc, verify_module, wide_prefix, BurnRegion, Constant, HandlerEntry, Instr as Word,
-    LineEntry, Op, RegionRow, SpanBase, UpvalDesc, UpvalKind, MAX_FUNCTION_DEPTH, MAX_REG_COUNT,
-    RESERVED_U32,
+    LineEntry, Op, RegionLabel, RegionRow, SpanBase, UpvalDesc, UpvalKind, MAX_FUNCTION_DEPTH,
+    MAX_REG_COUNT, RESERVED_U32,
 };
 use cigscript::syntax::ast::{AssignOp, BinOp, BurnClass, UnOp};
 use cigscript::syntax::span::Span;
@@ -96,9 +104,9 @@ impl fmt::Display for Error {
 }
 
 /// The construct a CIR instruction kind is, when this part refuses the
-/// kind whatever its operands: `None` for a kind it lowers. A kind it
-/// lowers can still be refused for what it names (a closure that
-/// captures, a `..` range).
+/// kind whatever its operands: `None` for a kind it lowers, which is
+/// every kind. One is still refused for what it names: a `pack` whose
+/// roots run a pull or a function.
 pub fn refused_kind(kind: &Kind) -> Option<&'static str> {
     match kind {
         Kind::Step(_)
@@ -303,9 +311,6 @@ enum OpenCx {
         in_finally: bool,
     },
     Burn {
-        /// Its index in the function's region table, and its class.
-        region: u32,
-        class: u8,
         /// It has an `unburn { }` (and is not unlit): `comp.leave` first.
         comp: bool,
     },
@@ -401,6 +406,9 @@ struct FnLower<'c, 'm> {
     part_to: HashMap<ir::InstrId, Label>,
     /// `pack` statements whose roots run script code.
     pack_runs_code: HashSet<ir::InstrId>,
+    /// The statements directly in the top level's block (none in a pull
+    /// or a lambda).
+    top_level: HashSet<ir::InstrId>,
     /// Where a `snuff` inside a try puts its value before the finallys it
     /// crosses run: a register from `fresh`, which no other value is ever
     /// given, so no finally writes it.
@@ -445,6 +453,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
             check_after: HashMap::new(),
             part_to: HashMap::new(),
             pack_runs_code: HashSet::new(),
+            top_level: HashSet::new(),
             ret_reg: None,
             span: f.span,
         }
@@ -464,6 +473,9 @@ impl<'c, 'm> FnLower<'c, 'm> {
             instr_of.insert(i.id, i);
         });
         self.instr_of = instr_of;
+        if f.kind == ir::FuncKind::Main {
+            self.top_level = f.body.instrs.iter().map(|i| i.id).collect();
+        }
         self.prepass();
         self.liveness();
         // A captured parameter is a cell from the call's start.
@@ -474,17 +486,11 @@ impl<'c, 'm> FnLower<'c, 'm> {
             }
         }
         self.block(&f.body)?;
-        if !f.body.instrs.last().is_some_and(|i| i.kind.is_terminator()) {
-            // The top level ends with no `snuff`: it leaves null.
-            let r = self.alloc();
-            self.abc(Op::LOADNULL, r, 0, 0)?;
-            self.abc(Op::RET, r, 0, 0)?;
+        if !ends(&f.body) {
+            self.top_level_end()?;
         }
         self.patch()?;
-        // `burn.enter`'s class is checked as a register operand: an unlit
-        // burn's 1 needs a frame of two.
-        let unlit = self.regions.iter().any(|r| r.class != 0);
-        let reg_count = self.frame.max(if unlit { 2 } else { 1 });
+        let reg_count = self.frame.max(1);
         if reg_count > MAX_REG_COUNT {
             return Err(Error::Limit {
                 what: format!(
@@ -526,6 +532,41 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 rows
             },
         })
+    }
+
+    /// The top level's only normal end (it has no `snuff`): a map of every
+    /// name a statement of its block declares, in the order they are
+    /// declared, each with its value now (a captured one read through its
+    /// cell, as every read of its register is), so a run can declare them
+    /// in the interpreter's globals for `--light`. With no such name it
+    /// returns null.
+    fn top_level_end(&mut self) -> Result<(), Error> {
+        let mut names: Vec<(&'m str, u32)> = Vec::new();
+        if self.f.kind == ir::FuncKind::Main {
+            for i in &self.f.body.instrs {
+                if let Kind::Decl(v, _) | Kind::MakeChain { name: v, .. } = &i.kind {
+                    let name = self
+                        .var_info(*v)
+                        .map(|x| x.name.as_str())
+                        .ok_or_else(|| Error::Internal(format!("no slot {}", v.0)))?;
+                    let r = self.var(*v)?;
+                    names.push((name, r));
+                }
+            }
+        }
+        let r = self.alloc();
+        if names.is_empty() {
+            self.abc(Op::LOADNULL, r, 0, 0)?;
+        } else {
+            self.abc(Op::NEWMAP, r, (names.len() as u32).min(0xFFFF), 0)?;
+            let k = self.alloc();
+            for (name, x) in names {
+                let c = self.konst(ConstKey::Str(name));
+                self.abx(Op::LOADK, k, c)?;
+                self.abc(Op::INSERTMAP, r, k, x)?;
+            }
+        }
+        self.abc(Op::RET, r, 0, 0)
     }
 
     // ----- registers -------------------------------------------------------------
@@ -1415,7 +1456,6 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 let opened = l.open;
                 self.leave_open(opened)?;
                 self.jump(op, 0, to)?;
-                self.reenter(opened)?;
             }
             Kind::Throw(v) => {
                 let x = self.val(*v)?;
@@ -1633,7 +1673,10 @@ impl<'c, 'm> FnLower<'c, 'm> {
                     }
                     self.abc(Op::MOV, at + 1, x, 0)?;
                 }
-                self.abc(Op::CHAIN_MAKE, w, 1 + 2 * n, 0)?;
+                // A chain of the script's top level is also declared as a
+                // top-level name, for `--light`.
+                let top = u32::from(self.top_level.contains(&i.id));
+                self.abc(Op::CHAIN_MAKE, w, 1 + 2 * n, top)?;
                 for (_, _, at) in steps {
                     self.at(*at, |s| s.abc(Op::NOP, 0, 0, 0))?;
                 }
@@ -1673,31 +1716,31 @@ impl<'c, 'm> FnLower<'c, 'm> {
     /// lays it out: the state map made fresh, `burn.enter class, Rg` at
     /// the burn's position, `comp.enter s, K[source], K["s"]` at the
     /// `unburn` block's, the body, `comp.leave`, `burn.leave`. A burn
-    /// without `unburn { }`, or an unlit one, has no `comp.*`. The closing
-    /// pair is written even after a body that ends in a terminator: the
-    /// verifier counts `burn.enter` and `burn.leave` in the order they are
-    /// written. The label is the region's constant; one that is not a
-    /// string literal is refused (the format has no place for a computed
-    /// one).
+    /// without `unburn { }`, or an unlit one, has no `comp.*`. A body that
+    /// ends in a terminator (or in a burn whose body does) ends the burn's
+    /// row there: its way out closed the burn, and nothing follows that no
+    /// run reaches. A string literal
+    /// label is the region's constant; any other label is the region's
+    /// register, the label's value, evaluated before the state map and
+    /// kept unwritten to the `burn.enter`, which reads it each time it
+    /// runs; a `nop` right after it carries the label's position, where a
+    /// label that is not a string is the tree-walker's error.
     fn burn_stmt(&mut self, i: &'m Instr, b: &'m BurnNode) -> Result<(), Error> {
-        let label = match b.label {
-            None => RESERVED_U32,
+        let (label, label_at) = match b.label {
+            None => (RegionLabel::None, None),
             Some(v) => {
-                let text = self
+                let def = self
                     .f
                     .vals
                     .get(v.0 as usize)
-                    .and_then(|x| self.instr_of.get(&x.def))
-                    .and_then(|d| match &d.kind {
-                        Kind::Const(Const::Str(s)) => Some(s.as_str()),
-                        _ => None,
-                    });
-                match text {
-                    Some(t) => self.konst(ConstKey::Str(t)),
-                    None => {
-                        return Err(
-                            self.refuse("a burn whose label is not a string literal", i.span)
-                        )
+                    .and_then(|x| self.instr_of.get(&x.def).copied());
+                match def.map(|d| &d.kind) {
+                    Some(Kind::Const(Const::Str(t))) => {
+                        (RegionLabel::Const(self.konst(ConstKey::Str(t))), None)
+                    }
+                    _ => {
+                        let at = b.label_at.or(def.map(|d| d.span)).unwrap_or(i.span);
+                        (RegionLabel::Reg(self.val(v)?), Some(at))
                     }
                 }
             }
@@ -1720,6 +1763,9 @@ impl<'c, 'm> FnLower<'c, 'm> {
         };
         let pc_start = self.code.len() as u32;
         self.abx(Op::BURN_ENTER, u32::from(class), region)?;
+        if let Some(at) = label_at {
+            self.at(at, |s| s.abc(Op::NOP, 0, 0, 0))?;
+        }
         if comp {
             let source = self.konst(ConstKey::Str(b.unburn_src.as_deref().unwrap_or("")));
             let (reg, name) = match state {
@@ -1736,18 +1782,16 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 s.abc(Op::COMP_ENTER, reg, source, name)
             })?;
         }
-        self.open.push(OpenCx::Burn {
-            region,
-            class,
-            comp,
-        });
+        self.open.push(OpenCx::Burn { comp });
         self.block(&b.body)?;
         self.open.pop();
         self.span = i.span;
-        if comp {
-            self.abc(Op::COMP_LEAVE, 0, 0, 0)?;
+        if !diverges(&b.body) {
+            if comp {
+                self.abc(Op::COMP_LEAVE, 0, 0, 0)?;
+            }
+            self.abc(Op::BURN_LEAVE, 0, 0, 0)?;
         }
-        self.abc(Op::BURN_LEAVE, 0, 0, 0)?;
         self.region_rows.push(RegionRow {
             pc_start,
             pc_end: self.code.len() as u32,
@@ -2132,21 +2176,6 @@ impl<'c, 'm> FnLower<'c, 'm> {
         Ok(())
     }
 
-    /// After the jump out of the burns opened since `down_to`: a
-    /// `burn.enter` for each, outermost first, that no run reaches. The
-    /// verifier counts `burn.enter` and `burn.leave` in the order they are
-    /// written, not along the paths a run takes, so the way out's
-    /// `burn.leave`s are balanced here and each burn's own closing
-    /// `burn.leave` still finds its count.
-    fn reenter(&mut self, down_to: usize) -> Result<(), Error> {
-        for k in down_to..self.open.len() {
-            if let OpenCx::Burn { region, class, .. } = self.open[k] {
-                self.abx(Op::BURN_ENTER, u32::from(class), region)?;
-            }
-        }
-        Ok(())
-    }
-
     /// `try`/`ashtray`/`finally` as `docs/BYTECODE.md` lays it out:
     /// `try.enter H`; the body, which is the handler's range and ends with
     /// its `try.leave 0`; a jump past the rest; the catch, ending with
@@ -2279,6 +2308,16 @@ fn compound(op: AssignOp) -> Option<Op> {
 /// Does a block end in a terminator (nothing falls out of it)?
 fn ends(b: &Block) -> bool {
     b.instrs.last().is_some_and(|i| i.kind.is_terminator())
+}
+
+/// No run falls off the end of `b`: it ends in a terminator, or in a burn
+/// whose own body does (that burn's way out is the block's).
+fn diverges(b: &Block) -> bool {
+    match b.instrs.last().map(|i| &i.kind) {
+        Some(Kind::Burn(n)) => diverges(&n.body),
+        Some(k) => k.is_terminator(),
+        None => false,
+    }
 }
 
 /// Number the instructions in the order they are lowered: an

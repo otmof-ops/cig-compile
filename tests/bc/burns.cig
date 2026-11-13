@@ -17,3 +17,12 @@ burn unlit {
   fs.mkdir("./logs/d")
 }
 chain ship { deploy, pack(x) => x }
+for t in ["a", "b"] {
+  burn (r, "turn-" + t) {
+    fs.append_text("./logs/turns", t)
+    continue
+  }
+}
+if true {
+  chain inner { deploy }
+}

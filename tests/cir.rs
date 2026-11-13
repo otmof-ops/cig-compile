@@ -198,6 +198,24 @@ fn a_burn_keeps_its_unburn_blocks_span() {
 }
 
 #[test]
+fn a_burn_keeps_its_labels_span() {
+    // Where the tree-walker raises a label that is not a string, which a
+    // back end that reads the label at run time needs.
+    let src = "stick n = \"x\"\nburn (s,   n + \"y\") {\n  fs.mkdir(\"d\")\n}\nburn {\n  fs.mkdir(\"e\")\n}\n";
+    let m = lower_source(src, "l.cig").unwrap();
+    let at: Vec<Option<(u32, u32)>> = m.funcs[0]
+        .body
+        .instrs
+        .iter()
+        .filter_map(|i| match &i.kind {
+            Kind::Burn(b) => Some(b.label_at.map(|s| (s.line, s.col))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(at, vec![Some((2, 12)), None]);
+}
+
+#[test]
 fn a_compensation_that_reaches_outside_its_state_is_caught_v8() {
     let src = "roll n = 1\nburn (s) {\n  s.n = n\n  fs.mkdir(\"d\")\n} unburn {\n  exhale s.n\n}\n";
     let mut m = lower_source(src, "u.cig").unwrap();

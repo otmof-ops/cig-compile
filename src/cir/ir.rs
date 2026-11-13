@@ -212,6 +212,10 @@ pub struct BurnNode {
     /// the compensation (the tree-walker's), which a back end needs at run
     /// time.
     pub unburn_at: Option<Span>,
+    /// The label expression's own span: where the tree-walker raises a
+    /// label that is not a string, which a back end that reads the label
+    /// at run time needs.
+    pub label_at: Option<Span>,
 }
 
 pub enum Kind {
