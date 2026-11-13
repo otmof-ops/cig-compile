@@ -32,6 +32,9 @@ or an error code.
   contributors.
 - [The backend decision](decisions/0001-backend.md): why stage A exists,
   and what stages B to D are for.
+- [Payload format 2](decisions/0004-payload-format-2.md): the container a
+  program's bytecode, archives, own flags and provenance go in, and the
+  order they land in.
 - [Roadmap](roadmap.md): the stages, the phases of #42, and how a request
   gets there.
 

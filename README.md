@@ -97,6 +97,7 @@ A pull request fails on a non-noisy benchmark more than 5% slower than `main`'s,
 | [Roadmap](docs/roadmap.md) | see the stages to come, and how a request gets there |
 | [Benchmarks](docs/BENCHMARKS.md) | read the numbers, and run them yourself |
 | [The backend decision](docs/decisions/0001-backend.md) | see why stage A is a bundle, and what B, C and D will be |
+| [Payload format 2](docs/decisions/0004-payload-format-2.md) | see what a program's payload becomes for bytecode, archives, own flags and provenance |
 
 ## Get help, ask for things, pitch in
 
