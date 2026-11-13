@@ -1,0 +1,110 @@
+; module: errors.cig
+
+fn 0 <anonymous> (0 args, 10 regs, main, 5 consts, 1 children, 0 upvals, 2 handlers, 41 lines, 0 regions, 0 region rows):
+  0000   closure   R0, Fn0
+  0001   mov       R1, R0
+  0002   steps     0, 1
+  0003   loadint   R0, 2
+  0004   loadint   R2, 0
+  0005   newlist   R3, 2
+  0006   appendlistR3, R0
+  0007   appendlistR3, R2
+  0008   mov       R4, R3
+  0009   iterprep  R4
+  0010   steps     1, 0
+  0011   iternext  R4, -> 41
+  0012   steps     1, 1
+  0013   steps     1, 1
+  0014   try.enter 0, H0
+  0015   steps     1, 1
+  0016   mov       R0, R7
+  0017   loadint   R2, 0
+  0018   eq        R8, R0, R2
+  0019   testn     R8, -> 23
+  0020   steps     1, 1
+  0021   try.leave 0
+  0022   jmp       0, -> 41
+  0023   steps     1, 1
+  0024   mov       R0, R7
+  0025   mov       R2, R1
+  0026   mov       R8, R2
+  0027   mov       R9, R0
+  0028   call      R8, n=1, n=0
+  0029   mov       R0, R8
+  0030   exhale    R0, x1
+  0031   try.leave 0
+  0032   jmp       0, -> 40
+  0033   steps     1, 1
+  0034   loadk     R0, K0 ("turn")
+  0035   mov       R2, R7
+  0036   mov       R8, R0
+  0037   mov       R9, R2
+  0038   exhale    R8, x2
+  0039   try.leave 0
+  0040   loop      0, -> 11
+  0041   steps     0, 0
+  0042   steps     0, 1
+  0043   loadg     R0, K1 ("len")
+  0044   mov       R2, R0
+  0045   steps     0, 1
+  0046   try.enter 0, H1
+  0047   steps     0, 1
+  0048   loadk     R4, K2 ("no")
+  0049   loadint   R5, 2
+  0050   newmap    R6, 2
+  0051   loadk     R7, K3 ("message")
+  0052   insertmap R6, R7, R4
+  0053   loadk     R7, K4 ("code")
+  0054   insertmap R6, R7, R5
+  0055   throw     R6
+  0056   steps     0, 1
+  0057   mov       R4, R3
+  0058   getfield  R5, R4, K3 ("message")
+  0059   mov       R6, R0
+  0060   mov       R7, R5
+  0061   call      R6, n=1, n=0
+  0062   interp    R4, R6, x0
+  0063   mov       R0, R3
+  0064   getfield  R5, R0, K4 ("code")
+  0065   mov       R7, R4
+  0066   mov       R8, R5
+  0067   exhale    R7, x2
+  0068   try.leave 0
+  0069   loadnull  R0
+  0070   ret       R0
+
+  fn 1 safe (1 args, 8 regs, pull, 3 consts, 0 children, 0 upvals, 1 handlers, 21 lines, 0 regions, 0 region rows):
+    0000   steps     0, 1
+    0001   try.enter 0, H0
+    0002   steps     0, 1
+    0003   loadint   R2, 10
+    0004   mov       R3, R0
+    0005   div       R4, R2, R3
+    0006   mov       R5, R4
+    0007   try.leave 0
+    0008   ret       R5
+    0009   steps     0, 1
+    0010   loadk     R2, K0 ("caught")
+    0011   mov       R3, R1
+    0012   getfield  R4, R3, K1 ("message")
+    0013   mov       R6, R2
+    0014   mov       R7, R4
+    0015   exhale    R6, x2
+    0016   steps     0, 1
+    0017   loadint   R2, 1
+    0018   neg       R3, R2
+    0019   mov       R5, R3
+    0020   try.leave 0
+    0021   ret       R5
+    0022   steps     0, 1
+    0023   loadk     R2, K2 ("checked")
+    0024   mov       R3, R0
+    0025   mov       R6, R2
+    0026   mov       R7, R3
+    0027   exhale    R6, x2
+    0028   try.leave 0
+    0029   loadnull  R2
+    0030   ret       R2
+
+; fn 0 lines: 0@1:1 2@11:1 3@11:11 4@11:14 5@11:10 8@11:1 13@12:3 15@13:5 16@13:8 17@13:13 18@13:8 19@13:5 20@14:7 23@16:5 24@16:17 25@16:12 29@16:5 31@12:3 33@18:5 34@18:12 35@18:20 36@18:5 39@12:3 40@11:1 42@21:1 43@21:11 44@21:1 45@22:1 47@23:3 48@23:19 49@23:31 50@23:9 55@23:3 56@25:3 57@25:12 58@25:12 59@25:10 63@25:24 64@25:24 65@25:3 68@22:1
+; fn 1 lines: 0@2:3 2@3:5 3@3:11 4@3:16 5@3:11 6@3:5 9@5:5 10@5:12 11@5:22 12@5:22 13@5:5 16@6:5 17@6:12 18@6:11 19@6:5 22@8:5 23@8:12 24@8:23 25@8:5 28@2:3 29@1:1
