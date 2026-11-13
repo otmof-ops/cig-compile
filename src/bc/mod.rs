@@ -8,11 +8,13 @@
 //! calls by name, by value, to builtins and to methods, `snuff`; lists,
 //! maps, members, indexes and their stores; interpolation and `exhale`;
 //! `try`/`ashtray`/`finally` and `cough`; a prelude name used as a value
-//! (`loadg`); step marks. Burns, `pack` and chains are refused.
+//! (`loadg`); burns, their ops and compensations; `pack`; chains; step
+//! marks.
 //!
-//! A program lowers completely or is refused: a construct outside this
-//! part stops the lowering with [`Error::Refused`], which names it and
-//! its span. Every module that leaves is verified by the format crate's
+//! A program lowers completely or is refused: a construct the bytecode
+//! cannot carry (a burn whose label is not a string literal, a `pack` root
+//! that runs a pull or a function) stops the lowering with
+//! [`Error::Refused`], which names it and its span. Every module that leaves is verified by the format crate's
 //! verifier; one that does not verify is [`Error::Internal`], a bug here.
 //!
 //! How each piece reads:
@@ -36,6 +38,16 @@
 //!   and `snuff` leave each `try` they cross first (`try.leave 1` for one
 //!   whose finally they leave), a snuffed value waiting in a register no
 //!   finally writes. No tail call is emitted, so none sits in a try;
+//! - a burn is the state map, `burn.enter`, `comp.enter` (with an
+//!   `unburn`), the body, `comp.leave`, `burn.leave`, with its region and
+//!   the region's pc range. `break` and `continue` leave every try and
+//!   burn they cross, innermost first; `snuff` leaves only the tries (its
+//!   `ret` closes the burns, and a `try.leave` the burns inside its try).
+//!   A `burn.op` outside every burn of its function marks the function
+//!   `requires_burn`;
+//! - each `pack` root and chain step but the last is checked where the
+//!   tree-walker checks it, right after it is evaluated: one that fails
+//!   goes straight to `pack` or `chain.make`, which raises its error;
 //! - an index read or store, and a compound member store, check their
 //!   operands' types first (`type_of`) so each error is raised at the
 //!   position the tree-walker gives it;
@@ -44,13 +56,14 @@
 //!   instruction before it.
 
 use crate::cir::ir::{
-    self, Block, Const, Func, FuncId, Instr, Kind, Piece, ShortOp, Ty, ValueId, VarId,
+    self, Block, BurnNode, Const, Func, FuncId, Instr, Kind, Piece, ShortOp, Ty, ValueId, VarId,
 };
 use cigscript::cig_bytecode::{
-    self as bc, verify_module, wide_prefix, Constant, HandlerEntry, Instr as Word, LineEntry, Op,
-    SpanBase, UpvalDesc, UpvalKind, MAX_FUNCTION_DEPTH, MAX_REG_COUNT, RESERVED_U32,
+    self as bc, verify_module, wide_prefix, BurnRegion, Constant, HandlerEntry, Instr as Word,
+    LineEntry, Op, RegionRow, SpanBase, UpvalDesc, UpvalKind, MAX_FUNCTION_DEPTH, MAX_REG_COUNT,
+    RESERVED_U32,
 };
-use cigscript::syntax::ast::{AssignOp, BinOp, UnOp};
+use cigscript::syntax::ast::{AssignOp, BinOp, BurnClass, UnOp};
 use cigscript::syntax::span::Span;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -87,7 +100,7 @@ impl fmt::Display for Error {
 /// lowers can still be refused for what it names (a closure that
 /// captures, a `..` range).
 pub fn refused_kind(kind: &Kind) -> Option<&'static str> {
-    Some(match kind {
+    match kind {
         Kind::Step(_)
         | Kind::Const(_)
         | Kind::Load(_)
@@ -119,12 +132,12 @@ pub fn refused_kind(kind: &Kind) -> Option<&'static str> {
         | Kind::Continue
         | Kind::Prelude(_)
         | Kind::Try { .. }
-        | Kind::Throw(_) => return None,
-        Kind::BurnOp { .. } => "a call that changes the world (a burn op)",
-        Kind::MakeChain { .. } => "a chain",
-        Kind::PackDecl(_) => "`pack`",
-        Kind::Burn(_) => "`burn`",
-    })
+        | Kind::Throw(_)
+        | Kind::BurnOp { .. }
+        | Kind::MakeChain { .. }
+        | Kind::PackDecl(_)
+        | Kind::Burn(_) => None,
+    }
 }
 
 /// Lower a verified CIR module to bytecode, and verify what came out.
@@ -276,16 +289,46 @@ struct LoopCx {
     cont: Label,
     cont_op: Op,
     exit: Label,
-    /// How many tries were open in this function when the loop started:
-    /// `break` and `continue` leave every one opened since.
-    tries: usize,
+    /// How many tries and burns were open in this function when the loop
+    /// started: `break` and `continue` leave every one opened since.
+    open: usize,
 }
 
-/// A `try` the code being lowered sits in.
-struct TryCx {
-    /// In its finally: a way out drops what the finally had pending
-    /// (`try.leave 1`) instead of running it (`try.leave 0`).
-    in_finally: bool,
+/// A `try` or a burn the code being lowered sits in.
+#[derive(Clone, Copy)]
+enum OpenCx {
+    Try {
+        /// In its finally: a way out drops what the finally had pending
+        /// (`try.leave 1`) instead of running it (`try.leave 0`).
+        in_finally: bool,
+    },
+    Burn {
+        /// Its index in the function's region table, and its class.
+        region: u32,
+        class: u8,
+        /// It has an `unburn { }` (and is not unlit): `comp.leave` first.
+        comp: bool,
+    },
+}
+
+/// What a `pack` root or a chain step is checked for as soon as it is
+/// evaluated, as the tree-walker checks it.
+#[derive(Clone, Copy)]
+enum Part {
+    /// A string that is not empty once trimmed.
+    Root,
+    /// A function or a chain.
+    Step,
+}
+
+/// A check of one `pack` root or chain step: when it fails, the run goes
+/// to `to`, the `pack` or `chain.make` (its window built), which raises
+/// that part's own error before it looks at the parts not evaluated yet.
+#[derive(Clone, Copy)]
+struct PartCheck {
+    v: ValueId,
+    part: Part,
+    to: Label,
 }
 
 /// Where a slot lives in the function that names it.
@@ -339,10 +382,25 @@ struct FnLower<'c, 'm> {
     text_of: HashMap<(ir::InstrId, ValueId), u32>,
     loops: Vec<LoopCx>,
     yields: Vec<YieldTo>,
-    /// The function's handler table, and the tries open where the
-    /// lowering is, innermost last.
+    /// The function's handler table, and the tries and burns open where
+    /// the lowering is, innermost last.
     handlers: Vec<HandlerEntry>,
-    tries: Vec<TryCx>,
+    open: Vec<OpenCx>,
+    /// The function's burn regions and their pc ranges.
+    regions: Vec<BurnRegion>,
+    region_rows: Vec<RegionRow>,
+    /// A `burn.op` sits outside every burn of this function: it is marked
+    /// `requires_burn`.
+    bare_op: bool,
+    /// Every instruction by id (a burn's label is its constant's).
+    instr_of: HashMap<ir::InstrId, &'m Instr>,
+    /// `pack` roots and chain steps to check where they are evaluated, and
+    /// the label each `pack` or `chain.make` takes for the checks' jumps.
+    check_before: HashMap<ir::InstrId, Vec<PartCheck>>,
+    check_after: HashMap<ir::InstrId, Vec<PartCheck>>,
+    part_to: HashMap<ir::InstrId, Label>,
+    /// `pack` statements whose roots run script code.
+    pack_runs_code: HashSet<ir::InstrId>,
     /// Where a `snuff` inside a try puts its value before the finallys it
     /// crosses run: a register from `fresh`, which no other value is ever
     /// given, so no finally writes it.
@@ -378,7 +436,15 @@ impl<'c, 'm> FnLower<'c, 'm> {
             loops: Vec::new(),
             yields: Vec::new(),
             handlers: Vec::new(),
-            tries: Vec::new(),
+            open: Vec::new(),
+            regions: Vec::new(),
+            region_rows: Vec::new(),
+            bare_op: false,
+            instr_of: HashMap::new(),
+            check_before: HashMap::new(),
+            check_after: HashMap::new(),
+            part_to: HashMap::new(),
+            pack_runs_code: HashSet::new(),
             ret_reg: None,
             span: f.span,
         }
@@ -393,6 +459,11 @@ impl<'c, 'm> FnLower<'c, 'm> {
         }
         let mut counter = 0;
         number(&f.body, &mut self.start, &mut self.end, &mut counter);
+        let mut instr_of = HashMap::new();
+        walk(&f.body, &mut |i| {
+            instr_of.insert(i.id, i);
+        });
+        self.instr_of = instr_of;
         self.prepass();
         self.liveness();
         // A captured parameter is a cell from the call's start.
@@ -410,7 +481,10 @@ impl<'c, 'm> FnLower<'c, 'm> {
             self.abc(Op::RET, r, 0, 0)?;
         }
         self.patch()?;
-        let reg_count = self.frame.max(1);
+        // `burn.enter`'s class is checked as a register operand: an unlit
+        // burn's 1 needs a frame of two.
+        let unlit = self.regions.iter().any(|r| r.class != 0);
+        let reg_count = self.frame.max(if unlit { 2 } else { 1 });
         if reg_count > MAX_REG_COUNT {
             return Err(Error::Limit {
                 what: format!(
@@ -435,17 +509,22 @@ impl<'c, 'm> FnLower<'c, 'm> {
             kind,
             reg_count,
             arity,
-            requires_burn: f.requires_burn,
+            requires_burn: self.bare_op,
             // The parent fills these in at its `closure`.
             upvalues: Vec::new(),
             constants: self.consts,
             children: self.children,
-            regions: Vec::new(),
+            regions: self.regions,
             handlers: self.handlers,
             instrs: self.code,
             span_base,
             lines,
-            region_rows: Vec::new(),
+            region_rows: {
+                // Outer regions first, as the source nests them.
+                let mut rows = self.region_rows;
+                rows.sort_by_key(|r| (r.pc_start, std::cmp::Reverse(r.pc_end)));
+                rows
+            },
         })
     }
 
@@ -830,7 +909,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
         // pull included, can capture it.
         let mut fresh = HashSet::new();
         for i in &b.instrs {
-            if let Kind::Decl(v, _) = &i.kind {
+            if let Kind::Decl(v, _) | Kind::MakeChain { name: v, .. } = &i.kind {
                 if self.captured(*v) && fresh.insert(*v) {
                     self.span = i.span;
                     // The new cell first: a null written to the
@@ -844,6 +923,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
         }
         for j in 0..b.instrs.len() {
             self.schedule_shows(b, j);
+            self.schedule_checks(b, j);
         }
         for i in &b.instrs {
             self.instr(i)?;
@@ -864,10 +944,127 @@ impl<'c, 'm> FnLower<'c, 'm> {
             self.span = i.span;
             self.show_as_text(&vs)?;
         }
+        if let Some(cs) = self.check_before.remove(&i.id) {
+            self.span = i.span;
+            self.check_parts(&cs)?;
+        }
         self.instr_kind(i)?;
         if let Some(vs) = self.show_after.remove(&i.id) {
             self.span = i.span;
             self.show_as_text(&vs)?;
+        }
+        if let Some(cs) = self.check_after.remove(&i.id) {
+            self.span = i.span;
+            self.check_parts(&cs)?;
+        }
+        Ok(())
+    }
+
+    /// The tree-walker checks each `pack` root and chain step as soon as it
+    /// is evaluated; `pack` and `chain.make` check them all once all are
+    /// evaluated. So every part but the last is checked where the
+    /// tree-walker checks it (after its own code, before the next part's),
+    /// and a part that fails goes straight to the instruction, which raises
+    /// that part's error, the first it finds, at the part's position. A
+    /// root that is a non-empty string constant needs no check. For a
+    /// `pack` whose roots run script code (a pull, a function value), the
+    /// statement is marked: such a root can burn, and the VM refuses a
+    /// `pack` after anything was journaled where the tree-walker does not.
+    fn schedule_checks(&mut self, b: &'m Block, j: usize) {
+        let i = &b.instrs[j];
+        let (parts, part): (Vec<ValueId>, Part) = match &i.kind {
+            Kind::PackDecl(vs) => (vs.clone(), Part::Root),
+            Kind::MakeChain { steps, .. } => (steps.iter().map(|s| s.1).collect(), Part::Step),
+            _ => return,
+        };
+        // The parts' own code: from the statement's step mark on.
+        let k = (0..j)
+            .rev()
+            .find(|&k| matches!(b.instrs[k].kind, Kind::Step(_)))
+            .map_or(0, |k| k + 1);
+        let code = &b.instrs[k..j];
+        if matches!(part, Part::Root) {
+            let mut runs = false;
+            for c in code {
+                walk_one(c, &mut |x| {
+                    runs |= matches!(
+                        x.kind,
+                        Kind::CallUser { .. }
+                            | Kind::CallValue { .. }
+                            | Kind::Closure(_)
+                            | Kind::Load(_)
+                    );
+                });
+            }
+            if runs {
+                self.pack_runs_code.insert(i.id);
+                return;
+            }
+        }
+        if parts.len() < 2 {
+            return;
+        }
+        let to = self.label();
+        self.part_to.insert(i.id, to);
+        let def_of = |v: &ValueId| self.f.vals.get(v.0 as usize).map(|x| x.def);
+        let mut anchor: Option<ir::InstrId> = None;
+        for (n, v) in parts.iter().enumerate() {
+            let def = def_of(v).filter(|d| code.iter().any(|c| c.id == *d));
+            if n + 1 < parts.len() && !self.known_good(*v, part) {
+                let at = PartCheck { v: *v, part, to };
+                match (def, anchor, code.first()) {
+                    (Some(d), _, _) => self.check_after.entry(d).or_default().push(at),
+                    (None, Some(a), _) => self.check_after.entry(a).or_default().push(at),
+                    (None, None, Some(c)) => self.check_before.entry(c.id).or_default().push(at),
+                    // Nothing is evaluated between the parts.
+                    (None, None, None) => {}
+                }
+            }
+            if def.is_some() {
+                anchor = def;
+            }
+        }
+    }
+
+    /// A part whose check cannot fail: a root that is a non-empty string
+    /// constant, a step that is a function.
+    fn known_good(&self, v: ValueId, part: Part) -> bool {
+        let Some(info) = self.f.vals.get(v.0 as usize) else {
+            return false;
+        };
+        match part {
+            Part::Root => matches!(
+                self.instr_of.get(&info.def).map(|i| &i.kind),
+                Some(Kind::Const(Const::Str(s))) if !s.trim().is_empty()
+            ),
+            Part::Step => info.ty == Ty::Func,
+        }
+    }
+
+    /// Check parts as the tree-walker does (`pack_root`, `chain_step`),
+    /// going to the instruction when one fails.
+    fn check_parts(&mut self, cs: &[PartCheck]) -> Result<(), Error> {
+        for c in cs {
+            let x = self.val(c.v)?;
+            let t = self.type_name_of(x)?;
+            match c.part {
+                Part::Root => {
+                    self.jump_if_is(t, "string", c.to, false)?;
+                    let w = self.alloc();
+                    self.abc(Op::MOV, w, x, 0)?;
+                    let trim = self.konst(ConstKey::Str("trim"));
+                    self.abc(Op::CALLM, w, trim, 0)?;
+                    self.jump_if_is(w, "", c.to, true)?;
+                    self.free(w);
+                }
+                Part::Step => {
+                    let ok = self.label();
+                    self.jump_if_is(t, "function", ok, true)?;
+                    self.jump_if_is(t, "chain", c.to, false)?;
+                    self.place(ok);
+                }
+            }
+            self.free(t);
         }
         Ok(())
     }
@@ -1150,7 +1347,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
                     cont: head,
                     cont_op: Op::LOOP,
                     exit,
-                    tries: self.tries.len(),
+                    open: self.open.len(),
                 });
                 self.place(head);
                 self.yields.push(YieldTo::Exit(exit));
@@ -1182,7 +1379,9 @@ impl<'c, 'm> FnLower<'c, 'm> {
             }
             Kind::Ret(v) => {
                 let mut x = self.val(*v)?;
-                if !self.tries.is_empty() {
+                // `ret` closes every burn of the frame, and `try.leave` the
+                // ones opened inside its try: only the tries are left here.
+                if self.open.iter().any(|o| matches!(o, OpenCx::Try { .. })) {
                     // The finallys the `snuff` crosses run before the
                     // `ret`: the value waits where none of them writes.
                     let r = match self.ret_reg {
@@ -1194,7 +1393,11 @@ impl<'c, 'm> FnLower<'c, 'm> {
                         }
                     };
                     self.abc(Op::MOV, r, x, 0)?;
-                    self.leave_tries(0)?;
+                    for k in (0..self.open.len()).rev() {
+                        if let OpenCx::Try { in_finally } = self.open[k] {
+                            self.abc(Op::TRY_LEAVE, u32::from(in_finally), 0, 0)?;
+                        }
+                    }
                     x = r;
                 }
                 self.abc(Op::RET, x, 0, 0)?;
@@ -1209,9 +1412,10 @@ impl<'c, 'm> FnLower<'c, 'm> {
                     Kind::Break => (Op::JMP, l.exit),
                     _ => (l.cont_op, l.cont),
                 };
-                let opened = l.tries;
-                self.leave_tries(opened)?;
+                let opened = l.open;
+                self.leave_open(opened)?;
                 self.jump(op, 0, to)?;
+                self.reenter(opened)?;
             }
             Kind::Throw(v) => {
                 let x = self.val(*v)?;
@@ -1358,8 +1562,197 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 self.abc(Op::CALLM, w, k, args.len() as u32)?;
                 self.call_result(i, w, args.len());
             }
-            _ => return Err(Error::Internal("a refused kind got past the table".into())),
+            Kind::Burn(b) => self.burn_stmt(i, b)?,
+            Kind::BurnOp { callee, args, .. } => {
+                let kind = cigscript::vm::burn_op_kind(callee).ok_or_else(|| {
+                    self.refuse(
+                        format!("`{callee}`, an effect this cig's VM has no burn-op kind for"),
+                        i.span,
+                    )
+                })?;
+                if !self.open.iter().any(|o| matches!(o, OpenCx::Burn { .. })) {
+                    self.bare_op = true;
+                }
+                let w = self.window(None, args)?;
+                let k = self.konst(ConstKey::Str(callee));
+                self.burn_op(w, k, args.len() as u32, kind as u32)?;
+                self.call_result(i, w, args.len());
+            }
+            Kind::PackDecl(vs) => {
+                if self.pack_runs_code.contains(&i.id) {
+                    return Err(self.refuse("a `pack` root that runs a pull or a function", i.span));
+                }
+                let regs = self.vals(vs)?;
+                let n = regs.len() as u32;
+                let w = self.alloc_window(n.max(1));
+                if let Some(l) = self.part_to.remove(&i.id) {
+                    self.place(l);
+                }
+                for (k, x) in regs.iter().enumerate() {
+                    self.abc(Op::MOV, w + k as u32, *x, 0)?;
+                }
+                self.abc(Op::PACK, w, n, 0)?;
+                // Each root's error at the root: its value's own position.
+                for v in vs {
+                    let at = self
+                        .f
+                        .vals
+                        .get(v.0 as usize)
+                        .and_then(|x| self.instr_of.get(&x.def))
+                        .map_or(i.span, |d| d.span);
+                    self.at(at, |s| s.abc(Op::NOP, 0, 0, 0))?;
+                }
+                for k in 0..n.max(1) {
+                    self.free(w + k);
+                }
+            }
+            Kind::MakeChain { name, steps } => {
+                let regs: Vec<u32> = steps
+                    .iter()
+                    .map(|s| self.val(s.1))
+                    .collect::<Result<_, _>>()?;
+                let n = steps.len() as u32;
+                let w = self.alloc_window(2 + 2 * n);
+                if let Some(l) = self.part_to.remove(&i.id) {
+                    self.place(l);
+                }
+                let chain = self
+                    .var_info(*name)
+                    .map(|x| x.name.as_str())
+                    .ok_or_else(|| Error::Internal(format!("no slot {}", name.0)))?;
+                let c = self.konst(ConstKey::Str(chain));
+                self.abx(Op::LOADK, w + 1, c)?;
+                for (k, ((label, _, _), x)) in steps.iter().zip(regs).enumerate() {
+                    let at = w + 2 + 2 * k as u32;
+                    match label {
+                        Some(l) => {
+                            let c = self.konst(ConstKey::Str(l));
+                            self.abx(Op::LOADK, at, c)?;
+                        }
+                        None => self.abc(Op::LOADNULL, at, 0, 0)?,
+                    }
+                    self.abc(Op::MOV, at + 1, x, 0)?;
+                }
+                self.abc(Op::CHAIN_MAKE, w, 1 + 2 * n, 0)?;
+                for (_, _, at) in steps {
+                    self.at(*at, |s| s.abc(Op::NOP, 0, 0, 0))?;
+                }
+                match self.slot(*name)? {
+                    Slot::Reg(r) => self.abc(Op::MOV, r, w, 0)?,
+                    Slot::Up(u) => self.abc(Op::SETUP, u, w, 0)?,
+                }
+                for k in 0..2 + 2 * n {
+                    self.free(w + k);
+                }
+            }
         }
+        Ok(())
+    }
+
+    /// `burn.op A, K, packed`: `(n << 4) | kind` unwidened, `(n << 8) |
+    /// kind` behind a `WIDE` when an operand needs it.
+    fn burn_op(&mut self, a: u32, k: u32, n: u32, kind: u32) -> Result<(), Error> {
+        if a <= 0xFF && k <= 0xFF && n <= 0xF && kind <= 0xF {
+            return self.abc(Op::BURN_OP, a, k, (n << 4) | kind);
+        }
+        if a > 0xFFFF || k > 0xFFFF || n > 0xFF || kind > 0xFF {
+            return Err(self.too_wide(Op::BURN_OP));
+        }
+        let c = (n << 8) | kind;
+        self.row();
+        self.code.push(wide_prefix(
+            (a >> 8) as u8,
+            (((c >> 8) << 8) | (k >> 8)) as u16,
+        ));
+        self.code
+            .push(Word::abc(Op::BURN_OP, a as u8, k as u8, c as u8));
+        Ok(())
+    }
+
+    /// `burn (s, "label") { body } unburn { comp }` as `docs/BYTECODE.md`
+    /// lays it out: the state map made fresh, `burn.enter class, Rg` at
+    /// the burn's position, `comp.enter s, K[source], K["s"]` at the
+    /// `unburn` block's, the body, `comp.leave`, `burn.leave`. A burn
+    /// without `unburn { }`, or an unlit one, has no `comp.*`. The closing
+    /// pair is written even after a body that ends in a terminator: the
+    /// verifier counts `burn.enter` and `burn.leave` in the order they are
+    /// written. The label is the region's constant; one that is not a
+    /// string literal is refused (the format has no place for a computed
+    /// one).
+    fn burn_stmt(&mut self, i: &'m Instr, b: &'m BurnNode) -> Result<(), Error> {
+        let label = match b.label {
+            None => RESERVED_U32,
+            Some(v) => {
+                let text = self
+                    .f
+                    .vals
+                    .get(v.0 as usize)
+                    .and_then(|x| self.instr_of.get(&x.def))
+                    .and_then(|d| match &d.kind {
+                        Kind::Const(Const::Str(s)) => Some(s.as_str()),
+                        _ => None,
+                    });
+                match text {
+                    Some(t) => self.konst(ConstKey::Str(t)),
+                    None => {
+                        return Err(
+                            self.refuse("a burn whose label is not a string literal", i.span)
+                        )
+                    }
+                }
+            }
+        };
+        let class = u8::from(b.class == BurnClass::Unlit);
+        let comp = b.compensate.is_some() && class == 0;
+        let region = self.regions.len() as u32;
+        self.regions.push(BurnRegion { class, label });
+        self.span = i.span;
+        let state = match b.state {
+            Some(s) => {
+                let r = self.var(s)?;
+                if self.captured(s) {
+                    self.abc(Op::CELLNEW, r, 0, 0)?;
+                }
+                self.abc(Op::NEWMAP, r, 0, 0)?;
+                Some((r, s))
+            }
+            None => None,
+        };
+        let pc_start = self.code.len() as u32;
+        self.abx(Op::BURN_ENTER, u32::from(class), region)?;
+        if comp {
+            let source = self.konst(ConstKey::Str(b.unburn_src.as_deref().unwrap_or("")));
+            let (reg, name) = match state {
+                Some((r, s)) => (
+                    r,
+                    self.var_info(s)
+                        .map(|x| x.name.as_str())
+                        .unwrap_or_default(),
+                ),
+                None => (0, ""),
+            };
+            let name = self.konst(ConstKey::Str(name));
+            self.at(b.unburn_at.unwrap_or(i.span), |s| {
+                s.abc(Op::COMP_ENTER, reg, source, name)
+            })?;
+        }
+        self.open.push(OpenCx::Burn {
+            region,
+            class,
+            comp,
+        });
+        self.block(&b.body)?;
+        self.open.pop();
+        self.span = i.span;
+        if comp {
+            self.abc(Op::COMP_LEAVE, 0, 0, 0)?;
+        }
+        self.abc(Op::BURN_LEAVE, 0, 0, 0)?;
+        self.region_rows.push(RegionRow {
+            pc_start,
+            pc_end: self.code.len() as u32,
+            region,
+        });
         Ok(())
     }
 
@@ -1670,7 +2063,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 cont,
                 cont_op: Op::JMP,
                 exit,
-                tries: self.tries.len(),
+                open: self.open.len(),
             });
             if captured {
                 self.abc(Op::CELLNEW, a + 3, 0, 0)?;
@@ -1693,7 +2086,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 cont,
                 cont_op: Op::JMP,
                 exit,
-                tries: self.tries.len(),
+                open: self.open.len(),
             });
             if captured {
                 self.abc(Op::CELLNEW, a + 3, 0, 0)?;
@@ -1716,13 +2109,40 @@ impl<'c, 'm> FnLower<'c, 'm> {
         Ok(())
     }
 
-    /// Leave the tries opened since `down_to`, innermost first: one in its
-    /// body or catch runs its finally (`try.leave 0`), one in its finally
-    /// drops what it had pending (`try.leave 1`).
-    fn leave_tries(&mut self, down_to: usize) -> Result<(), Error> {
-        for k in (down_to..self.tries.len()).rev() {
-            let a = u32::from(self.tries[k].in_finally);
-            self.abc(Op::TRY_LEAVE, a, 0, 0)?;
+    /// Leave the tries and burns opened since `down_to`, innermost first:
+    /// a try in its body or catch runs its finally (`try.leave 0`), one in
+    /// its finally drops what it had pending (`try.leave 1`); a burn stops
+    /// its compensation covering (`comp.leave`, when it has one) and closes
+    /// (`burn.leave`). A `try.leave` closes the burns opened inside its try
+    /// too, but they are closed already: innermost first.
+    fn leave_open(&mut self, down_to: usize) -> Result<(), Error> {
+        for k in (down_to..self.open.len()).rev() {
+            match self.open[k] {
+                OpenCx::Try { in_finally } => {
+                    self.abc(Op::TRY_LEAVE, u32::from(in_finally), 0, 0)?;
+                }
+                OpenCx::Burn { comp, .. } => {
+                    if comp {
+                        self.abc(Op::COMP_LEAVE, 0, 0, 0)?;
+                    }
+                    self.abc(Op::BURN_LEAVE, 0, 0, 0)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// After the jump out of the burns opened since `down_to`: a
+    /// `burn.enter` for each, outermost first, that no run reaches. The
+    /// verifier counts `burn.enter` and `burn.leave` in the order they are
+    /// written, not along the paths a run takes, so the way out's
+    /// `burn.leave`s are balanced here and each burn's own closing
+    /// `burn.leave` still finds its count.
+    fn reenter(&mut self, down_to: usize) -> Result<(), Error> {
+        for k in down_to..self.open.len() {
+            if let OpenCx::Burn { region, class, .. } = self.open[k] {
+                self.abx(Op::BURN_ENTER, u32::from(class), region)?;
+            }
         }
         Ok(())
     }
@@ -1762,7 +2182,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
         self.abx(Op::TRY_ENTER, 0, h as u32)?;
         let pc_start = self.code.len() as u32;
         let end = self.label();
-        self.tries.push(TryCx { in_finally: false });
+        self.open.push(OpenCx::Try { in_finally: false });
         self.block(body)?;
         let open = !ends(body);
         if open {
@@ -1792,8 +2212,8 @@ impl<'c, 'm> FnLower<'c, 'm> {
         let mut finally_pc = RESERVED_U32;
         if let Some(fb) = finally {
             finally_pc = self.code.len() as u32;
-            if let Some(t) = self.tries.last_mut() {
-                t.in_finally = true;
+            if let Some(OpenCx::Try { in_finally }) = self.open.last_mut() {
+                *in_finally = true;
             }
             self.block(fb)?;
             if !ends(fb) {
@@ -1801,7 +2221,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 self.abc(Op::TRY_LEAVE, 0, 0, 0)?;
             }
         }
-        self.tries.pop();
+        self.open.pop();
         self.place(end);
         self.handlers[h] = HandlerEntry {
             pc_start,
@@ -1919,10 +2339,15 @@ fn collect_uses(
 /// Every instruction, nested blocks included, in lowering order.
 fn walk<'a>(b: &'a Block, f: &mut dyn FnMut(&'a Instr)) {
     for i in &b.instrs {
-        f(i);
-        for nested in i.kind.blocks() {
-            walk(nested, f);
-        }
+        walk_one(i, f);
+    }
+}
+
+/// An instruction and every one nested in it.
+fn walk_one<'a>(i: &'a Instr, f: &mut dyn FnMut(&'a Instr)) {
+    f(i);
+    for nested in i.kind.blocks() {
+        walk(nested, f);
     }
 }
 

@@ -178,6 +178,26 @@ fn an_effect_moved_out_of_its_if_is_caught_only_by_the_places_t1() {
 }
 
 #[test]
+fn a_burn_keeps_its_unburn_blocks_span() {
+    // The line the journal records for a compensation, which a back end
+    // writes at run time.
+    let src = "burn (s) {\n  s.n = 1\n  fs.mkdir(\"d\")\n}\n\nunburn {\n  exhale s.n\n}\nburn {\n  fs.mkdir(\"e\")\n}\n";
+    let m = lower_source(src, "u.cig").unwrap();
+    let at: Vec<Option<(u32, u32)>> = m.funcs[0]
+        .body
+        .instrs
+        .iter()
+        .filter_map(|i| match &i.kind {
+            Kind::Burn(b) => Some(b.unburn_at.map(|s| (s.line, s.col))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(at.len(), 2);
+    assert_eq!(at[0].map(|a| a.0), Some(6));
+    assert_eq!(at[1], None);
+}
+
+#[test]
 fn a_compensation_that_reaches_outside_its_state_is_caught_v8() {
     let src = "roll n = 1\nburn (s) {\n  s.n = n\n  fs.mkdir(\"d\")\n} unburn {\n  exhale s.n\n}\n";
     let mut m = lower_source(src, "u.cig").unwrap();
