@@ -203,18 +203,29 @@ value waits in a register no `finally` writes. `cough` is `throw`, and
 a builtin, a module or `args` used as a value is `loadg`, read from
 the prelude by name. A burn is its state map, `burn.enter` with its
 region (class and label), `comp.enter` with the `unburn` block's source
-and line, the body, `comp.leave` and `burn.leave`; `break` and
-`continue` leave every `try` and burn they cross, innermost first, and
-`snuff` leaves the tries (its `ret` closes the burns). A call that
+and line, the body, `comp.leave` and `burn.leave`. A label that is not
+a string literal (`burn (s, name)`) is evaluated before the state map,
+as the interpreter evaluates it, and the region reads it from that
+register each time `burn.enter` runs, so a burn in a loop takes each
+turn's label; a `nop` after `burn.enter` carries the label's position,
+where a label that is not a string is reported. `break` and `continue`
+leave every `try` and burn they cross, innermost first, then jump, and
+`snuff` leaves the tries (its `ret` closes the burns); nothing follows
+a way out that no run would reach, and a body that ends in one ends
+its burn's row there. A call that
 changes the world is `burn.op` with the VM's own kind for its builtin,
 and a function with one outside its own burns is marked
 `requires_burn`, so it runs inside a caller's burn and is refused with
 `E701` outside one, as in the interpreter. `pack` and `chain` check each
 root and step right after it is evaluated, as the interpreter does, so
-a bad root is reported before a later one runs. Two things the bytecode
-cannot carry are refused with their construct and position: a burn
-whose label is not a string literal (a region's label is a constant),
-and a `pack` root that runs a pull or a function. `tests/bc.rs` runs
+a bad root is reported before a later one runs. A `chain` statement of
+the top level is also declared as a top-level name (`chain.make` with
+`C = 1`), and the top level's normal end returns a map of every name
+its statements declare, each with its value then, which the runtime
+declares after the run, so `--light <name>` answers as it does for the
+interpreter. One thing the bytecode cannot carry is refused with its
+construct and position: a `pack` root that runs a pull or a function.
+`tests/bc.rs` runs
 what it lowers in the VM and holds its output, errors, positions and
 step count to the tree-walker's, and for burns the files, the journal,
 a dry run's plan and what a rollback puts back.

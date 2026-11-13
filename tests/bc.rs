@@ -106,15 +106,20 @@ fn tree_walker(src: &str, max_steps: u64) -> (Outcome, u64) {
 
 /// The VM, through its public entry points: `verify_module`, `vm::load`,
 /// `vm::run`. A script has no top-level `snuff`, so the top level leaves
-/// null; what it computed comes out through `exhale`, which both write
-/// through the interpreter's one writer.
+/// null, or the map of the names it declares; what it computed comes out
+/// through `exhale`, which both write through the interpreter's one
+/// writer.
 fn vm(m: &Module, max_steps: u64) -> (Outcome, u64) {
     let verified = verify_module(m).unwrap_or_else(|e| panic!("does not verify: {e}"));
     let program =
         cigscript::vm::load(verified).unwrap_or_else(|e| panic!("does not load: {}", e.message));
     let mut run = interp(max_steps);
     let r = cigscript::vm::run(&mut run.interp, &program).map(|v| {
-        assert_eq!(v.repr(), "null", "the top level leaves null");
+        assert!(
+            matches!(v.type_name(), "null" | "map"),
+            "the top level leaves null or its names: {}",
+            v.repr()
+        );
     });
     outcome(r, &run)
 }
@@ -697,16 +702,21 @@ fn every_lowered_module_verifies() {
         let fresh = || {
             let _ = std::fs::remove_dir_all(&out);
         };
+        let mut computed = 0;
         for seed in 0..SEEDS {
             let mut stmts: Vec<String> = gen::program(seed)
                 .into_iter()
-                .map(|s| s.replace("\"out/", &rooted))
+                .enumerate()
+                .map(|(k, s)| computed_labels(&s.replace("\"out/", &rooted), seed + k as u64))
                 .collect();
             let text = stmts.join("\n") + "\n";
             match bc::compile(&text, "gen.cig", &pass::default_passes()) {
                 Ok(m) => {
                     verify_module(&m).unwrap_or_else(|e| panic!("seed {seed}: {e}\n{text}"));
                     lowered += 1;
+                    if register_labeled(&m.main) {
+                        computed += 1;
+                    }
                 }
                 Err(CompileError::Bytecode(Error::Refused { construct, .. })) => {
                     *constructs.entry(construct).or_default() += 1;
@@ -761,25 +771,57 @@ fn every_lowered_module_verifies() {
         println!(
             "shrunk to this part: {shrunk} programs lowered ({kept_stmts} top-level statements), every one verified, {ran} ran like the tree-walker"
         );
+        println!("{computed} of them burn under a computed label");
         assert_eq!(lowered + refused, SEEDS);
         assert!(shrunk > SEEDS / 2, "{shrunk}");
+        assert!(computed > 0, "no generated burn has a computed label");
     });
 }
 
+/// The generator's labeled burns, `burn ("w") {`, some with the label
+/// computed: `str("w")`, a state and `"w" + str(n)`, and now and then an
+/// int (`len("w")`, the tree-walker's error at the label); the rest kept.
+fn computed_labels(stmt: &str, seed: u64) -> String {
+    let mut out = String::new();
+    let mut rest = stmt;
+    let mut k = seed;
+    while let Some(at) = rest.find("burn (\"") {
+        let (head, tail) = rest.split_at(at);
+        out.push_str(head);
+        let Some(end) = tail.find("\") {") else {
+            out.push_str(tail);
+            return out;
+        };
+        let word = &tail["burn (\"".len()..end];
+        out.push_str(&match k % 7 {
+            0 | 1 => format!("burn (str(\"{word}\")) {{"),
+            2 | 3 => format!("burn (st_, \"{word}\" + str({})) {{", k % 5),
+            4 if k % 21 == 4 => format!("burn (len(\"{word}\")) {{"),
+            _ => format!("burn (\"{word}\") {{"),
+        });
+        rest = &tail[end + "\") {".len()..];
+        k = k.wrapping_mul(31).wrapping_add(7);
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Some burn of `f` or a function under it takes its label from a
+/// register.
+fn register_labeled(f: &cigscript::cig_bytecode::Function) -> bool {
+    f.regions
+        .iter()
+        .any(|r| matches!(r.label, cigscript::cig_bytecode::RegionLabel::Reg(_)))
+        || f.children.iter().any(register_labeled)
+}
+
 /// What the bytecode cannot carry stops the lowering with an ordinary
-/// error naming it and its position: a burn's label that is computed (a
-/// region's label is a constant), and a `pack` root that runs a pull or a
+/// error naming it and its position: a `pack` root that runs a pull or a
 /// function (it could burn first, which the VM's `pack` refuses and the
 /// tree-walker's does not).
 #[test]
 fn a_program_outside_this_part_is_refused_with_its_construct() {
     let cases = [
-        (
-            "roll n = \"de\"\nburn (n + \"ploy\") {\n  fs.write_text(\"o\", \"x\")\n}\n",
-            "a burn whose label is not a string literal",
-            2,
-            1,
-        ),
         (
             "pack { root() }\npull root() {\n  snuff \"./build\"\n}\n",
             "a `pack` root that runs a pull or a function",
@@ -805,8 +847,8 @@ fn a_program_outside_this_part_is_refused_with_its_construct() {
 }
 
 /// Every CIR instruction kind, lowered or refused whatever its operands.
-/// Every kind lowers; what is refused is refused for its operands (a burn's
-/// computed label, a `pack` root that runs code). A new kind does not
+/// Every kind lowers; what is refused is refused for its operands (a
+/// `pack` root that runs code). A new kind does not
 /// compile here until it is added.
 #[test]
 fn every_cir_kind_is_lowered_or_refused() {
@@ -930,6 +972,7 @@ fn every_cir_kind_is_lowered_or_refused() {
             compensate: None,
             unburn_src: None,
             unburn_at: None,
+            label_at: None,
         })),
         Kind::Try {
             body: Block::default(),
@@ -1135,16 +1178,16 @@ fn emit_bc_prints_the_disassembly_and_refuses_what_it_does_not_cover() {
     assert_eq!(String::from_utf8_lossy(&o.stdout), want);
 
     std::fs::write(
-        dir.path().join("label.cig"),
-        "roll n = \"de\"\nburn (n + \"ploy\") {\n  exhale n\n}\n",
+        dir.path().join("root.cig"),
+        "pack { root() }\npull root() {\n  snuff \"./build\"\n}\n",
     )
     .unwrap();
-    let o = cc(&["build", "label.cig", "--emit", "bc"]);
+    let o = cc(&["build", "root.cig", "--emit", "bc"]);
     assert_eq!(o.status.code(), Some(3));
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(
-        err.contains("a burn whose label is not a string literal is not lowered to bytecode yet")
-            && err.contains("label.cig:2:1"),
+        err.contains("a `pack` root that runs a pull or a function is not lowered to bytecode yet")
+            && err.contains("root.cig:1:1"),
         "{err}"
     );
 }
@@ -1282,6 +1325,23 @@ fn files_under(dir: &std::path::Path) -> Vec<(String, String)> {
 /// a scratch home. The working directory is the process's, so it is never
 /// moved in this one.
 fn script_agrees(path: &std::path::Path, name: &str) {
+    script_agrees_with(path, name, &[], &[], false);
+}
+
+/// `script_agrees` with the script's `args`, `files` written into its
+/// directory before each run, and, with `budget`, each real run again
+/// with half the steps it took as its step budget.
+fn script_agrees_with(
+    path: &std::path::Path,
+    name: &str,
+    args: &[&str],
+    files: &[(&str, &str)],
+    budget: bool,
+) {
+    let seed = tempfile::tempdir().expect("a seed directory");
+    for (f, text) in files {
+        std::fs::write(seed.path().join(f), text).expect("a seed file");
+    }
     let dir = tempfile::tempdir().expect("a temporary directory");
     let home = tempfile::tempdir().expect("a scratch home");
     let h = home.path();
@@ -1296,6 +1356,10 @@ fn script_agrees(path: &std::path::Path, name: &str) {
         .current_dir(dir.path())
         .env("CIG_BC_SCRIPT", &path)
         .env("CIG_BC_SCRIPT_NAME", name)
+        .env("CIG_BC_SCRIPT_ARGS", args.join("\n"))
+        .env("CIG_BC_SCRIPT_SEED", seed.path())
+        .env("CIG_BC_SCRIPT_BUDGET", if budget { "1" } else { "" })
+        .env("CIGO_HOME", h.join(".cig-orchestrator"))
         .env("HOME", h)
         .env("CIGSCRIPT_HOME", h.join(".cigscript"))
         .env("XDG_CONFIG_HOME", h.join(".config"))
@@ -1311,27 +1375,101 @@ fn script_agrees(path: &std::path::Path, name: &str) {
         "{name}:\n{out}\n{}",
         String::from_utf8_lossy(&o.stderr)
     );
+    if budget {
+        for l in out.lines().filter_map(|l| l.find(name).map(|at| &l[at..])) {
+            println!("{l}");
+        }
+    }
+}
+
+/// cigo's own program, `orchestrate.cig` of the checkout `CIGO_SRC`
+/// names, on the commands that start no process and need no box or
+/// network: `--version`, `help`, `list` and `list --all` in a directory
+/// with a small `cig-tasks.json`, `list` with none, an unknown command.
+/// Each lowered at -O1 and run as a script, for real and as a dry run,
+/// and the real run again with half its steps as the budget, held to
+/// the tree-walker. Its whole suite against a compiled cigo runs on the
+/// test box.
+#[test]
+fn cigos_program_runs_like_the_interpreter_without_a_box() {
+    let Some(src) = std::env::var_os("CIGO_SRC").map(std::path::PathBuf::from) else {
+        eprintln!("note: skipping; set CIGO_SRC to a cig-orchestrator checkout");
+        return;
+    };
+    let path = src.join("orchestrate.cig");
+    let tasks = "{\n  \"project\": \"demo\",\n  \"tasks\": {\n    \"lint\": {\"cmd\": [\"python3\", \"lint.py\"], \"desc\": \"style\"},\n    \"build\": {\"cmd\": [\"sh\", \"build.sh\"], \"needs\": [\"lint\"], \"desc\": \"the app\"},\n    \"test\": {\"cmd\": [\"sh\", \"test.sh\"], \"needs\": [\"build\"], \"timeout_ms\": 1000}\n  }\n}\n";
+    let with = [("cig-tasks.json", tasks)];
+    // Each command's arguments and the files its directory starts with.
+    type Command<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
+    let runs: [Command; 6] = [
+        (&["--version"], &[]),
+        (&["help"], &[]),
+        (&["list"], &with),
+        (&["list", "--all"], &with),
+        (&["list"], &[]),
+        (&["no-such-command"], &with),
+    ];
+    for (args, files) in runs {
+        script_agrees_with(&path, "orchestrate.cig", args, files, true);
+    }
 }
 
 /// The script `CIG_BC_SCRIPT` names on the tree-walker and, lowered at
-/// -O1, on the VM, each in the emptied working directory, for real and as
-/// a dry run: the same output, ending, steps, journal, plan, rollback and
-/// files. Started by `script_agrees`; without `CIG_BC_SCRIPT` it does
-/// nothing.
+/// -O1, on the VM as a script (`vm::run_script`), each in the emptied
+/// working directory (the seed's files copied in) and an emptied scratch
+/// home, with the arguments `CIG_BC_SCRIPT_ARGS` gives, for real and as a
+/// dry run: the same output, ending, steps, journal, plan, rollback and
+/// files; with `CIG_BC_SCRIPT_BUDGET`, the real run again with half its
+/// steps as the budget. Started by `script_agrees`; without
+/// `CIG_BC_SCRIPT` it does nothing.
 #[test]
 fn a_script_runs_like_the_interpreter_in_its_own_directory() {
     let Some(path) = std::env::var_os("CIG_BC_SCRIPT") else {
         return;
     };
     let name = std::env::var("CIG_BC_SCRIPT_NAME").unwrap_or_default();
+    let args: Vec<String> = std::env::var("CIG_BC_SCRIPT_ARGS")
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect();
+    let seed = std::env::var_os("CIG_BC_SCRIPT_SEED").map(std::path::PathBuf::from);
+    let budget = std::env::var("CIG_BC_SCRIPT_BUDGET").is_ok_and(|b| b == "1");
+    // The scratch home `script_agrees` made, emptied too: never another.
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|h| h.starts_with(std::env::temp_dir()));
     let src = std::fs::read_to_string(&path).expect("the script");
     big_stack(move || {
         let dir = std::env::current_dir().expect("a working directory");
-        let empty = || {
-            for e in std::fs::read_dir(&dir).expect("the directory").flatten() {
+        // What is emptied before each run is the temporary directory
+        // `script_agrees` started this process in: never any other.
+        let tmp = std::env::temp_dir()
+            .canonicalize()
+            .expect("the temporary directory");
+        assert!(
+            dir.canonicalize()
+                .is_ok_and(|d| d != tmp && d.starts_with(&tmp)),
+            "{}: `CIG_BC_SCRIPT` is for `script_agrees`, which starts this test in a temporary directory of its own",
+            dir.display()
+        );
+        let clear = |d: &std::path::Path| {
+            for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
                 let p = e.path();
                 let _ = std::fs::remove_dir_all(&p);
                 let _ = std::fs::remove_file(&p);
+            }
+        };
+        let empty = || {
+            clear(&dir);
+            if let Some(h) = &home {
+                clear(h);
+            }
+            for e in seed
+                .iter()
+                .flat_map(|s| std::fs::read_dir(s).into_iter().flatten().flatten())
+            {
+                std::fs::copy(e.path(), dir.join(e.file_name())).expect("a seed file");
             }
         };
         let m = match bc::compile(&src, &name, &pass::default_passes()) {
@@ -1341,16 +1479,39 @@ fn a_script_runs_like_the_interpreter_in_its_own_directory() {
         let program = cigscript::syntax::parse(&src).expect("parses");
         let verified = verify_module(&m).unwrap_or_else(|e| panic!("{name}: {e}"));
         let p = cigscript::vm::load(verified).unwrap_or_else(|e| panic!("{name}: {}", e.message));
-        for mode in [Mode::Run, Mode::DryRun] {
+        let both = |mode: Mode, max_steps: u64| {
             empty();
-            let want = burn_run(&[], Some(&dir), mode, 1_000_000, |i| {
+            let want = burn_run(&[], Some(&dir), mode, max_steps, |i| {
+                i.set_args(&args);
                 i.run_program(&program)
             });
             empty();
-            let got = burn_run(&[], Some(&dir), mode, 1_000_000, |i| {
-                cigscript::vm::run(i, &p).map(|_| ())
+            let got = burn_run(&[], Some(&dir), mode, max_steps, |i| {
+                i.set_args(&args);
+                cigscript::vm::run_script(i, &p)
             });
-            assert_eq!(got, want, "{name} {mode:?}");
+            assert_eq!(got, want, "{name} {args:?} {mode:?} budget {max_steps}");
+            want
+        };
+        for mode in [Mode::Run, Mode::DryRun] {
+            let left = both(mode, if budget { 1_000_000_000 } else { 1_000_000 });
+            println!(
+                "{name} {args:?} {mode:?}: {} steps, {} printed bytes, exit {:?}, ending {:?}, {} journaled, {} planned",
+                left.steps,
+                left.outcome.printed.len(),
+                left.outcome.exit,
+                left.outcome.end.as_ref().map(|e| e.0.as_str()),
+                left.journal.len(),
+                left.plan.len()
+            );
+            if budget && mode == Mode::Run {
+                let half = both(mode, (left.steps / 2).max(1));
+                println!(
+                    "{name} {args:?} with a budget of {}: ending {:?}",
+                    left.steps / 2,
+                    half.outcome.end.as_ref().map(|e| (e.0.as_str(), e.3, e.4))
+                );
+            }
         }
         empty();
     });
@@ -1664,6 +1825,92 @@ fn burn_corpus() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
             "for i in 0..3 {\n  burn (s, \"step\") {\n    s.i = i\n    fs.append_text(P0, str(i))\n  } unburn {\n    exhale s.i\n  }\n}\nexhale fs.read_text(P0)\n",
             ab.clone(),
         ),
+        // A computed label: from a variable, from a call, from a loop's
+        // variable (each turn its own label, one region), read before the
+        // state map is made (`burn (s, s)` takes the outer `s`); a label
+        // that is not a string, and one that fails to evaluate, stop the
+        // burn before it is entered.
+        (
+            "label-var",
+            "stick task = \"deploy\"\nburn (s, task) {\n  s.p = P0\n  fs.write_text(P0, task)\n} unburn {\n  fs.rm(s.p)\n}\nexhale \"done\"\n",
+            ab.clone(),
+        ),
+        (
+            "label-call",
+            "pull name_of(k) {\n  snuff \"step-\" + str(k)\n}\nburn (s, name_of(2)) {\n  s.k = 2\n  fs.write_text(P0, \"a\")\n} unburn {\n  exhale s.k\n}\n",
+            ab.clone(),
+        ),
+        (
+            "label-loop",
+            "for t in [\"a\", \"b\", \"c\"] {\n  burn (s, t) {\n    s.t = t\n    fs.append_text(P0, t)\n  } unburn {\n    exhale s.t\n  }\n}\nexhale fs.read_text(P0)\n",
+            ab.clone(),
+        ),
+        (
+            "label-while",
+            "stick names = [\"x\", \"y\"]\nroll i = 0\nwhile i < names.len() {\n  burn (names[i]) {\n    fs.append_text(P0, names[i])\n  }\n  i += 1\n}\n",
+            ab.clone(),
+        ),
+        (
+            "label-captured",
+            "roll task = \"one\"\nstick get = pack() => task\ntask = \"two\"\nburn (s, task) {\n  s.v = get()\n  fs.write_text(P0, s.v)\n} unburn {\n  exhale s.v\n}\n",
+            ab.clone(),
+        ),
+        (
+            "label-before-state",
+            "stick s = \"outer\"\nburn (s, s) {\n  s.n = 1\n  fs.write_text(P0, \"a\")\n} unburn {\n  exhale s.n\n}\nexhale s\n",
+            ab.clone(),
+        ),
+        (
+            "label-not-a-string",
+            "burn {\n  fs.write_text(P1, \"before\")\n}\nburn (s, 40 + 2) {\n  fs.write_text(P0, \"a\")\n} unburn {\n  exhale \"comp\"\n}\nexhale \"not here\"\n",
+            ab.clone(),
+        ),
+        (
+            "label-not-a-string-in-burn",
+            "burn (s, \"outer\") {\n  s.p = P0\n  fs.write_text(P0, \"a\")\n  roll n = null\n  burn (t, n) {\n    fs.write_text(P1, \"b\")\n  }\n} unburn {\n  fs.rm(s.p)\n}\n",
+            ab.clone(),
+        ),
+        (
+            "label-fails",
+            "burn (s, [\"a\"][3]) {\n  fs.write_text(P0, \"a\")\n}\nexhale \"not here\"\n",
+            ab.clone(),
+        ),
+        (
+            "label-caught",
+            "for v in [\"ok\", 5, \"fine\"] {\n  try {\n    burn (s, v) {\n      fs.append_text(P0, str(v))\n    } unburn {\n      exhale \"comp\"\n    }\n  } ashtray e {\n    exhale \"caught\", e.message\n  }\n}\n",
+            ab.clone(),
+        ),
+        (
+            "label-unlit",
+            "stick l = \"u\" + \"nlit\"\nburn unlit (u, l) {\n  fs.write_text(P0, \"a\")\n}\n",
+            ab.clone(),
+        ),
+        // Every way out of a burn ends its row with nothing after it.
+        (
+            "ends-in-break",
+            "for i in 0..3 {\n  burn (s, \"t\" + str(i)) {\n    s.i = i\n    fs.append_text(P0, str(i))\n    break\n  } unburn {\n    exhale s.i\n  }\n}\nexhale fs.read_text(P0)\n",
+            ab.clone(),
+        ),
+        (
+            "ends-in-continue",
+            "for i in 0..3 {\n  burn (s) {\n    s.i = i\n    burn {\n      fs.append_text(P0, str(i))\n      continue\n    }\n  } unburn {\n    exhale s.i\n  }\n}\nexhale fs.read_text(P0)\n",
+            ab.clone(),
+        ),
+        (
+            "ends-in-snuff",
+            "pull w(p) {\n  burn (s, \"w\") {\n    s.p = p\n    fs.write_text(p, \"a\")\n    snuff 7\n  } unburn {\n    fs.rm(s.p)\n  }\n}\nexhale w(P0)\n",
+            ab.clone(),
+        ),
+        (
+            "ends-in-cough",
+            "burn (s, \"c\") {\n  s.p = P0\n  fs.write_text(P0, \"a\")\n  cough \"stop\"\n} unburn {\n  fs.rm(s.p)\n}\n",
+            ab.clone(),
+        ),
+        (
+            "ends-in-break-two-burns",
+            "while true {\n  burn (s) {\n    burn (t) {\n      fs.write_text(P0, \"a\")\n      break\n    } unburn {\n      exhale \"inner\"\n    }\n  } unburn {\n    exhale \"outer\"\n  }\n}\nexhale \"out\"\n",
+            ab.clone(),
+        ),
         // `pack`: roots, then a write inside and outside them.
         ("pack", "pack { P0 }\nburn {\n  fs.write_text(P0, \"a\")\n}\nexhale \"in\"\n", ab.clone()),
         (
@@ -1673,6 +1920,110 @@ fn burn_corpus() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
         ),
         ("pack-built", "pack { str(P0) + \"\" }\nburn {\n  fs.write_text(P0, \"a\")\n}\n", ab.clone()),
     ]
+}
+
+/// The burn instructions (`burn.enter`, `comp.enter`, `comp.leave`,
+/// `burn.leave`) of `f` and its children that no run reaches: from pc 0
+/// and every handler's `handler_pc` and `finally_pc`, along every
+/// fall-through (none after `ret`, `tailcall`, `throw`, `jmp`, `loop`) and
+/// every jump operand. Each is `(function, pc, mnemonic)`.
+fn unreached_burn_instrs(f: &cigscript::cig_bytecode::Function, at: &str) -> Vec<String> {
+    use cigscript::cig_bytecode::{instr::walk, Op, OperandKind};
+    let decoded: Vec<_> = walk(&f.instrs).map(|d| d.expect("decodes")).collect();
+    let index: std::collections::HashMap<u32, usize> =
+        decoded.iter().enumerate().map(|(k, d)| (d.pc, k)).collect();
+    let mut seen = vec![false; decoded.len()];
+    let mut todo = vec![0u32];
+    for h in &f.handlers {
+        todo.push(h.handler_pc);
+        if h.finally_pc != cigscript::cig_bytecode::RESERVED_U32 {
+            todo.push(h.finally_pc);
+        }
+    }
+    while let Some(pc) = todo.pop() {
+        let Some(&k) = index.get(&pc) else {
+            continue;
+        };
+        if std::mem::replace(&mut seen[k], true) {
+            continue;
+        }
+        let d = decoded[k];
+        let info = d.op.info();
+        let next = d.pc + d.width;
+        if info.b == OperandKind::Jump {
+            todo.push((next as i64 + d.b_s as i64) as u32);
+        }
+        if info.c == OperandKind::Jump {
+            todo.push((next as i64 + d.c_s as i64) as u32);
+        }
+        if !matches!(
+            d.op,
+            Op::RET | Op::TAILCALL | Op::THROW | Op::JMP | Op::LOOP
+        ) {
+            todo.push(next);
+        }
+    }
+    let mut out: Vec<String> = decoded
+        .iter()
+        .zip(&seen)
+        .filter(|(d, seen)| {
+            !**seen
+                && matches!(
+                    d.op,
+                    Op::BURN_ENTER | Op::COMP_ENTER | Op::COMP_LEAVE | Op::BURN_LEAVE
+                )
+        })
+        .map(|(d, _)| format!("{at}: {:04} {}", d.pc, d.op.mnemonic()))
+        .collect();
+    for (k, c) in f.children.iter().enumerate() {
+        out.extend(unreached_burn_instrs(c, &format!("{at}/{k}")));
+    }
+    out
+}
+
+/// No way out of a burn leaves an instruction after it that no run
+/// reaches: `break` and `continue` (out of one burn and out of two),
+/// `snuff`, `cough`, a burn ending in another that ends so; nor a burn
+/// in a loop, a `try`, a pull. Each program of the burn corpus and the
+/// goldens, at -O0 and -O1.
+#[test]
+fn no_way_out_of_a_burn_leaves_an_instruction_no_run_reaches() {
+    let golden = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bc");
+    let mut programs: Vec<(String, String)> = burn_corpus()
+        .into_iter()
+        .map(|(name, src, files)| {
+            // Compiled, not run: any path will do.
+            let mut src = src.to_string();
+            for k in (0..files.len()).rev() {
+                src = src.replace(&format!("P{k}"), &format!("\"f{k}\""));
+            }
+            (name.to_string(), src)
+        })
+        .collect();
+    for g in ["burns", "loops", "errors"] {
+        let src = std::fs::read_to_string(golden.join(format!("{g}.cig"))).unwrap();
+        programs.push((format!("{g}.cig"), src.replace("\r\n", "\n")));
+    }
+    let mut checked = 0;
+    for (name, src) in &programs {
+        for level in [0, 1] {
+            let m = compile(src, level);
+            let dead = unreached_burn_instrs(&m.main, "fn0");
+            assert!(dead.is_empty(), "{name} -O{level}: {dead:?}");
+            checked += 1;
+        }
+    }
+    // The shapes the old lowering wrote dead code for are among them.
+    for name in [
+        "break",
+        "ends-in-break",
+        "ends-in-continue",
+        "ends-in-snuff",
+        "ends-in-cough",
+    ] {
+        assert!(programs.iter().any(|(n, _)| n == name), "{name}");
+    }
+    println!("{checked} modules, no burn instruction no run reaches");
 }
 
 #[test]
@@ -1751,9 +2102,11 @@ fn a_burn_lowers_as_the_format_lays_it_out() {
     let m = compile(src, 0);
     let main = &m.main;
     assert_eq!(main.regions.len(), 1);
-    let label = main.regions[0].label as usize;
+    let cigscript::cig_bytecode::RegionLabel::Const(label) = main.regions[0].label else {
+        panic!("a literal label is a constant: {:?}", main.regions[0].label);
+    };
     assert!(
-        matches!(&main.constants[label], cigscript::cig_bytecode::Constant::Str(s) if s == "deploy")
+        matches!(&main.constants[label as usize], cigscript::cig_bytecode::Constant::Str(s) if s == "deploy")
     );
     assert_eq!(main.regions[0].class, 0);
     assert_eq!(main.region_rows.len(), 1);
@@ -1915,4 +2268,191 @@ fn a_misplaced_pack_is_the_checkers_e753() {
             other => panic!("{src}: {:?}", other.map(|_| ())),
         }
     }
+}
+
+// ----- the top level's names (`--light`) ----------------------------------------------
+
+/// `cig run --light <name>` after a run: the name looked up in the
+/// interpreter's globals, as `cli::run`'s `light_named_chain` does it (the
+/// hint that lists the chains left out): a chain is lit, another value is
+/// `` `<name>` is a <type>, not a chain ``, a name not there is `E804`.
+fn light_after(i: &mut Interp, name: &str) -> Result<(), Diagnostic> {
+    use cigscript::diagnostics::Kind as DKind;
+    use cigscript::value::Value;
+    let value = match i.globals.get(name) {
+        Some(v @ Value::Chain(_)) => v,
+        Some(other) => {
+            return Err(Diagnostic::new(
+                DKind::Runtime,
+                format!("`{name}` is a {}, not a chain", other.type_name()),
+            ))
+        }
+        None => {
+            return Err(Diagnostic::new(
+                DKind::Usage,
+                format!("no chain named `{name}` in this script"),
+            )
+            .code("E804"))
+        }
+    };
+    let light = i.globals.get("light").expect("light is in the prelude");
+    i.call(&light, vec![value], Default::default()).map(|_| ())
+}
+
+/// `src` run, then `--light name`, on the tree-walker (`run_program`) and,
+/// lowered at -O0 and -O1, on the VM as a script (`vm::run_script`, which
+/// declares the names the top level returns): the run's and the light's
+/// output, logs (times out) and endings are the same. Returns the ending.
+fn light_agrees(src: &str, name: &str) -> Option<Stop> {
+    let program = cigscript::syntax::parse(src).expect("parses");
+    let both = |run: &mut Run, r: Result<(), Diagnostic>| {
+        let r = r.and_then(|()| light_after(&mut run.interp, name));
+        let (mut o, steps) = outcome(r, run);
+        o.logged = untimed(&o.logged);
+        (o, steps)
+    };
+    let mut run = interp(0);
+    let r = run.interp.run_program(&program);
+    let (want, want_steps) = both(&mut run, r);
+    for level in [0, 1] {
+        let m = compile(src, level);
+        let verified = verify_module(&m).unwrap_or_else(|e| panic!("does not verify: {e}"));
+        let p = cigscript::vm::load(verified).unwrap_or_else(|e| panic!("{}", e.message));
+        let mut run = interp(0);
+        let r = cigscript::vm::run_script(&mut run.interp, &p);
+        let (got, got_steps) = both(&mut run, r);
+        assert_eq!(got, want, "-O{level} --light {name}:\n{src}");
+        assert_eq!(
+            got_steps, want_steps,
+            "-O{level} --light {name} steps:\n{src}"
+        );
+    }
+    want.end
+}
+
+/// `--light` answers as the tree-walker's: a chain of the top level (lit,
+/// also when declared before `exit()`), a chain inside a block or a pull
+/// (`E804`: not a top-level name), a top-level name that is not a chain
+/// (a stick, a reassigned and captured roll, a pull, a lambda: "is a
+/// <type>, not a chain", with its value at the end), a name not declared
+/// (`E804`), a builtin.
+#[test]
+fn light_answers_like_the_tree_walker() {
+    big_stack(|| {
+        let src = "pull a() {\n  exhale \"a\"\n  snuff 1\n}\npull b(x) {\n  exhale \"b\", x\n  snuff x + 1\n}\nchain go { a, b }\nstick n = 5\nroll t = \"x\"\nstick f = pack() => t\nt = 2.5\nif true {\n  chain inner { a }\n}\npull mk() {\n  chain made { b }\n  snuff made\n}\nexhale \"ran\", f(), mk().name\n";
+        let cases = [
+            ("go", None),
+            ("n", Some("E500")),
+            ("t", Some("E500")),
+            ("f", Some("E500")),
+            ("a", Some("E500")),
+            ("inner", Some("E804")),
+            ("made", Some("E804")),
+            ("nope", Some("E804")),
+            ("len", Some("E500")),
+        ];
+        let mut n = 0;
+        for (name, code) in cases {
+            let end = light_agrees(src, name);
+            assert_eq!(
+                end.as_ref().map(|e| e.0.as_str()),
+                code,
+                "--light {name}: {end:?}"
+            );
+            n += 1;
+        }
+        // A chain declared before `exit()` is still lit.
+        let exits = "pull a() {\n  exhale \"a\"\n  snuff 1\n}\nchain go { a }\nexit(2)\n";
+        assert_eq!(light_agrees(exits, "go"), None);
+        // A chain the top level declares in a burn or a loop is not a
+        // top-level name; one it declares after a burn is.
+        let blocks = "pull a() {\n  snuff 1\n}\nburn {\n  chain inb { a }\n}\nfor i in 0..1 {\n  chain inl { a }\n}\nchain after { a }\n";
+        for (name, code) in [
+            ("inb", Some("E804")),
+            ("inl", Some("E804")),
+            ("after", None),
+        ] {
+            let end = light_agrees(blocks, name);
+            assert_eq!(end.as_ref().map(|e| e.0.as_str()), code, "--light {name}");
+        }
+        // No top-level name at all: the top level returns null, as before.
+        let m = compile("exhale 1\n", 1);
+        let p = cigscript::vm::load(verify_module(&m).unwrap()).unwrap();
+        let mut run = interp(0);
+        let v = cigscript::vm::run(&mut run.interp, &p).unwrap();
+        assert_eq!(v.repr(), "null");
+        println!("{} --light cases agree, each -O0 and -O1", n + 4);
+    });
+}
+
+/// `chain.make`'s `C` is 1 for a `chain` statement directly in the top
+/// level's block and 0 for every other: in an `if`, a loop, a burn, a
+/// pull.
+#[test]
+fn only_a_top_level_chain_is_declared_by_its_chain_make() {
+    use cigscript::cig_bytecode::{instr::walk, Function, Op};
+    let src = "pull a() {\n  chain p { a }\n  snuff p\n}\nchain top { a }\nif true {\n  chain i { a }\n}\nfor k in 0..1 {\n  chain l { a }\n}\nburn {\n  chain b { a }\n}\nchain last { top }\n";
+    fn cs(f: &Function, out: &mut Vec<u32>) {
+        for d in walk(&f.instrs) {
+            let d = d.unwrap();
+            if d.op == Op::CHAIN_MAKE {
+                out.push(d.c);
+            }
+        }
+        for c in &f.children {
+            cs(c, out);
+        }
+    }
+    for level in [0, 1] {
+        let m = compile(src, level);
+        let mut top = Vec::new();
+        cs(&m.main, &mut top);
+        // fn0 in order: top, i, l, b, last; then the pull's p.
+        assert_eq!(top, vec![1, 0, 0, 0, 1, 0], "-O{level}");
+    }
+}
+
+/// The top level's map costs one `loadk` and one `insertmap` per name, at
+/// its one normal end, and no register beyond two: on a script of 600
+/// top-level pulls and 600 sticks, the end is `newmap`, 1,200 pairs and
+/// `ret`, and the run still answers `--light` like the tree-walker.
+#[test]
+fn the_top_levels_names_cost_two_instructions_each() {
+    big_stack(|| {
+        let mut src = String::new();
+        for k in 0..600 {
+            src.push_str(&format!(
+                "pull p{k}() {{\n  snuff {k}\n}}\nstick s{k} = {k}\n"
+            ));
+        }
+        src.push_str("chain c { p0, p599 }\nexhale s599\n");
+        let m = compile(&src, 1);
+        let main = &m.main;
+        let ops: Vec<_> = cigscript::cig_bytecode::instr::walk(&main.instrs)
+            .map(|d| d.unwrap().op)
+            .collect();
+        let end = ops.len() - (2 + 2 * 1201);
+        assert_eq!(ops[end], cigscript::cig_bytecode::Op::NEWMAP);
+        for pair in ops[end + 1..ops.len() - 1].chunks(2) {
+            assert_eq!(pair[0], cigscript::cig_bytecode::Op::LOADK);
+            assert_eq!(pair[1], cigscript::cig_bytecode::Op::INSERTMAP);
+        }
+        assert_eq!(ops[ops.len() - 1], cigscript::cig_bytecode::Op::RET);
+        let started = std::time::Instant::now();
+        let p = cigscript::vm::load(verify_module(&m).unwrap()).unwrap();
+        let mut run = interp(0);
+        cigscript::vm::run_script(&mut run.interp, &p).unwrap();
+        println!(
+            "1,201 top-level names: the top level is {} instructions ({} words, {} constants, {} registers), {} of them the end's map; loaded and run in {:?}",
+            ops.len(),
+            main.instrs.len(),
+            main.constants.len(),
+            main.reg_count,
+            ops.len() - end,
+            started.elapsed()
+        );
+        for name in ["c", "s599", "p3", "nope"] {
+            light_agrees(&src, name);
+        }
+    });
 }

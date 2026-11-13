@@ -1,6 +1,6 @@
 ; module: calls.cig
 
-fn 0 <anonymous> (0 args, 12 regs, main, 1 consts, 3 children, 0 upvals, 0 handlers, 20 lines, 0 regions, 0 region rows):
+fn 0 <anonymous> (0 args, 12 regs, main, 5 consts, 3 children, 0 upvals, 0 handlers, 20 lines, 0 regions, 0 region rows):
   0000   closure   R0, Fn0
   0001   mov       R1, R0
   0002   closure   R0, Fn1
@@ -37,8 +37,16 @@ fn 0 <anonymous> (0 args, 12 regs, main, 1 consts, 3 children, 0 upvals, 0 handl
   0033   add       R0, R9, R7
   0034   mov       R3, R0
   0035   exhale    R3, x1
-  0036   loadnull  R0
-  0037   ret       R0
+  0036   newmap    R0, 4
+  0037   loadk     R3, K1 ("add")
+  0038   insertmap R0, R3, R1
+  0039   loadk     R3, K2 ("fact")
+  0040   insertmap R0, R3, R2
+  0041   loadk     R3, K3 ("sq")
+  0042   insertmap R0, R3, R4
+  0043   loadk     R3, K4 ("n")
+  0044   insertmap R0, R3, R5
+  0045   ret       R0
 
   fn 1 add (2 args, 5 regs, pull, 0 consts, 0 children, 0 upvals, 0 handlers, 5 lines, 0 regions, 0 region rows):
     0000   steps     0, 1

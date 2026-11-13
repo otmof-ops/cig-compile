@@ -1,6 +1,6 @@
 ; module: arith.cig
 
-fn 0 <anonymous> (0 args, 9 regs, main, 2 consts, 0 children, 0 upvals, 0 handlers, 45 lines, 0 regions, 0 region rows):
+fn 0 <anonymous> (0 args, 9 regs, main, 6 consts, 0 children, 0 upvals, 0 handlers, 45 lines, 0 regions, 0 region rows):
   0000   steps     0, 1
   0001   loadint   R0, 7
   0002   mov       R1, R0
@@ -52,7 +52,15 @@ fn 0 <anonymous> (0 args, 9 regs, main, 2 consts, 0 children, 0 upvals, 0 handle
   0048   add       R5, R0, R7
   0049   mov       R0, R5
   0050   exhale    R0, x1
-  0051   loadnull  R0
-  0052   ret       R0
+  0051   newmap    R0, 4
+  0052   loadk     R5, K2 ("a")
+  0053   insertmap R0, R5, R1
+  0054   loadk     R5, K3 ("b")
+  0055   insertmap R0, R5, R2
+  0056   loadk     R5, K4 ("c")
+  0057   insertmap R0, R5, R3
+  0058   loadk     R5, K5 ("d")
+  0059   insertmap R0, R5, R4
+  0060   ret       R0
 
 ; fn 0 lines: 0@1:1 1@1:10 2@1:1 3@2:1 4@2:10 5@2:1 6@3:1 7@3:10 8@3:14 9@3:10 10@3:18 11@3:22 12@3:18 13@3:10 14@3:1 15@4:1 16@4:10 17@4:1 18@5:1 19@5:4 20@5:8 21@5:4 23@5:4 25@5:14 26@5:19 27@5:14 30@5:1 31@6:3 32@6:7 33@6:3 34@5:1 35@7:11 36@7:16 37@7:11 39@5:1 40@8:3 41@8:7 42@8:3 43@10:1 44@10:8 45@10:12 46@10:16 47@10:12 48@10:8 49@10:1

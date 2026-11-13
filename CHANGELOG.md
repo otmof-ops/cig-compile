@@ -5,6 +5,20 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **The bytecode lowering, fifth part (#31).** A burn whose label is
+  computed (`burn (s, name)`) lowers: the label is evaluated before the
+  state map and the region reads it from its register each time the
+  burn is entered, so a burn in a loop takes each turn's label, and a
+  label that is not a string is the interpreter's error at the label.
+  `orchestrate.cig` now lowers whole. A way out of a burn (`break`,
+  `continue`, `snuff`, `cough`) leaves nothing after it that no run
+  reaches, and an unlit burn no longer needs a frame of two registers.
+  A top-level `chain` is declared as a top-level name and the top
+  level's end returns its names, so `--light` answers as it does for
+  the interpreter. The IR's burn now keeps its label's span. Only a
+  `pack` root that runs a pull or a function is still refused.
+  `tests/bc.rs` holds computed labels, `--light` and cigo's `--version`,
+  `help` and `list` to the tree-walker.
 - **The bytecode lowering uses the IR's `key` and stored spans (#31).**
   A computed map key is checked where the interpreter checks it, before
   the entry's value, so a map with a computed key no longer needs to be

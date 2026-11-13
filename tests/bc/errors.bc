@@ -1,14 +1,14 @@
 ; module: errors.cig
 
-fn 0 <anonymous> (0 args, 10 regs, main, 5 consts, 1 children, 0 upvals, 2 handlers, 41 lines, 0 regions, 0 region rows):
+fn 0 <anonymous> (0 args, 10 regs, main, 7 consts, 1 children, 0 upvals, 2 handlers, 41 lines, 0 regions, 0 region rows):
   0000   closure   R0, Fn0
   0001   mov       R1, R0
   0002   steps     0, 1
   0003   loadint   R0, 2
   0004   loadint   R2, 0
   0005   newlist   R3, 2
-  0006   appendlistR3, R0
-  0007   appendlistR3, R2
+  0006   appendlist R3, R0
+  0007   appendlist R3, R2
   0008   mov       R4, R3
   0009   iterprep  R4
   0010   steps     1, 0
@@ -70,8 +70,12 @@ fn 0 <anonymous> (0 args, 10 regs, main, 5 consts, 1 children, 0 upvals, 2 handl
   0066   mov       R8, R5
   0067   exhale    R7, x2
   0068   try.leave 0
-  0069   loadnull  R0
-  0070   ret       R0
+  0069   newmap    R0, 2
+  0070   loadk     R4, K5 ("safe")
+  0071   insertmap R0, R4, R1
+  0072   loadk     R4, K6 ("f")
+  0073   insertmap R0, R4, R2
+  0074   ret       R0
 
   fn 1 safe (1 args, 8 regs, pull, 3 consts, 0 children, 0 upvals, 1 handlers, 21 lines, 0 regions, 0 region rows):
     0000   steps     0, 1

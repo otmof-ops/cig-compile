@@ -1,6 +1,6 @@
 ; module: data.cig
 
-fn 0 <anonymous> (0 args, 17 regs, main, 13 consts, 2 children, 0 upvals, 0 handlers, 58 lines, 0 regions, 0 region rows):
+fn 0 <anonymous> (0 args, 17 regs, main, 17 consts, 2 children, 0 upvals, 0 handlers, 58 lines, 0 regions, 0 region rows):
   0000   cellnew   R0
   0001   loadnull  R0
   0002   closure   R1, Fn0
@@ -80,8 +80,8 @@ fn 0 <anonymous> (0 args, 17 regs, main, 13 consts, 2 children, 0 upvals, 0 hand
   0076   jmp       0, -> 78
   0077   loadnull  R9
   0078   newlist   R3, 2
-  0079   appendlistR3, R8
-  0080   appendlistR3, R9
+  0079   appendlist R3, R8
+  0080   appendlist R3, R9
   0081   mov       R8, R3
   0082   steps     0, 1
   0083   mov       R3, R8
@@ -136,8 +136,16 @@ fn 0 <anonymous> (0 args, 17 regs, main, 13 consts, 2 children, 0 upvals, 0 hand
   0132   interp    R11, R12, x2
   0133   mov       R3, R11
   0134   exhale    R3, x1
-  0135   loadnull  R3
-  0136   ret       R3
+  0135   newmap    R3, 4
+  0136   loadk     R9, K13 ("fib")
+  0137   insertmap R3, R9, R0
+  0138   loadk     R9, K14 ("fs")
+  0139   insertmap R3, R9, R2
+  0140   loadk     R9, K15 ("m")
+  0141   insertmap R3, R9, R1
+  0142   loadk     R9, K16 ("xs")
+  0143   insertmap R3, R9, R8
+  0144   ret       R3
 
   fn 1 fib (1 args, 7 regs, pull, 0 consts, 0 children, 1 upvals, 0 handlers, 19 lines, 0 regions, 0 region rows):
     0000   steps     0, 1

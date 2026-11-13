@@ -554,6 +554,7 @@ impl Lowerer<'_> {
                 span,
             } => {
                 // The label is evaluated before the region, outside it.
+                let label_at = label.as_ref().map(|e| e.span);
                 let label = match label {
                     Some(e) => Some(self.expr(e, out)?),
                     None => None,
@@ -582,6 +583,7 @@ impl Lowerer<'_> {
                     compensate,
                     unburn_src: unburn_src.clone(),
                     unburn_at: unburn.as_ref().map(|u| u.span),
+                    label_at,
                 };
                 self.emit(out, *span, Kind::Burn(Box::new(node)), None);
             }
