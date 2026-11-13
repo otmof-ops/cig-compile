@@ -95,8 +95,8 @@ Rules a reader checks on the table, each refused with `E1050`: ids are known cha
 repeated; entries are in the fixed order `source`, `bytecode`, `tree`, `snap`, `sbom` (unknown
 ids after them, in byte order of the id); bodies lie between the record's end and the table's
 start, in table order, without overlapping; each body starts at a file offset that is a multiple
-of 16; the bytes between bodies are zero; the payload is at most 64 MiB and a decoded body at
-most 64 MiB.
+of 16; the bytes between bodies are zero; an encoding is `0` or `1`, and the entry's other flag
+bits are zero; the payload is at most 64 MiB and a decoded body at most 64 MiB.
 
 **The record** is one JSON object written without whitespace, its keys in this order, every
 string printable (the format 1 rules for `name`, `file`, `compiler` and `cig` carry over):
@@ -277,7 +277,7 @@ depends on an unreleased cig.
 | The bytecode as base64 inside the JSON record (#31's first sketch) | It adds a third to the bytecode, makes every start parse the whole record, and gives no aligned body for an archive. |
 | Native object sections (ELF sections, a Mach-O segment, PE sections) written by rewriting the runtime's headers | It needs a header rewriter per format; it belongs to signing (#10), which can move this container into a section unchanged, since its offsets are relative to `P`. |
 | A section table inside the JSON record | Tools would need a JSON parser to find a body, and the table's fixed entries are simpler to bound-check. |
-| zstd for the source and the SBOM | It is not in the dependency graph; DEFLATE is, through `flate2`. |
+| zstd for the source and the SBOM | The runtime links zstd for the tin, but a tool that reads a program from outside (a verifier or an auditor in another language) is likelier to have DEFLATE at hand, and on a few KB of text the gain is small. The encoding field leaves room: zstd can become encoding `2` later without a format change. |
 | Falling back to the source when the bytecode does not load | It hides a damaged program; `--interp` is the only way the source runs at stage `b`. |
 | Mixed programs (bytecode for some functions, the tree for the rest) | The VM can call interpreted functions, but the format would need a map from functions to tree nodes; revisit if the VM's coverage of burns and chains lags behind the rest. |
 | Patch releases of older cigs that read format 2 | A program only runs on the cig that wrote it, so the only gain is a better wording of a refusal. |
