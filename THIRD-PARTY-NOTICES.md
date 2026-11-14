@@ -265,7 +265,7 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 | cig-pass | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
 | cig-vault | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
 | cigarscript | 0.1.0 | unrecorded | https://github.com/otmof-ops/cigar-script |
-| cigscript | 1.22.0 | unrecorded | https://github.com/otmof-ops/cig-script |
+| cigscript | 1.23.0 | unrecorded | https://github.com/otmof-ops/cig-script |
 
 ## Apache-2.0 OR Apache-2.0 WITH LLVM-exception OR MIT
 

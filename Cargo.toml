@@ -29,7 +29,7 @@ path = "src/bin/cig-runtime.rs"
 alloc-count = []
 
 [dependencies]
-cigscript = { git = "https://github.com/otmof-ops/cig-script", tag = "v1.22.0" }
+cigscript = { git = "https://github.com/otmof-ops/cig-script", tag = "v1.23.0" }
 # `.cigar` files and `--strength` (cigar-script#7): the checker and lowering
 # that `cigar check` is, pinned the way cigscript is, to a cigar-script commit.
 # The rev here is built on cigscript v1.20.0's AST and keeps its own cigscript

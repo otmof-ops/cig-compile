@@ -45,7 +45,7 @@ project follows semantic versioning.
   keeps format 1's parts for older programs. The `vm` feature is gone:
   the lowering and `--emit bc` are always built. The differential suite
   builds each script at both stages and holds both, and every step
-  budget of a run, to `cig run`. Built against cig 1.22.0's library.
+  budget of a run, to `cig run`. Built against cig 1.23.0's library.
 - **A loop's constants are made once (#31, cig-script#230).** A
   constant a loop needs in a register (`is[m] = false`, `2.0 * zr`,
   `> 4.0`, `k != 0`) is loaded once before the loop instead of on every

@@ -287,8 +287,8 @@ The first part that differs is named:
 
 ```
 out/tool
-  runtime          ok        cig's release asset cig-v1.22.0-linux-x86_64 (sha256 ...)
-  record           ok        tool: tool.cig for cig 1.22.0, built by cigcompile 0.5.0, stage b, -O1, x86_64-unknown-linux-musl
+  runtime          ok        cig's release asset cig-v1.23.0-linux-x86_64 (sha256 ...)
+  record           ok        tool: tool.cig for cig 1.23.0, built by cigcompile 0.5.0, stage b, -O1, x86_64-unknown-linux-musl
   section source   ok        tool.cig is the script it was built from (120 lines, sha256 ...)
   section bytecode DIFFERS   not what tool.cig lowers to at -O1: the first difference is at byte 812
   section table    ok        2 sections: source, bytecode

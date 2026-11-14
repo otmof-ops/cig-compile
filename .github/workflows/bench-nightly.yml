@@ -21,7 +21,7 @@ jobs:
     with:
       mode: nightly
       # The cig the suite is measured with, sha256 checked: the one cigcompile pins.
-      cig-version: "1.22.0"
+      cig-version: "1.23.0"
       # What the suite needs beside cig: the checkout the program set is read
       # from (../CigScript; set.sh holds every file to bench/set.sha256) and
       # this repository's cigcompile and runtime. `main` until a cig release
