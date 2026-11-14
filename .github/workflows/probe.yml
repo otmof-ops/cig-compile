@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+# SPDX-License-Identifier: FSL-1.1-ALv2
+name: probe
+
+# A one-off measurement on the hosted runner, the machine the bench gate runs on. It runs
+# probes/run.sh of the branch that was pushed; the result is the job's log. A probe lives on a
+# branch named probe/<what> and is not merged.
+on:
+  push:
+    branches: ["probe/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: a measurement on the hosted runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: run the probe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash probes/run.sh
