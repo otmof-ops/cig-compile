@@ -1,46 +1,46 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
 // SPDX-License-Identifier: FSL-1.1-ALv2
 //! The sha256 of every runtime this compiler accepts from a release: cig
-//! v1.23.0's assets, as its release published them. Written by
-//! `ci/digests.sh v1.23.0`; the version below must be the one Cargo.toml pins
+//! v1.24.0's assets, as its release published them. Written by
+//! `ci/digests.sh v1.24.0`; the version below must be the one Cargo.toml pins
 //! (a test holds it to `cigscript::VERSION`).
 
 /// The cig version these are for.
-pub const VERSION: &str = "1.23.0";
+pub const VERSION: &str = "1.24.0";
 
 /// Asset name and sha256, hex.
 pub const DIGESTS: &[(&str, &str)] = &[
     (
-        "cig-v1.23.0-freebsd-x86_64",
-        "6446eae845a6ad5d9d8650281d0714597f075e8c32d7c217db22c051e025576f",
+        "cig-v1.24.0-freebsd-x86_64",
+        "1a718cd9e70b48e8754f6583d35447bb225b5c2ce05a0012409276c3c4ffd1a7",
     ),
     (
-        "cig-v1.23.0-linux-aarch64",
-        "903f8ae773e016fbe376e0c4ee06deb64e020982b39ecdb5dcfaa2eba7210112",
+        "cig-v1.24.0-linux-aarch64",
+        "31e0f07e4c3a6830d0a826146592d70da92a5d49f110efe72242d1bb8a47ce9b",
     ),
     (
-        "cig-v1.23.0-linux-arm",
-        "4e17f803130d3c4eb3789b4cd53b2ae04f72ed955c163af3f2a77b7134e6ee50",
+        "cig-v1.24.0-linux-arm",
+        "d373739f881debe8c9cc2cd5345f40d66058c1db3c0a674f51a3bc2fff2e024b",
     ),
     (
-        "cig-v1.23.0-linux-x86_64",
-        "adffb3c84cd61cb27a47205ae3189d05ef7b1142665a9fafa89a7e5f5fee180d",
+        "cig-v1.24.0-linux-x86_64",
+        "957ddff2c27c9baa38b5aa43361e165e209ebb3d6a3c82cfa28d7b7777e91b3f",
     ),
     (
-        "cig-v1.23.0-macos-aarch64",
-        "8ae2c137d2023ffca30c98cb21d6c25e3da60455777bc6f56f314191f9ca5321",
+        "cig-v1.24.0-macos-aarch64",
+        "15b92e1549a7b0b9ae658780f9383211ab8df76b85548d8e4c42246205a9c42e",
     ),
     (
-        "cig-v1.23.0-macos-x86_64",
-        "74e491614ed8764c1e16db96d68365ccc80fad9e23b59e0f3dbb65d18cc0f062",
+        "cig-v1.24.0-macos-x86_64",
+        "dbf822ead630851d179222694ced9e24fac47883681e12e9622562f489d91f48",
     ),
     (
-        "cig-v1.23.0-windows-aarch64.exe",
-        "bbf2ad5ade32b410a3a8486c88976eefc3f894dadc84547f24a2ec796d6d4765",
+        "cig-v1.24.0-windows-aarch64.exe",
+        "8bc67b5cadf6140a656e7cbf8a0c98cdb0ef5c6a9e2d9a0daf998e2de1c524bf",
     ),
     (
-        "cig-v1.23.0-windows-x86_64.exe",
-        "7e5d25e4a866ddaf0528989bd925306791a2e4d1af579c85c2fab4121baa5e95",
+        "cig-v1.24.0-windows-x86_64.exe",
+        "96cd595cc3fb1b8f0639ec6436c49be9de8472e8a2582a10e6da061cb8fff45c",
     ),
 ];
 
