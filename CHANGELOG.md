@@ -5,27 +5,33 @@ project follows semantic versioning.
 
 ## Unreleased
 
-- **The memory budget is held to what a program holds of its own
-  (#30).** "Peak memory of a compiled hello" was a budget on the
-  resident set, 14 MB, and a resident set counts the pages of the
-  program's file that the kernel has mapped. On Linux 7.0 that is the
-  whole file: a hello read its file's size plus 2.7 MB (18.9 MB for a
-  16.2 MB program on x86-64, 16.7 MB for a 14.0 MB one on arm64), on a
-  disk and on a memory file system, on cig 1.21.0's runtime and on
-  1.22.0's alike, so the row could not be met by any program and said
-  nothing about its heap. For the row's hello the bench now makes one
-  more run in which the program is traced by the bench just long enough
-  to be read at its exit (`VmHWM`, `RssAnon`, `RssFile` from its
-  `/proc/<pid>/status`), and the row is held to the program's own memory
-  at the old budget less the file pages it was set on (about 10 of the
-  11.5 MB a just-built hello read on Linux 6.17): **under 4 MB of its
-  own.** It prints both figures. A hello holds 1 to 2 MB of its own on a
-  runtime whose heap starts in small pages; two 2 MiB pages of heap are
-  over the budget, and the four that cig 1.21.0 kept are twice it, which
-  is what the row is for. Where a process cannot be traced by its parent,
-  and off Linux, the row reads "not measured" and is not held. The
-  `RSS MB` column and the memory gate against `main` are unchanged
-  (`docs/BENCHMARKS.md`, "Compiled peak memory: the budget").
+- **A benchmark's peak memory is read from the program's own address
+  space (#30).** The `RSS MB` column and the budget "peak memory of a
+  compiled hello, under 14 MB" took a child's peak from `wait4`. On Linux
+  that is at least what the bench holds when it starts the program: a
+  forked child has its parent's own memory resident until it execs, and
+  the kernel keeps that mark across the `exec`. 0.4.1 let go of the
+  runtime's bytes and set the mark back before `exec`, which removed the
+  bench's earlier peak and not what it still held: on CI's tables, the
+  runtime's size plus 3 MB. Every smaller program read that figure: a
+  hello 19.3 MB on x86-64 and 16.8 MB on arm64, where its own peak is
+  11.3 and 11.0 MB (a child of a process holding 96 MiB reads 102.7 MB by
+  `wait4` and 1.4 MB of its own). The budget, held for the first time by
+  the first cig after 1.21.0, could not be met by any program, and the
+  memory gate could not see a change in a program under 19 MB. Now the
+  untimed run that takes the peak is traced by the bench just long
+  enough to read the program at its exit (`VmHWM` in its
+  `/proc/<pid>/status`: the peak of the address space it got at its
+  `exec`). The budget is the same budget, 14 MB, on that figure, and its
+  row says the two parts: `11.3 MB (0.7 MB of its own, 10.7 MB of its
+  files' pages)` on cig 1.23.0's runtime, `17.4 MB (6.6 MB of its own,
+  10.8 MB of its files' pages)` on 1.21.0's. Where a process cannot be
+  traced by its parent the column keeps `wait4`'s figure and the row
+  reads "not measured" and is not held. The first run of the memory gate
+  after this compares a `main` measured the old way with a pull request
+  measured the new way, so it reads lower, never higher
+  (`docs/BENCHMARKS.md`, "How a benchmark is measured" and "Compiled peak
+  memory: the budget").
 - **A call's window sits above every live register (#31,
   cig-script#230).** The VM now starts a callee's frame at its arguments,
   over every register above them, so the lowering places a `call`'s
