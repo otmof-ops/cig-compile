@@ -943,8 +943,9 @@ fn as_interpreted(run: &mut serde_json::Value) {
 /// What the runs left in cig's home, in the order they ran (`order`, the
 /// run folders as the steps made them): each run's record, every journal
 /// line and the after-state, without what is a process's own (ids, times,
-/// pids, the hash chain; folder fingerprints masked), its snapshots by
-/// content, and the names of everything in its folder. A dry run leaves no
+/// pids, the hash chain; folder fingerprints masked), its snapshots and
+/// its packed before-states by content, and the names of everything in its
+/// folder. A dry run leaves no
 /// run folder, so for dry runs this compares nothing.
 fn journals(home: &Path, order: &[String]) -> String {
     let read = |p: PathBuf| {
@@ -971,6 +972,11 @@ fn journals(home: &Path, order: &[String]) -> String {
         // earlier was written: a process's own, like the run's (found by
         // the random programs).
         mask_everywhere(&mut v, "mtime_ns");
+        // A small before-state is a record of a pack since cig 1.22.0, and
+        // a pack is named by a random id: a process's own, like a run's.
+        // The path is compared up to the pack; what the run packed is
+        // compared by content below.
+        mask_pack(&mut v);
         normal(&v.to_string())
     };
     let mut out = Vec::new();
@@ -1006,8 +1012,83 @@ fn journals(home: &Path, order: &[String]) -> String {
         if !snaps.is_empty() {
             out.push(format!("snapshots: {snaps}"));
         }
+        let packed = packed(home, &d);
+        if !packed.is_empty() {
+            out.push(format!("packed: {packed}"));
+        }
     }
     out.join("\n")
+}
+
+/// The pack in a `snapshot` path, `tin/packs/<two hex>/<32 hex>`, by either
+/// separator: its random name becomes `<pack>`.
+fn mask_pack(v: &mut serde_json::Value) {
+    static PACK: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pack = PACK.get_or_init(|| {
+        regex::Regex::new(r"([/\\]tin[/\\]packs[/\\])[0-9a-f]{2}[/\\][0-9a-f]{32}$").unwrap()
+    });
+    match v {
+        serde_json::Value::Object(m) => {
+            if let Some(serde_json::Value::String(s)) = m.get_mut("snapshot") {
+                *s = pack.replace(s, "${1}<pack>").to_string();
+            }
+            m.values_mut().for_each(mask_pack);
+        }
+        serde_json::Value::Array(a) => a.iter_mut().for_each(mask_pack),
+        _ => {}
+    }
+}
+
+/// The before-states a run packed, in the order it wrote them: each
+/// record's length and the hash of its bytes, taken as `tree` takes a
+/// file's. The run lists its packs by id in `tin.packs`; a pack is read
+/// with cig's own reader, which checks every record against its name.
+fn packed(home: &Path, run: &Path) -> String {
+    use cigscript::burn::tinpack;
+    let Ok(listed) = std::fs::read_to_string(run.join(tinpack::LISTED)) else {
+        return String::new();
+    };
+    let mut out = Vec::new();
+    for id in listed.lines().map(str::trim).filter(|l| l.len() > 2) {
+        let path = home.join("tin").join("packs").join(&id[..2]).join(id);
+        // A run lists a pack as it makes it: one that is not where this
+        // looks means the suite reads the tin wrongly, and comparing
+        // nothing on both sides would pass.
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+            panic!(
+                "{} lists the pack {id}, and {} does not read: {e}",
+                run.display(),
+                path.display()
+            )
+        });
+        match tinpack::walk(&bytes) {
+            Ok((entries, end)) => {
+                for e in &entries {
+                    match tinpack::object_of(&bytes, e) {
+                        Ok(object) => out.push(format!("{} {}", object.len(), text_sha(object))),
+                        Err(err) => out.push(format!("a record that does not read: {err}")),
+                    }
+                }
+                if end != tinpack::End::Clean {
+                    out.push(format!("the pack ends {end:?}"));
+                }
+            }
+            Err(err) => out.push(format!("not a pack: {err}")),
+        }
+    }
+    out.join("; ")
+}
+
+/// The first 12 hex of a file's hash. Text is hashed as the streams are
+/// compared: a timestamp or a run id written into a file (a report's
+/// `generated`) is not a difference between the interpreter and the
+/// program.
+fn text_sha(bytes: Vec<u8>) -> String {
+    let sha = match String::from_utf8(bytes) {
+        Ok(t) => hex::encode(Sha256::digest(normal(&t).as_bytes())),
+        Err(e) => hex::encode(Sha256::digest(e.as_bytes())),
+    };
+    sha[..12].to_string()
 }
 
 fn mask_everywhere(v: &mut serde_json::Value, key: &str) {
@@ -1118,15 +1199,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
             out.push(format!("{rel}/"));
             walk(root, &p, out);
         } else {
-            // Text is hashed as the streams are compared: a timestamp or a
-            // run id written into a file (a report's `generated`) is not a
-            // difference between the interpreter and the program.
-            let sha = std::fs::read(&p)
-                .map(|b| match String::from_utf8(b) {
-                    Ok(t) => hex::encode(Sha256::digest(normal(&t).as_bytes())),
-                    Err(e) => hex::encode(Sha256::digest(e.as_bytes())),
-                })
-                .unwrap_or_default();
+            let sha = std::fs::read(&p).map(text_sha).unwrap_or_default();
             #[cfg(unix)]
             let mode = {
                 use std::os::unix::fs::PermissionsExt;
@@ -1134,7 +1207,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
             };
             #[cfg(not(unix))]
             let mode = String::new();
-            out.push(format!("{rel} {}{mode}", &sha[..12.min(sha.len())]));
+            out.push(format!("{rel} {sha}{mode}"));
         }
     }
 }
