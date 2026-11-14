@@ -5,20 +5,6 @@ project follows semantic versioning.
 
 ## Unreleased
 
-- **The memory budget measures the program, not the file system
-  (#30).** "Peak memory of a compiled hello, under 14 MB" is held from
-  the first cig after 1.21.0, and on Linux 7.0 with ext4 it read the
-  program file's size plus 2.7 MB for every small program (18.9 MB for
-  a 16.2 MB program on x86-64, 16.7 MB for a 14.0 MB one on arm64), on
-  cig 1.21.0 and 1.22.0 alike: the kernel maps a just-written file in
-  large folios, so the whole file was resident. For that row the bench
-  now takes the peak once more from a copy of the program on a memory
-  file system (`/dev/shm`, else the session's runtime folder), where
-  only the pages a run touches are mapped, and says so beside the
-  figure (7 to 8 MB for cig 1.22.0); with no such folder the figure is
-  the old one. The `RSS MB` column and the memory gate against `main`
-  are unchanged (`docs/BENCHMARKS.md`, "Compiled peak memory: the
-  budget").
 - **A call's window sits above every live register (#31,
   cig-script#230).** The VM now starts a callee's frame at its arguments,
   over every register above them, so the lowering places a `call`'s
