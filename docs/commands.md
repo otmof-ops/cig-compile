@@ -2,6 +2,7 @@
 
 ```
 cigcompile build [path] [-o out] [--target T] [--runtime cig] [--check]
+                 [--stage a|b] [--args direct]
                  [--emit cir|cir-opt|bc|oci|deb] [-O 0|1|2] [--passes a,b,...] [--passes-diff]
                  [--remarks] [--timings[=FILE]] [--json-progress] [--sbom]
                  [--sign <key>] [--pass] [--watch]
@@ -108,14 +109,16 @@ Flags:
 | `--strength mild \| medium \| full` | for a `.cigar` file, check it as if it declared this strength; see [`.cigar` files](#cigar-files-and---strength). A `.cig` script is always mild and ignores it |
 | `--check` | parse and check; write nothing, need no runtime |
 | `--emit cir \| cir-opt` | the verified IR instead of a program; see [IR and passes](#ir-and-passes) |
-| `--emit bc` | the bytecode the IR lowers to, verified and disassembled; a cigcompile built with the `vm` feature only; see [IR and passes](#ir-and-passes) |
+| `--stage a \| b` | `b`: the program runs the bytecode its script lowers to on cig's VM, and a script that does not lower is refused (`E1010`) naming the construct and its line. `a`: it runs its script on the tree-walker. Without the flag a build makes stage `a`, until stage `b` passes its speed gates: `--stage b` opts in. See [stages](#stages) |
+| `--args direct` | every argument on the program's command line is its script's, flags included (`tool --version`), and the program takes no run flags: the build's name for what a script says with `pack { ".", own_flags: true }`. A script that says it needs no flag |
+| `--emit bc` | the bytecode the IR lowers to, verified and disassembled: what a stage `b` program carries; see [IR and passes](#ir-and-passes) |
 | `--emit oci` | the program, and beside it an OCI image of it; Linux targets only |
 | `--emit deb` | the program, and beside it a `.deb` that installs to `/usr/bin/<name>`; Linux targets only |
-| `-O 0 \| 1 \| 2` | the optimization level: `0` lowering only; `1` and `2` run every pass there is. At stage A this shapes `--emit` only (a program carries the script) |
-| `--passes a,b,...` | run exactly these passes, in this order, for bisecting (`fold-consts`, `copy-prop`, `sccp`, `dead-pure`) |
+| `-O 0 \| 1 \| 2` | the optimization level: `0` lowering only; `1` (the default) and `2` run every pass there is. A stage `b` program's bytecode is lowered at it, and every program records it (`opt`) |
+| `--passes a,b,...` | run exactly these passes, in this order, for bisecting (`fold-consts`, `copy-prop`, `sccp`, `dead-pure`); they shape `--emit` and `--remarks`, and a program is still lowered at `-O`'s level |
 | `--passes-diff` | with `--emit`, a unified diff of what each pass changed, or that it changed nothing |
 | `--remarks` | each pass says on stderr what it did or left alone; `--json` writes them as JSON lines. Costs nothing when off |
-| `--timings[=FILE]` | a phase-by-phase table on stderr (read, index, check, pin, runtime, assemble, hash, write, sbom); `=FILE` also writes a Chrome trace for `chrome://tracing` or Perfetto |
+| `--timings[=FILE]` | a phase-by-phase table on stderr (read, index, check, pin, bytecode, runtime, assemble, hash, write, sbom); `=FILE` also writes a Chrome trace for `chrome://tracing` or Perfetto |
 | `--json-progress` | one JSON object a line on stderr (`start`, `script`, `phase`, `built`, `done`), for an editor or a window |
 | `--sbom` | a CycloneDX 1.5 file beside each program, `<program>.cdx.json`, naming its runtime and script by sha256, with no time and no build path in it |
 | `--sign <key>` | a detached SSH signature beside each program (and the SBOM, with `--sbom`); see [shipping](shipping.md) |
@@ -284,14 +287,46 @@ each part as a field.
 ### `cigcompile verify`
 
 Check a program is what a build makes, part by part, and run nothing.
-The parts:
+A program in payload format 2 (every program this cigcompile builds) is
+read part by part as its file lays them out
+([how it works](how-it-works.md#what-a-program-is)):
 
 - **runtime** — the runtime against the sha256 of cig's release assets
-  this compiler pins. `--runtime <cig>` holds it to a specific cig
-  instead (a cig built from source).
-- **payload** — the payload (the checked script and its record)
-  against the sha256 its trailer and its record carry. `--script
-  <path>` adds a check against the script on disk.
+  this compiler pins (`--runtime <cig>` holds it to a specific cig
+  instead, a cig built from source), and against the `runtime_sha256`
+  and `cig` its record gives.
+- **record** — the record reads, follows the format's rules and is
+  written as a build writes it.
+- **section source** — its bytes against the table's sha256, its text
+  against the record's `sha256`; with `--script <path>`, against the
+  script on disk (a change is named by its first line).
+- **section bytecode** (stage `b`) — its bytes against the table, then
+  read, verified, and compared with a fresh lowering, at the recorded
+  `opt`, of `--script`'s text or, without it, of the `source` section.
+  A program another cigcompile or cig built is read and verified, and
+  its lowering is `unchecked`.
+- **section `<id>`** — any other section, against the table.
+- **section table** — the table's rules: ids, order, encodings, flags,
+  versions, and where each body lies.
+- **padding** — the zeros between the record, the bodies and the table.
+- **trailer** — `CIGPROG2`, its flags, and the payload, record and table
+  lengths it gives, against where the runtime's image ends.
+
+The trailer's head sha256 covers the record and the table, so a change
+there is told from a change in a body: with the head holding, a body
+that does not match is that section; with it broken, an entry that does
+not match its body is the table, and otherwise the record. Then the
+whole file is held to what a build of those parts writes, and the first
+difference is named by the part it falls in.
+
+A program in format 1 (built by cigcompile 0.4 and earlier) keeps its
+parts: **runtime**, **payload** (the checked script and its record
+against the sha256 its trailer and its record carry), **script** (with
+`--script`) and **whole** (the file against what a build of those parts
+writes).
+
+The parts that need no program format:
+
 - **signature** — with `--signature <file>`, an SSH signature of the
   program. Without `--allowed-signers` only the signature's integrity
   is checked (`-Y check-novalidate`) and the part is reported
@@ -304,9 +339,6 @@ The parts:
   name `cigpass-program`), else cig's own allowed signers; either file
   must be yours, a regular file and closed to others' writes, or it
   trusts nobody. Checking a pass makes no key on a machine that has none.
-- **whole** — the whole file against the bytes a build of those parts
-  writes.
-
 Each part is `ok`, `DIFFERS` or `unchecked`. The exit is `1` when one
 part differs; the first `DIFFERS` is named.
 
@@ -367,12 +399,12 @@ A deeper fault (a panic the thread wrapper catches) exits `70`.
 ## Error codes
 
 All the codes cigcompile prints end in `cig explain E<code>`, which
-has the long version. Compiler-side codes live in `E1000`-`E1009`;
+has the long version. Compiler-side codes live in `E1000`-`E1010`;
 the runtime a compiled program carries meets `E1050`-`E1053` of its
 own. [Troubleshooting](troubleshooting.md) is keyed by the exact
 message.
 
-**The compiler** (`E1000`-`E1009`):
+**The compiler** (`E1000`-`E1010`):
 
 | code | when |
 |---|---|
@@ -386,12 +418,13 @@ message.
 | `E1007` | two programs would share one name: scripts whose names differ only in case, on a filesystem that does not tell case apart |
 | `E1008` | the runtime would tie programs to this machine's libc: the only cig here is dynamically linked, so a program made from it would start only where the same glibc is |
 | `E1009` | a script whose name is not printable: the name holds a control or an invisible character, and cig would refuse to run such a program (`E1050`) |
+| `E1010` | a script that cannot be a stage b program: `--stage b`, and the script holds a construct the lowering to bytecode does not cover (today a `pack` root that runs a pull or a function), or needs an instruction the pinned runtime's VM does not run. The message names it and its line; without `--stage b` the build makes stage a |
 
 **A compiled program at runtime** (`E1050`-`E1053`):
 
 | code | when |
 |---|---|
-| `E1050` | a damaged program: its sha256 does not match the trailer, its record does not read, or its trailer is not at its end |
+| `E1050` | a damaged program: its sha256 does not match the trailer, its record does not read, its trailer is not at its end, a section's bytes do not match the table, or its bytecode does not read, verify or load. A stage b program never runs its source instead |
 | `E1051` | a program for another cig: the payload was appended to a cig it was not compiled for |
 | `E1052` | not one of the program's run flags: a flag before `--` that cig does not recognize, or an argument that is not valid UTF-8 |
 | `E1053` | not this program's run: a run id passed to `--unburn` that was not made by this program |
@@ -446,8 +479,8 @@ IR is shaped by `-O` and `--passes`:
 - **`-O0`** lowering only. No pass runs.
 - **`-O1`** (the default) runs every pass there is in order:
   `fold-consts`, `copy-prop`, `fold-consts`, `sccp`, `dead-pure`.
-- **`-O2`** is the same at stage A; stage B's passes are what will
-  set `-O2` apart.
+- **`-O2`** is the same as `-O1` today; the passes still to come are
+  what will set it apart.
 - **`--passes a,b,...`** runs exactly these passes, in this order,
   for bisecting a bad result.
 
@@ -455,17 +488,17 @@ Every statement opens with a `step` and every loop body with a
 `step.iter`: the step budget's ticks, where the interpreter counts
 them.
 
-`--emit cir-opt` names the IR after the passes. At stage A it reads
-the same as `cir` at the chosen level; `cir-opt` is reserved so that
-stage B can split the two without a flag change.
+`--emit cir-opt` names the IR after the passes. Today it reads the
+same as `cir` at the chosen level; `cir-opt` is reserved so that the
+two can split without a flag change.
 
 `--emit bc` lowers that IR to the register bytecode the cig runtime's
 VM runs ([#31](https://github.com/otmof-ops/cig-compile/issues/31)), verifies it and prints its disassembly, then each
 function's line table (`pc@line:col`). It covers the whole language,
 burns (a computed label too), `pack` and chains included, except a
 `pack` root that runs a pull or a function: a script that uses one is
-refused with the construct and its position (exit 3). It exists only
-in a cigcompile built with the `vm` feature.
+refused with the construct and its position (exit 3). It is the module
+a stage `b` program carries.
 
 `--passes-diff`, with `--emit`, adds a unified diff of what each pass
 changed, or a line saying it changed nothing. `--remarks` says the
@@ -473,6 +506,40 @@ same thing in the other direction: one line per change with
 `file:line:col`, or a summary a pass. `--json` writes the remarks as
 JSON lines.
 
-Stage A programs carry the script, so `-O` shapes `--emit` only; a
-program's run is the same whichever level emitted the IR. See
-[how it works](how-it-works.md#the-ir-and-the-passes) for the design.
+A stage `b` program's bytecode is lowered at `-O`'s level and the
+program records it; a stage `a` program runs its script, so there the
+level is recorded and shapes nothing. A program's run is the same at
+either level. See [how it works](how-it-works.md#the-ir-and-the-passes)
+for the design.
+
+## Stages
+
+A program is the cig this compiler pins with its script appended
+(CigScript's `docs/PROGRAMS.md`, payload format 2). Which body runs is
+its **stage**:
+
+- **stage `b`** — the program carries the bytecode its script lowers to
+  (the `bytecode` section) beside the script (`source`), and cig's VM
+  runs the bytecode through the same run as `cig run`: the same kernel,
+  burns, plan, journal, rollback, step budget, output and exit codes.
+  `--interp` (a run flag) runs the script on the tree-walker instead; a
+  damaged bytecode is refused (`E1050`), never run as the script.
+- **stage `a`** — the program carries the script alone, and the
+  tree-walker runs it.
+
+Without `--stage`, a build makes stage `a`: stage `b` is not yet faster
+than the tree-walker, and it becomes the default once it passes its
+speed gates ([#31](https://github.com/otmof-ops/cig-compile/issues/31)). `--stage b` opts in: the script must lower whole
+(only a `pack` root that runs a pull or a function does not, today),
+verify, and load in this cig's VM, or the build is refused (`E1010`,
+naming the construct and its line):
+
+```
+error[E1010 usage]: tool.cig cannot be a stage b program: a `pack` root that runs a pull or a function is not lowered to bytecode
+  --> tool.cig:1:1
+```
+
+`--stage a` always makes stage `a`. The record says the stage, the level (`opt`), the target
+triple, the runtime's sha256 and, when every argument is the program's,
+`own_flags`; a program prints them with `--cig-program`. The same
+inputs give the same bytes at either stage.

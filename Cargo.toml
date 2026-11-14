@@ -27,18 +27,13 @@ path = "src/bin/cig-runtime.rs"
 # A bench-only build of the runtime that counts allocations (#30):
 # `cargo build --release --bin cig-runtime --features alloc-count`.
 alloc-count = []
-# The bytecode lowering (`src/bc`, `--emit bc`) and its tests (#31). It
-# needs a cigscript whose runtime carries the bytecode VM and re-exports
-# its format crate, which no cig release does yet: off by default, so the
-# compiler builds at its pinned cigscript tag.
-vm = []
 
 [dependencies]
-cigscript = { git = "https://github.com/otmof-ops/cig-script", tag = "v1.21.0" }
+cigscript = { git = "https://github.com/otmof-ops/cig-script", tag = "v1.22.0" }
 # `.cigar` files and `--strength` (cigar-script#7): the checker and lowering
 # that `cigar check` is, pinned the way cigscript is, to a cigar-script commit.
 # The rev here is built on cigscript v1.20.0's AST and keeps its own cigscript
-# copy in the graph until cigar-script rebases on v1.21.0; cigarscript's public
+# copy in the graph until cigar-script rebases on the tag above; cigarscript's public
 # API (Strength, Render, Prepared, experience) does not cross either cigscript.
 cigarscript = { git = "https://github.com/otmof-ops/cigar-script", rev = "8275562f576b18ba568471b51028a9ee648371ae" }
 clap = { version = "4", features = ["derive"] }
@@ -63,6 +58,14 @@ serde = { version = "1", features = ["derive"] }
 [[test]]
 name = "differential"
 harness = false
+
+# A program's build hashes its runtime twice (the record's
+# `runtime_sha256`, then the program's own sha256): with a debug runtime of
+# about 200 MB that is seven seconds a build in an unoptimised sha2, which
+# the test suites pay on every program they build. Optimised, a fraction
+# of a second; nothing else in a debug build changes.
+[profile.dev.package.sha2]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1

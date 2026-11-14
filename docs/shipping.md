@@ -270,13 +270,48 @@ A JSON manifest reads the shape
 a `--asset` on the command line replaces the manifest's entry for the
 same target. The same inputs write the same bytes.
 
+## Checking a program (`cigcompile verify`)
+
+```
+cigcompile verify <program> [--runtime <cig>] [--script <script>]
+```
+
+`verify` reads a program part by part and runs nothing: the runtime
+(against cig's release assets, or the cig given with `--runtime`, and
+against the sha256 its record gives), the record, the section table,
+each section, the padding and the trailer. With `--script`, the
+`source` section is held to the script, and a stage `b` program's
+`bytecode` section to what that script lowers to at the level the
+program records; without it, the bytecode is held to its own `source`.
+The first part that differs is named:
+
+```
+out/tool
+  runtime          ok        cig's release asset cig-v1.22.0-linux-x86_64 (sha256 ...)
+  record           ok        tool: tool.cig for cig 1.22.0, built by cigcompile 0.5.0, stage b, -O1, x86_64-unknown-linux-musl
+  section source   ok        tool.cig is the script it was built from (120 lines, sha256 ...)
+  section bytecode DIFFERS   not what tool.cig lowers to at -O1: the first difference is at byte 812
+  section table    ok        2 sections: source, bytecode
+  padding          ok        zeros, as the alignment needs
+  trailer          ok        CIGPROG2, the head sha256 holds
+```
+
+The sha256s catch damage, not an edit: anyone can recompute them. Who
+built a program is what a signature and a pass say. A program from
+cigcompile 0.4 or earlier (payload format 1) is checked as before:
+runtime, payload, script and the whole file. The parts and their rules
+are in [the commands](commands.md#cigcompile-verify).
+
 ## Reproducible builds
 
 The same script, compiler and runtime give the same bytes on any
-machine. In practice:
+machine, at either stage. In practice:
 
 - A program records its script's file name only, not the path it was
-  built from, and no build time.
+  built from, and no build time. What else its record holds (the stage,
+  `-O`'s level, the target triple, the runtime's sha256, own flags) comes
+  from the build's inputs, and its bytecode is the same module from the
+  same script at the same level.
 - The runtime for another machine is cig's release asset, so builds for
   it agree everywhere. Builds for this machine agree too when its `cig`
   was installed from the release.

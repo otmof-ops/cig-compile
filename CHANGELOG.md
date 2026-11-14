@@ -5,6 +5,58 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **A call's window sits above every live register (#31,
+  cig-script#230).** The VM now starts a callee's frame at its arguments,
+  over every register above them, so the lowering places a `call`'s
+  window above every register in use, gives a captured slot its register
+  before any code, and moves a window taken early to the top when a value
+  made since would outlive the call. No program executes a different
+  number of instructions; cigo's module takes 0.3% more registers.
+- **Stage B programs, payload format 2 (#31, #8, #40).** Every program
+  is written in CigScript's payload format 2: a record, a `source`
+  section, a section table and a 56-byte trailer. `--stage b` makes a
+  stage `b` program, which carries the bytecode its script lowers to and
+  runs it on cig's VM, and refuses a script that does not lower, verify
+  and load with `E1010`, at the construct. A build without `--stage`
+  makes stage `a`, as `--stage a` does, until stage `b` passes its speed
+  gates. The
+  record carries the stage, `-O`'s level (`opt`, default 1; `--passes`
+  shapes `--emit` and `--remarks` only), the target triple, the
+  runtime's sha256 and `own_flags`, which the script's
+  `pack { own_flags: true }` or the new `build --args direct` sets: such
+  a program takes every argument as its script's and no run flags.
+  `verify` reads a format 2 program by part (`runtime`, `record`,
+  `section table`, `section <id>`, `padding`, `trailer`), holds the
+  `bytecode` section to a fresh lowering at the recorded level, and
+  keeps format 1's parts for older programs. The `vm` feature is gone:
+  the lowering and `--emit bc` are always built. The differential suite
+  builds each script at both stages and holds both, and every step
+  budget of a run, to `cig run`. Built against cig 1.22.0's library.
+- **A loop's constants are made once (#31, cig-script#230).** A
+  constant a loop needs in a register (`is[m] = false`, `2.0 * zr`,
+  `> 4.0`, `k != 0`) is loaded once before the loop instead of on every
+  turn; `and`, `or`, `??` and `?.` make both sides where their result
+  goes instead of moving them there; a callee or receiver made by an
+  expression (`fs[i](x)`, `xs[0].upper()`) is made in the call's
+  window; a bool constant is an operand like a number (`x == true`).
+  On cig's `bench/compute` the VM executes 14% fewer instructions on
+  `mandel`, 8% fewer on `json`, 7% on `sieve`, 5% on `fannkuch` and 4%
+  on `richards` (the median program, which has no such loop, is
+  unchanged); output, errors (code, message, position) and every step
+  budget stay the interpreter's.
+- **An index is one bytecode instruction (#31, cig-script#230).** An index
+  read is `getindex` and a plain indexed store `setindex`, each followed
+  by `nop`s carrying the index's and the object's positions, where the
+  VM now reports a wrong index type or a value that cannot be indexed;
+  the type checks the lowering wrote around every index are gone (a
+  compound store keeps them). An argument only its call reads is made
+  in its place in the call's window instead of being moved there, and a
+  value `-O1` forwards past its `stick` is made in the slot, so `-O1`
+  never executes more than `-O0`. On cig's `bench/compute` the VM
+  executes 10% fewer instructions at the median, and 45% to 68% fewer
+  where programs index in their loops (`richards`, `fannkuch`,
+  `deltablue`, `dispatch`, `trees`, `words`); output, errors (code,
+  message, position) and every step budget stay the interpreter's.
 - **The bytecode lowering writes tight code (#31, step 9).** A slot
   read needs no copy and a value stored into a slot is made in its
   register, where nothing can tell the difference; a constant operand

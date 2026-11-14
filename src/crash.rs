@@ -570,7 +570,7 @@ echo "ashtray: stub saved it" >&2"#,
 
     #[test]
     fn only_this_compilers_frames_stay() {
-        let bt = "   0: std::backtrace::Backtrace::force_capture\n   1: cigcompile::crash::install::{{closure}}\n   2: core::panicking::panic_fmt\n   3: cigcompile::build::run::h0123456789abcdef\n             at /home/jay/w/src/build.rs:30:9\n   4: main\n";
+        let bt = "   0: std::backtrace::Backtrace::force_capture\n   1: cigcompile::crash::install::{{closure}}\n   2: core::panicking::panic_fmt\n   3: cigcompile::build::run::h0123456789abcdef\n             at /home/user/w/src/build.rs:30:9\n   4: main\n";
         assert_eq!(
             own_frames(bt),
             vec!["cigcompile::build::run (src/build.rs:30:9)".to_string()]

@@ -21,13 +21,24 @@
 //! - a slot (`roll`, `stick`, a parameter) is one register for the whole
 //!   function; a CIR value is a register from its definition to its last
 //!   use, then the register is free again. A value defined before a loop
-//!   and read inside it lives to the loop's end. A read of a slot no closure captures is the slot's register, with
-//!   no copy, and a value stored into such a slot right after it is made
-//!   is made in the slot's register, where that is exact (`plan`);
-//! - a call's callee and arguments are moved into a fresh window of
-//!   consecutive registers (`call A, B, 0`, `callb A, idx, n`); a pull
-//!   called by name has its closure read straight into the window;
-//! - a constant operand is the instruction's `K` (`addk` ... `lek`);
+//!   and read inside it lives to the loop's end. A read of a slot no
+//!   closure captures is the slot's register, with no copy, and a value
+//!   stored into such a slot right after it is made is made in the
+//!   slot's register, also when it has other readers that read the slot
+//!   as stored, where that is exact (`plan`);
+//! - a call's callee and arguments sit in a window of consecutive
+//!   registers (`call A, B, 0`, `callb A, idx, n`): a callee, receiver or
+//!   argument only the call reads, made in its block, is made in its
+//!   place there (the window taken before it is made), the rest are
+//!   moved in; a pull called by name has its closure read straight into
+//!   the window;
+//! - a constant operand is the instruction's `K` (`addk` ... `lek`); a
+//!   constant inside a loop that is read from a register is loaded once,
+//!   before the outermost loop around it, into a register held until the
+//!   loop is done (`plan`);
+//! - a value block (`and`, `or`, `??`, `?.`) makes its subject and the
+//!   value its right side yields in its result register, where only it
+//!   reads them;
 //! - `a > b` is `le a, b` then `not`, `a >= b` is `lt a, b` then `not`,
 //!   `a != b` is `eq` then `not`: the operands keep their order, so the
 //!   interpreter's error wording does too. A comparison only a branch
@@ -63,9 +74,14 @@
 //! - each `pack` root and chain step but the last is checked where the
 //!   tree-walker checks it, right after it is evaluated: one that fails
 //!   goes straight to `pack` or `chain.make`, which raises its error;
-//! - an index read or store, and a compound member store, check their
-//!   operands' types first (`type_of`) so each error is raised at the
-//!   position the tree-walker gives it;
+//! - an index read is `getindex` and a plain index store `setindex`, at
+//!   the expression's or the statement's position, each followed by the
+//!   `nop`s that carry the index's position (and a store's, the
+//!   object's): the VM raises each error at the position the tree-walker
+//!   gives it, and never dispatches the `nop`s. A compound index store
+//!   and a compound member store check their operands' types first
+//!   (`type_of`): they read before they store, and their errors are the
+//!   store's;
 //! - every instruction gets the span of the CIR instruction it came from,
 //!   and the line table keeps a row wherever the span changes from the
 //!   instruction before it.
@@ -297,9 +313,32 @@ impl From<Error> for Retry {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum ConstKey<'a> {
+    Bool(bool),
     Int(i64),
     Float(u64),
     Str(&'a str),
+}
+
+/// A literal a register can be loaded with: the pool's kinds, and null.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Lit<'a> {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(u64),
+    Str(&'a str),
+}
+
+impl<'a> Lit<'a> {
+    fn of(c: &'a Const) -> Lit<'a> {
+        match c {
+            Const::Null => Lit::Null,
+            Const::Bool(b) => Lit::Bool(*b),
+            Const::Int(x) => Lit::Int(*x),
+            Const::Float(x) => Lit::Float(x.to_bits()),
+            Const::Str(x) => Lit::Str(x),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -457,17 +496,40 @@ struct FnLower<'c, 'm> {
     /// Slot reads with no copy: the value is the slot's own register
     /// (`plan` says when that is exact).
     alias: HashSet<ValueId>,
-    /// Values made straight into the register of the slot their one
-    /// reader, the `decl` or store right after, writes.
+    /// Values made straight into the register of the slot the `decl` or
+    /// store right after them writes (their one reader, or the first of
+    /// several that may all read the slot).
     dest: HashMap<ValueId, VarId>,
     /// Values whose register is a slot's: never freed with the value.
     pinned: HashSet<ValueId>,
+    /// Arguments, and callees and receivers, made straight in their
+    /// call's window: the call, the value's place in the window (0 for
+    /// the callee or receiver, `1 + k` for argument `k`), the window's
+    /// length.
+    direct: HashMap<ValueId, (ir::InstrId, u32, u32)>,
+    /// Values made straight in the result register of the value block
+    /// (`and`, `or`, `??`, `?.`) that reads them: its subject, or the
+    /// value its right side yields. Each block's register, taken when the
+    /// first of them is made (or the block's own value is), and whether
+    /// the block's value owns it (it was taken for the block alone).
+    into: HashMap<ValueId, ir::InstrId>,
+    short_reg: HashMap<ir::InstrId, (u32, bool)>,
+    /// Windows taken before their call, when its first such argument is
+    /// made.
+    windows: HashMap<ir::InstrId, u32>,
     /// Binary operations lowered with a constant operand (`addk`, `eqk`,
     /// ...): `true` when the constant is the left operand of an operation
     /// whose operands may swap.
     kform: HashMap<ir::InstrId, bool>,
     /// Constants every reader takes as an operand: never loaded.
     unloaded: HashSet<ValueId>,
+    /// Constants inside a loop, loaded once before the outermost loop
+    /// around them (`plan` says when that is exact): the loop and the
+    /// literal; each loop's literals, in order; and the register each
+    /// literal holds while its loop is lowered.
+    hoist: HashMap<ValueId, (ir::InstrId, Lit<'m>)>,
+    hoist_at: HashMap<ir::InstrId, Vec<Lit<'m>>>,
+    hoisted: HashMap<(ir::InstrId, Lit<'m>), u32>,
     /// Comparisons and `not`s whose one reader is the branch right after
     /// them, and that reader.
     fused: HashMap<ValueId, ir::InstrId>,
@@ -524,8 +586,15 @@ impl<'c, 'm> FnLower<'c, 'm> {
             alias: HashSet::new(),
             dest: HashMap::new(),
             pinned: HashSet::new(),
+            direct: HashMap::new(),
+            into: HashMap::new(),
+            short_reg: HashMap::new(),
+            windows: HashMap::new(),
             kform: HashMap::new(),
             unloaded: HashSet::new(),
+            hoist: HashMap::new(),
+            hoist_at: HashMap::new(),
+            hoisted: HashMap::new(),
             fused: HashMap::new(),
             pending: HashMap::new(),
             pending_not: HashMap::new(),
@@ -540,6 +609,23 @@ impl<'c, 'm> FnLower<'c, 'm> {
         for p in &f.params {
             let r = self.alloc();
             self.var_reg.insert(*p, r);
+        }
+        // Then the captured slots, before any code: a register with a cell
+        // sits below every call's window, so no callee's frame lies over it
+        // (`alloc_top`), wherever in a loop its slot is first declared. A
+        // `for` item is its loop window's (`for_each`).
+        let mut items = HashSet::new();
+        walk(&f.body, &mut |i| {
+            if let Kind::ForEach { var, .. } = &i.kind {
+                items.insert(*var);
+            }
+        });
+        for v in 0..self.cx.m.vars.len() {
+            let v = VarId(v as u32);
+            if self.captured(v) && !self.var_reg.contains_key(&v) && !items.contains(&v) {
+                let r = self.fresh(1);
+                self.var_reg.insert(v, r);
+            }
         }
         let mut counter = 0;
         number(&f.body, &mut self.start, &mut self.end, &mut counter);
@@ -687,6 +773,30 @@ impl<'c, 'm> FnLower<'c, 'm> {
         first
     }
 
+    /// A `call`'s window: `n` consecutive registers above every register
+    /// in use. The callee's frame starts at the window's second register
+    /// and runs over everything above it, so no register that holds a
+    /// value across the call may sit there (docs/BYTECODE.md, `call`).
+    fn alloc_top(&mut self, n: u32) -> u32 {
+        let mut top = self.frame;
+        while top > 0 && self.free_regs.contains(&(top - 1)) {
+            top -= 1;
+        }
+        for r in top..top + n {
+            if !self.free_regs.remove(&r) && r >= self.frame {
+                self.frame = r + 1;
+            }
+        }
+        top
+    }
+
+    /// Whether `call` is lowered to a `call`: its window is a frame's start.
+    fn makes_frame(&self, call: ir::InstrId) -> bool {
+        self.instr_of
+            .get(&call)
+            .is_some_and(|i| matches!(i.kind, Kind::CallUser { .. } | Kind::CallValue { .. }))
+    }
+
     /// `n` registers past every register used so far, never freed.
     fn fresh(&mut self, n: u32) -> u32 {
         let first = self.frame;
@@ -767,15 +877,78 @@ impl<'c, 'm> FnLower<'c, 'm> {
         let v = i
             .result
             .ok_or_else(|| Error::Internal(format!("instruction {} has no result", i.id.0)))?;
-        if let Some(var) = self.dest.get(&v).copied() {
-            if let Slot::Reg(r) = self.slot(var)? {
-                self.val_reg.insert(v, r);
+        // A value block's register: taken already when its subject was
+        // made in it, or now. Its value owns it when it was taken for the
+        // block alone.
+        if matches!(i.kind, Kind::Short { .. }) {
+            let r = self.short_home(i.id)?;
+            self.val_reg.insert(v, r);
+            if self.short_reg.get(&i.id).is_some_and(|x| !x.1) {
                 self.pinned.insert(v);
-                return Ok(r);
             }
+            return Ok(r);
+        }
+        if let Some(r) = self.placed(v)? {
+            self.val_reg.insert(v, r);
+            self.pinned.insert(v);
+            return Ok(r);
         }
         let r = self.alloc();
         self.val_reg.insert(v, r);
+        Ok(r)
+    }
+
+    /// The register `plan` made a value's place, when it gave it one:
+    /// the slot its `decl` or store writes, its place in a call's window,
+    /// or the register of the value block that reads it. A register held
+    /// for another value (the slot, the window, the block): the value
+    /// never frees it.
+    fn placed(&mut self, v: ValueId) -> Result<Option<u32>, Error> {
+        if let Some(var) = self.dest.get(&v).copied() {
+            if let Slot::Reg(r) = self.slot(var)? {
+                return Ok(Some(r));
+            }
+        }
+        if let Some((call, at, n)) = self.direct.get(&v).copied() {
+            // The call's window is taken now, before the value is made:
+            // no register in it is free again until the call.
+            let w = match self.windows.get(&call) {
+                Some(w) => *w,
+                None => {
+                    let w = if self.makes_frame(call) {
+                        self.alloc_top(n)
+                    } else {
+                        self.alloc_window(n)
+                    };
+                    self.windows.insert(call, w);
+                    w
+                }
+            };
+            return Ok(Some(w + at));
+        }
+        if let Some(block) = self.into.get(&v).copied() {
+            return self.short_home(block).map(Some);
+        }
+        Ok(None)
+    }
+
+    /// A value block's result register, taken the first time it is
+    /// needed: its own value's place when that has one (a window, an
+    /// outer block's register), else a register of its own. It is not
+    /// free again until the block's value is dead.
+    fn short_home(&mut self, block: ir::InstrId) -> Result<u32, Error> {
+        if let Some((r, _)) = self.short_reg.get(&block) {
+            return Ok(*r);
+        }
+        let own = self.instr_of.get(&block).and_then(|i| i.result);
+        let (r, owned) = match own {
+            Some(v) => match self.placed(v)? {
+                Some(r) => (r, false),
+                None => (self.alloc(), true),
+            },
+            None => (self.alloc(), true),
+        };
+        self.short_reg.insert(block, (r, owned));
         Ok(r)
     }
 
@@ -834,7 +1007,47 @@ impl<'c, 'm> FnLower<'c, 'm> {
     ///   into such a slot, is made in the slot's register (`dest`). The
     ///   operations that make it write their result only once they have
     ///   it: one that fails leaves the slot as it was, as the tree-walker
-    ///   does.
+    ///   does. So is a value with other readers too (a `stick` -O1
+    ///   forwards) when each of them reads the slot as it was stored: it
+    ///   sits after the store in the same block, or in a block nested in
+    ///   a later instruction of it that writes the slot nowhere, and
+    ///   nothing from the store to the last of them writes the slot (the
+    ///   last may write it after reading it, as for a read with no copy).
+    ///   They read the slot's register;
+    /// - a value whose one reader is a call it is an argument of, made in
+    ///   the call's block, is made in its place in the call's window
+    ///   (`direct`): the window is taken when the first such argument is
+    ///   made, so it exists before the argument is evaluated, and none of
+    ///   its registers is free until the call, so nothing between the
+    ///   argument's making and the call writes them (no other value, no
+    ///   other call's window; a slot's register is never in a window, a
+    ///   captured one's least of all). The callee or receiver goes into
+    ///   the window's first register at the call, as before; a value read
+    ///   with no copy (a slot's own register) is moved, as before. A window
+    ///   register is a scratch register no one reads but the call, so one
+    ///   made there by an operation that fails is never seen. A callee
+    ///   (a call by value) or a receiver read only by its call is made in
+    ///   the window's first register by the same rule;
+    /// - a value block's subject, and the value its right side yields,
+    ///   each read only by the block and made in the block before it, is
+    ///   made in the block's result register (`into`): the register is
+    ///   taken when the first of them is made and is not free until the
+    ///   block's value is dead, and nothing but the block reads it before
+    ///   the block ends. A right side that fails leaves it half-written
+    ///   and unread. A block is never made in a slot (a store there would
+    ///   be seen), only in a window or another block's register;
+    /// - a constant inside a loop that some reader takes from a register,
+    ///   not made in a slot or a window already, with every reader inside
+    ///   the outermost loop around it, is loaded once before that loop
+    ///   (`hoist`), one register per literal, taken with `alloc` (as a
+    ///   slot is: live, never past the frame's top) and freed after the
+    ///   loop's last instruction. A literal is the same value every turn
+    ///   and loading it cannot fail, charge a step or be seen; no value,
+    ///   window or instruction is given or writes that register while
+    ///   the loop runs, and a window placed above the live registers is
+    ///   placed above it. A loop run no times still loads it, unseen. A
+    ///   register past 255 is given back and the constant made where it
+    ///   is read: an operand there would be wide, a fused jump long.
     fn plan(&mut self) {
         let f = self.f;
         let mut readers: HashMap<ValueId, Vec<ir::InstrId>> = HashMap::new();
@@ -894,7 +1107,9 @@ impl<'c, 'm> FnLower<'c, 'm> {
         let konst = |v: ValueId| {
             matches!(
                 def_of(v).map(|d| &d.kind),
-                Some(Kind::Const(Const::Int(_) | Const::Float(_) | Const::Str(_)))
+                Some(Kind::Const(
+                    Const::Bool(_) | Const::Int(_) | Const::Float(_) | Const::Str(_)
+                ))
             )
         };
         let numeric = |v: ValueId| {
@@ -932,6 +1147,105 @@ impl<'c, 'm> FnLower<'c, 'm> {
             .map(|(v, _)| v)
             .collect();
 
+        // The instruction each nested instruction sits in.
+        let mut parent: HashMap<ir::InstrId, ir::InstrId> = HashMap::new();
+        walk(&f.body, &mut |i| {
+            for nested in i.kind.blocks() {
+                for x in &nested.instrs {
+                    parent.insert(x.id, i.id);
+                }
+            }
+        });
+        // Where every reader of `v` reads it, when that is in block `n`
+        // after its `j`-th instruction: the last of those places. A fused
+        // comparison reads at its branch, a `for`'s range at the `for`; a
+        // burn reads a register label again each time it enters, so it
+        // keeps its copy.
+        let last_reader = |v: ValueId, n: usize, j: usize| -> Option<usize> {
+            let b = blocks[n].0;
+            let mut last = j;
+            for r in readers.get(&v).into_iter().flatten() {
+                let reader = self.instr_of.get(r).copied();
+                if reader.is_some_and(|x| matches!(x.kind, Kind::Burn(_))) {
+                    return None;
+                }
+                let eff = match reader {
+                    Some(x) if x.result.is_some_and(|r| fused.contains_key(&r)) => {
+                        x.result.and_then(|r| fused.get(&r).copied())
+                    }
+                    Some(x)
+                        if matches!(x.kind, Kind::Binary(BinOp::Range, ..))
+                            && x.result.is_some_and(|r| self.ranges.contains_key(&r)) =>
+                    {
+                        b.instrs.iter().find_map(|y| match y.kind {
+                            Kind::ForEach { iter, .. } if Some(iter) == x.result => Some(y.id),
+                            _ => None,
+                        })
+                    }
+                    Some(x) => Some(x.id),
+                    None => None,
+                };
+                match eff.and_then(|e| at.get(&e)) {
+                    Some(&(m, k)) if m == n && k > j => last = last.max(k),
+                    _ => return None,
+                }
+            }
+            Some(last)
+        };
+        // The same for a value made in a slot: a reader may also sit in a
+        // block nested in a later instruction of block `n`, which then
+        // must not write the slot anywhere (a loop runs it again). The
+        // last place, and the places whose nested readers need that.
+        let slot_readers = |v: ValueId, n: usize, j: usize| -> Option<(usize, Vec<usize>)> {
+            let mut last = j;
+            let mut nested = Vec::new();
+            for r in readers.get(&v).into_iter().flatten() {
+                let reader = self.instr_of.get(r).copied()?;
+                if matches!(reader.kind, Kind::Burn(_)) {
+                    return None;
+                }
+                let mut eff = match reader.result.and_then(|x| fused.get(&x)) {
+                    Some(branch) => *branch,
+                    None => reader.id,
+                };
+                // A `for`'s range: read at the `for`, in the range's block.
+                if let (Kind::Binary(BinOp::Range, ..), Some(x)) = (&reader.kind, reader.result) {
+                    if self.ranges.contains_key(&x) {
+                        let &(m, _) = at.get(&reader.id)?;
+                        eff = blocks[m].0.instrs.iter().find_map(|y| match y.kind {
+                            Kind::ForEach { iter, .. } if iter == x => Some(y.id),
+                            _ => None,
+                        })?;
+                    }
+                }
+                let mut deep = false;
+                while at.get(&eff).is_some_and(|&(m, _)| m != n) {
+                    eff = *parent.get(&eff)?;
+                    deep = true;
+                }
+                match at.get(&eff) {
+                    Some(&(m, k)) if m == n && k > j => {
+                        last = last.max(k);
+                        if deep {
+                            nested.push(k);
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+            Some((last, nested))
+        };
+        // Nothing after the `from`-th instruction of block `n` and before
+        // its `last`-th writes `var`, and the `last`-th reads before it
+        // writes it.
+        let unwritten = |var: VarId, n: usize, from: usize, last: usize| {
+            let b = blocks[n].0;
+            !b.instrs[from + 1..last]
+                .iter()
+                .any(|x| writes(x, var, true))
+                && !writes(&b.instrs[last], var, false)
+        };
+
         // Slot reads with no copy.
         let mut alias = HashSet::new();
         for (n, (b, _)) in blocks.iter().enumerate() {
@@ -942,59 +1256,28 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 if !own(*var) {
                     continue;
                 }
-                let mut last = j;
-                let mut ok = true;
-                for r in readers.get(&v).into_iter().flatten() {
-                    // Where the reader reads it: a fused comparison at its
-                    // branch, a `for`'s range at the `for`.
-                    let reader = self.instr_of.get(r).copied();
-                    // A burn reads a register label again each time it
-                    // enters: it keeps its copy.
-                    if reader.is_some_and(|x| matches!(x.kind, Kind::Burn(_))) {
-                        ok = false;
+                match last_reader(v, n, j) {
+                    Some(last) if last > j && unwritten(*var, n, j, last) => {
+                        alias.insert(v);
                     }
-                    let eff = match reader {
-                        Some(x) if x.result.is_some_and(|r| fused.contains_key(&r)) => {
-                            x.result.and_then(|r| fused.get(&r).copied())
-                        }
-                        Some(x)
-                            if matches!(x.kind, Kind::Binary(BinOp::Range, ..))
-                                && x.result.is_some_and(|r| self.ranges.contains_key(&r)) =>
-                        {
-                            b.instrs.iter().find_map(|y| match y.kind {
-                                Kind::ForEach { iter, .. } if Some(iter) == x.result => Some(y.id),
-                                _ => None,
-                            })
-                        }
-                        Some(x) => Some(x.id),
-                        None => None,
-                    };
-                    match eff.and_then(|e| at.get(&e)) {
-                        Some(&(m, k)) if m == n && k > j => last = last.max(k),
-                        _ => ok = false,
-                    }
-                }
-                if !ok {
-                    continue;
-                }
-                let between = b.instrs[j + 1..last].iter().any(|x| writes(x, *var, true));
-                let at_last = last > j && writes(&b.instrs[last], *var, false);
-                if !between && !at_last {
-                    alias.insert(v);
+                    _ => {}
                 }
             }
         }
 
-        // Values made in the slot their one reader stores them into.
+        // Values made in the slot the `decl` or store right after them
+        // writes: their one reader, or the first of several whose others
+        // all read the slot after it, as a read of the slot with no copy
+        // would.
         let mut dest = HashMap::new();
-        for (b, _) in &blocks {
-            for w in b.instrs.windows(2) {
+        for (n, (b, _)) in blocks.iter().enumerate() {
+            for (j, w) in b.instrs.windows(2).enumerate() {
                 let (i, next) = (&w[0], &w[1]);
                 let Some(v) = i.result else { continue };
                 let (Kind::Decl(var, x) | Kind::Store(var, x)) = &next.kind else {
                     continue;
                 };
-                if *x != v || reader_count(v) != 1 || !own(*var) {
+                if *x != v || !own(*var) {
                     continue;
                 }
                 let makes = match &i.kind {
@@ -1005,18 +1288,149 @@ impl<'c, 'm> FnLower<'c, 'm> {
                         !matches!(op, BinOp::Range | BinOp::And | BinOp::Or | BinOp::Coalesce)
                             && !fused.contains_key(&v)
                     }
+                    // `getindex` and `getfield` read their operands, then
+                    // write their result only once they have it.
+                    Kind::Index { .. } | Kind::Member { safe: false, .. } => true,
                     _ => false,
                 };
-                if makes {
+                if !makes {
+                    continue;
+                }
+                let one = reader_count(v) == 1;
+                let many = || match slot_readers(v, n, j) {
+                    Some((last, nested)) if last > j + 1 => {
+                        unwritten(*var, n, j + 1, last)
+                            && nested.iter().all(|k| !writes(&b.instrs[*k], *var, true))
+                    }
+                    _ => false,
+                };
+                if one || many() {
                     dest.insert(v, *var);
                 }
             }
         }
+        // An instruction that writes only its result register, and only
+        // that one value into it (a value block writes its subject, then
+        // maybe its right side's value: never seen before the block ends),
+        // so the value can be made in a register held for another.
+        let makes = |def: &Instr, a: ValueId| match &def.kind {
+            Kind::Const(_) => !unloaded.contains(&a),
+            Kind::Load(var) => {
+                !alias.contains(&a) && !self.var_info(*var).is_some_and(|x| x.captured)
+            }
+            Kind::Unary(..) => !fused.contains_key(&a),
+            Kind::Binary(op, ..) => {
+                !matches!(op, BinOp::Range | BinOp::And | BinOp::Or | BinOp::Coalesce)
+                    && !fused.contains_key(&a)
+            }
+            Kind::Index { .. }
+            | Kind::Member { .. }
+            | Kind::Closure(_)
+            | Kind::Prelude(_)
+            | Kind::MakeList(_)
+            | Kind::MakeMap(_)
+            | Kind::Interp(_)
+            | Kind::Short { .. } => true,
+            _ => false,
+        };
+        // A value's one reader is in block `b` at `j`, and the value is
+        // made earlier in that block, by an instruction that can make it
+        // in another's register.
+        let made_before = |b: &Block, j: usize, a: ValueId| {
+            reader_count(a) == 1
+                && !dest.contains_key(&a)
+                && b.instrs[..j]
+                    .iter()
+                    .find(|x| x.result == Some(a))
+                    .is_some_and(|def| makes(def, a))
+        };
+        // Arguments, callees and receivers made in their call's window.
+        let mut direct = HashMap::new();
+        for (b, _) in &blocks {
+            for (j, call) in b.instrs.iter().enumerate() {
+                let (callee, args) = match &call.kind {
+                    Kind::CallBuiltin { args, .. }
+                    | Kind::CallUser { args, .. }
+                    | Kind::BurnOp { args, .. } => (None, args),
+                    Kind::CallValue { f, args } => (Some(*f), args),
+                    Kind::CallMethod { recv, args, .. } => (Some(*recv), args),
+                    _ => continue,
+                };
+                let n = args.len() as u32 + 1;
+                let at = callee
+                    .into_iter()
+                    .map(|c| (c, 0))
+                    .chain(args.iter().enumerate().map(|(k, a)| (*a, 1 + k as u32)));
+                for (a, at) in at {
+                    if made_before(b, j, a) {
+                        direct.insert(a, (call.id, at, n));
+                    }
+                }
+            }
+        }
+        // A value block's subject, and the value its right side yields,
+        // made in the block's result register.
+        let mut into = HashMap::new();
+        for (b, _) in &blocks {
+            for (j, block) in b.instrs.iter().enumerate() {
+                let Kind::Short { subject, rhs, .. } = &block.kind else {
+                    continue;
+                };
+                if made_before(b, j, *subject) {
+                    into.insert(*subject, block.id);
+                }
+                for (k, y) in rhs.instrs.iter().enumerate() {
+                    if let Kind::Yield(v) = y.kind {
+                        if made_before(rhs, k, v) {
+                            into.insert(v, block.id);
+                        }
+                    }
+                }
+            }
+        }
+        // Constants made once, before the outermost loop around them.
+        let mut outer_of: HashMap<ir::InstrId, Option<ir::InstrId>> = HashMap::new();
+        loops_around(&f.body, None, &mut outer_of);
+        let mut hoist = HashMap::new();
+        let mut hoist_at: HashMap<ir::InstrId, Vec<Lit<'m>>> = HashMap::new();
+        walk(&f.body, &mut |i| {
+            let (Kind::Const(c), Some(v)) = (&i.kind, i.result) else {
+                return;
+            };
+            let Some(Some(l)) = outer_of.get(&i.id).copied() else {
+                return;
+            };
+            if unloaded.contains(&v)
+                || dest.contains_key(&v)
+                || direct.contains_key(&v)
+                || into.contains_key(&v)
+            {
+                return;
+            }
+            let inside = readers
+                .get(&v)
+                .into_iter()
+                .flatten()
+                .all(|r| outer_of.get(r) == Some(&Some(l)));
+            if !inside {
+                return;
+            }
+            let lit = Lit::of(c);
+            hoist.insert(v, (l, lit));
+            let lits = hoist_at.entry(l).or_default();
+            if !lits.contains(&lit) {
+                lits.push(lit);
+            }
+        });
         self.fused = fused;
         self.kform = kform;
         self.unloaded = unloaded;
         self.alias = alias;
         self.dest = dest;
+        self.direct = direct;
+        self.into = into;
+        self.hoist = hoist;
+        self.hoist_at = hoist_at;
     }
 
     /// Every value's last use, as the position after which its register
@@ -1306,6 +1720,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
             .and_then(|v| self.instr_of.get(&v.def))
             .map(|d| &d.kind)
         {
+            Some(Kind::Const(Const::Bool(b))) => ConstKey::Bool(*b),
             Some(Kind::Const(Const::Int(n))) => ConstKey::Int(*n),
             Some(Kind::Const(Const::Float(f))) => ConstKey::Float(f.to_bits()),
             Some(Kind::Const(Const::Str(s))) => ConstKey::Str(s),
@@ -1391,6 +1806,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
         }
         let i = self.consts.len() as u32;
         self.consts.push(match k {
+            ConstKey::Bool(x) => Constant::Bool(x),
             ConstKey::Int(x) => Constant::Int(x),
             ConstKey::Float(b) => Constant::Float(f64::from_bits(b)),
             ConstKey::Str(s) => Constant::Str(s.to_string()),
@@ -1477,6 +1893,31 @@ impl<'c, 'm> FnLower<'c, 'm> {
     }
 
     fn instr(&mut self, i: &'m Instr) -> Result<(), Error> {
+        // The constants of a loop nest, made once before it, each in a
+        // register held until the loop is done.
+        let lits = self.hoist_at.remove(&i.id).unwrap_or_default();
+        for lit in &lits {
+            let r = self.alloc();
+            if r > 0xFF {
+                // An operand past 255 is a wider instruction, and a
+                // fused jump the long form: made where it is read.
+                self.free(r);
+                break;
+            }
+            self.span = i.span;
+            self.load_lit(r, *lit)?;
+            self.hoisted.insert((i.id, *lit), r);
+        }
+        self.instr_inner(i)?;
+        for lit in &lits {
+            if let Some(r) = self.hoisted.remove(&(i.id, *lit)) {
+                self.free(r);
+            }
+        }
+        Ok(())
+    }
+
+    fn instr_inner(&mut self, i: &'m Instr) -> Result<(), Error> {
         if let Some(vs) = self.show_before.remove(&i.id) {
             self.span = i.span;
             self.show_as_text(&vs)?;
@@ -1683,18 +2124,21 @@ impl<'c, 'm> FnLower<'c, 'm> {
             }
             Kind::Const(_) if i.result.is_some_and(|v| self.unloaded.contains(&v)) => {}
             Kind::Const(c) => {
-                let r = self.define(i)?;
-                match c {
-                    Const::Null => self.abc(Op::LOADNULL, r, 0, 0)?,
-                    Const::Bool(b) => self.abc(Op::LOADBOOL, r, u32::from(*b), 0)?,
-                    Const::Int(x) => self.load_int(r, *x)?,
-                    Const::Float(x) => {
-                        let k = self.konst(ConstKey::Float(x.to_bits()));
-                        self.abx(Op::LOADK, r, k)?;
+                let made = i
+                    .result
+                    .and_then(|v| self.hoist.get(&v))
+                    .and_then(|key| self.hoisted.get(key))
+                    .copied();
+                match (made, i.result) {
+                    // Made before its loop: that register, never freed
+                    // with the value.
+                    (Some(r), Some(v)) => {
+                        self.val_reg.insert(v, r);
+                        self.pinned.insert(v);
                     }
-                    Const::Str(s) => {
-                        let k = self.konst(ConstKey::Str(s));
-                        self.abx(Op::LOADK, r, k)?;
+                    _ => {
+                        let r = self.define(i)?;
+                        self.load_lit(r, Lit::of(c))?;
                     }
                 }
             }
@@ -1803,7 +2247,10 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 let s = self.val(*subject)?;
                 let r = self.define(i)?;
                 let end = self.label();
-                self.abc(Op::MOV, r, s, 0)?;
+                // A subject made in the block's register needs no move.
+                if s != r {
+                    self.abc(Op::MOV, r, s, 0)?;
+                }
                 match op {
                     // `and`: a falsy subject is the result.
                     ShortOp::And => self.jump(Op::TESTN, r, end)?,
@@ -1865,7 +2312,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
                         i.span,
                     )
                 })?;
-                let w = self.window(None, args)?;
+                let w = self.window(i.id, None, args)?;
                 self.abc(Op::CALLB, w, index, args.len() as u32)?;
                 self.call_result(i, w, args.len());
             }
@@ -1874,14 +2321,14 @@ impl<'c, 'm> FnLower<'c, 'm> {
                     Error::Internal(format!("no slot holds the closure of function {}", func.0))
                 })?;
                 // The closure is read straight into the window.
-                let w = self.window(None, args)?;
+                let w = self.window(i.id, None, args)?;
                 self.read_slot(w, slot)?;
                 self.abc(Op::CALL, w, args.len() as u32, 0)?;
                 self.call_result(i, w, args.len());
             }
             Kind::CallValue { f, args } => {
                 let callee = self.val(*f)?;
-                let w = self.window(Some(callee), args)?;
+                let w = self.window(i.id, Some(callee), args)?;
                 self.abc(Op::CALL, w, args.len() as u32, 0)?;
                 self.call_result(i, w, args.len());
             }
@@ -1935,7 +2382,10 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 Some(YieldTo::Reg(r)) => {
                     let r = *r;
                     let x = self.val(*v)?;
-                    self.abc(Op::MOV, r, x, 0)?;
+                    // Made in the block's register already, or moved.
+                    if x != r {
+                        self.abc(Op::MOV, r, x, 0)?;
+                    }
                 }
                 Some(YieldTo::Exit(l)) => {
                     let l = *l;
@@ -2123,7 +2573,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
             Kind::CallMethod { recv, name, args } => {
                 let recv = self.val(*recv)?;
                 let k = self.konst(ConstKey::Str(name));
-                let w = self.window(Some(recv), args)?;
+                let w = self.window(i.id, Some(recv), args)?;
                 self.abc(Op::CALLM, w, k, args.len() as u32)?;
                 self.call_result(i, w, args.len());
             }
@@ -2138,7 +2588,7 @@ impl<'c, 'm> FnLower<'c, 'm> {
                 if !self.open.iter().any(|o| matches!(o, OpenCx::Burn { .. })) {
                     self.bare_op = true;
                 }
-                let w = self.window(None, args)?;
+                let w = self.window(i.id, None, args)?;
                 let k = self.konst(ConstKey::Str(callee));
                 self.burn_op(w, k, args.len() as u32, kind as u32)?;
                 self.call_result(i, w, args.len());
@@ -2325,6 +2775,23 @@ impl<'c, 'm> FnLower<'c, 'm> {
         Ok(())
     }
 
+    /// `R(r) = lit`.
+    fn load_lit(&mut self, r: u32, lit: Lit<'m>) -> Result<(), Error> {
+        match lit {
+            Lit::Null => self.abc(Op::LOADNULL, r, 0, 0),
+            Lit::Bool(b) => self.abc(Op::LOADBOOL, r, u32::from(b), 0),
+            Lit::Int(x) => self.load_int(r, x),
+            Lit::Float(x) => {
+                let k = self.konst(ConstKey::Float(x));
+                self.abx(Op::LOADK, r, k)
+            }
+            Lit::Str(x) => {
+                let k = self.konst(ConstKey::Str(x));
+                self.abx(Op::LOADK, r, k)
+            }
+        }
+    }
+
     /// `R(r) = x`: `loadint` where it fits sixteen bits, else a constant.
     fn load_int(&mut self, r: u32, x: i64) -> Result<(), Error> {
         let Ok(small) = i16::try_from(x) else {
@@ -2396,45 +2863,23 @@ impl<'c, 'm> FnLower<'c, 'm> {
         r
     }
 
-    /// `R(r) = R(o)[R(x)]`. The tree-walker puts a wrong index type for a
-    /// list, a string or a map at the index's own position (`at`), and
-    /// every other error at the expression's: the type of each operand
-    /// picks which of two `getindex` runs.
+    /// `R(r) = R(o)[R(x)]`: one `getindex` at the expression's position,
+    /// then a `nop` at the index's (`at`). The VM raises a wrong index type
+    /// for a list, a string or a map at the `nop`'s row and every other
+    /// error at the instruction's, through the interpreter's own `index`,
+    /// as the tree-walker places them. A run never dispatches the `nop`.
     fn index_read(&mut self, r: u32, o: u32, x: u32, at: Span) -> Result<(), Error> {
-        let to = self.type_name_of(o)?;
-        let ti = self.type_name_of(x)?;
-        let (seq, map, plain, bad, end) = (
-            self.label(),
-            self.label(),
-            self.label(),
-            self.label(),
-            self.label(),
-        );
-        self.jump_if_is(to, "map", map, true)?;
-        self.jump_if_is(to, "list", seq, true)?;
-        self.jump_if_is(to, "string", plain, false)?;
-        self.place(seq);
-        self.jump_if_is(ti, "int", plain, true)?;
-        self.jump(Op::JMP, 0, bad)?;
-        self.place(map);
-        self.jump_if_is(ti, "string", plain, true)?;
-        self.place(bad);
-        self.at(at, |s| s.abc(Op::GETINDEX, r, o, x))?;
-        self.jump(Op::JMP, 0, end)?;
-        self.place(plain);
         self.abc(Op::GETINDEX, r, o, x)?;
-        self.place(end);
-        self.free(to);
-        self.free(ti);
-        Ok(())
+        self.at(at, |s| s.abc(Op::NOP, 0, 0, 0))
     }
 
     /// `R(o)[R(x)] op= R(v)`. The tree-walker puts a wrong index type for
     /// a list or a map at the index (`at`), a value that cannot be
     /// indexed at the object (`obj_at`), and the rest (`E504`, a missing
     /// key in a compound, the operator's own error) at the statement. A
-    /// compound reads with `getindex` (the same `E504` and `E505`, with
-    /// no hint) only once the store is known to be one that can happen.
+    /// compound checks the operands' types first (`type_of`) and reads
+    /// with `getindex` (the same `E504` and `E505`, with no hint) only
+    /// once the store is known to be one that can happen.
     fn index_store(
         &mut self,
         o: u32,
@@ -2444,6 +2889,19 @@ impl<'c, 'm> FnLower<'c, 'm> {
         at: Span,
         obj_at: Span,
     ) -> Result<(), Error> {
+        let Some(code) = compound(op) else {
+            // One `setindex` at the statement's position, then a `nop` at
+            // the index's and one at the object's: the VM raises a wrong
+            // index type for a list or a map at the first, a store into
+            // anything else at the second, and the rest at the
+            // instruction's, through the interpreter's own `set_index`.
+            self.abc(Op::SETINDEX, o, x, v)?;
+            self.at(at, |s| s.abc(Op::NOP, 0, 0, 0))?;
+            return self.at(obj_at, |s| s.abc(Op::NOP, 0, 0, 0));
+        };
+        // A compound keeps its checks: it reads before it stores, and a
+        // wrong index type or object must still be the store's error, at
+        // the store's positions, not the read's.
         let to = self.type_name_of(o)?;
         let ti = self.type_name_of(x)?;
         let (seq, map, ok, bad, end) = (
@@ -2466,16 +2924,11 @@ impl<'c, 'm> FnLower<'c, 'm> {
         self.at(at, |s| s.abc(Op::SETINDEX, o, x, v))?;
         self.jump(Op::JMP, 0, end)?;
         self.place(ok);
-        match compound(op) {
-            None => self.abc(Op::SETINDEX, o, x, v)?,
-            Some(code) => {
-                let t = self.alloc();
-                self.abc(Op::GETINDEX, t, o, x)?;
-                self.abc(code, t, t, v)?;
-                self.abc(Op::SETINDEX, o, x, t)?;
-                self.free(t);
-            }
-        }
+        let t = self.alloc();
+        self.abc(Op::GETINDEX, t, o, x)?;
+        self.abc(code, t, t, v)?;
+        self.abc(Op::SETINDEX, o, x, t)?;
+        self.free(t);
         self.place(end);
         self.free(to);
         self.free(ti);
@@ -2788,21 +3241,67 @@ impl<'c, 'm> FnLower<'c, 'm> {
     }
 
     /// A call's window: the callee (when there is one) and the arguments
-    /// moved into consecutive registers; `callb` leaves the first one for
-    /// its result.
-    fn window(&mut self, callee: Option<u32>, args: &[ValueId]) -> Result<u32, Error> {
+    /// moved into consecutive registers, but for those made in their place
+    /// already (`direct`); `callb` leaves the first one for its result.
+    fn window(
+        &mut self,
+        call: ir::InstrId,
+        callee: Option<u32>,
+        args: &[ValueId],
+    ) -> Result<u32, Error> {
         let regs: Vec<u32> = args
             .iter()
             .map(|a| self.val(*a))
             .collect::<Result<_, _>>()?;
-        let w = self.alloc_window(args.len() as u32 + 1);
-        if let Some(c) = callee {
+        let n = args.len() as u32;
+        let w = match self.windows.remove(&call) {
+            // A window taken before its arguments were made: a value made
+            // since may sit above it and outlive the call. Then the call
+            // takes a window at the top, and its arguments are moved there
+            // (the registers of the first are free once they are).
+            Some(w) if self.makes_frame(call) && self.held_above(call, w + n) => {
+                let top = self.alloc_top(n + 1);
+                if let Some(c) = callee {
+                    self.abc(Op::MOV, top, c, 0)?;
+                }
+                for (k, r) in regs.into_iter().enumerate() {
+                    self.abc(Op::MOV, top + 1 + k as u32, r, 0)?;
+                }
+                for r in w..=w + n {
+                    self.free(r);
+                }
+                return Ok(top);
+            }
+            Some(w) => w,
+            None if self.makes_frame(call) => self.alloc_top(n + 1),
+            None => self.alloc_window(n + 1),
+        };
+        // A callee or receiver made in its place needs no move.
+        if let Some(c) = callee.filter(|c| *c != w) {
             self.abc(Op::MOV, w, c, 0)?;
         }
         for (k, r) in regs.into_iter().enumerate() {
-            self.abc(Op::MOV, w + 1 + k as u32, r, 0)?;
+            let at = w + 1 + k as u32;
+            // An argument made in its place needs no move.
+            if r != at {
+                self.abc(Op::MOV, at, r, 0)?;
+            }
         }
         Ok(w)
+    }
+
+    /// Whether a register above `last` holds a value that outlives `call`:
+    /// one in use that is not freed when the call is done.
+    fn held_above(&self, call: ir::InstrId, last: u32) -> bool {
+        let dying: HashSet<u32> = [self.start.get(&call), self.end.get(&call)]
+            .into_iter()
+            .flatten()
+            .filter_map(|pos| self.dies_at.get(pos))
+            .flatten()
+            .filter(|v| !self.pinned.contains(v))
+            .filter_map(|v| self.val_reg.get(v).copied())
+            .collect();
+        (last + 1..self.frame).any(|r| !self.free_regs.contains(&r) && !dying.contains(&r))
     }
 
     /// The call's result is `R(w)`; the argument registers are free.
@@ -2957,6 +3456,28 @@ fn collect_uses(
         }
         if is_loop {
             loops.pop();
+        }
+    }
+}
+
+/// The outermost loop (`while` or `for`) around each instruction of the
+/// blocks this function lowers, `None` outside every loop. A burn's
+/// compensation is not lowered here: its instructions are left out.
+fn loops_around(
+    b: &Block,
+    outer: Option<ir::InstrId>,
+    out: &mut HashMap<ir::InstrId, Option<ir::InstrId>>,
+) {
+    for i in &b.instrs {
+        out.insert(i.id, outer);
+        let inner = match i.kind {
+            Kind::Loop { .. } | Kind::ForEach { .. } => outer.or(Some(i.id)),
+            _ => outer,
+        };
+        for (slot, nested) in i.kind.slots() {
+            if slot != "burn.compensate" {
+                loops_around(nested, inner, out);
+            }
         }
     }
 }

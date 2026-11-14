@@ -195,9 +195,16 @@ fn main() {
     if !tally.failed.is_empty() {
         std::process::exit(1);
     }
+    // The budget sweep alone (DIFF_BUDGETS=only) is one row a script, and
+    // only for scripts with a one-step real run.
+    let floor = if std::env::var("DIFF_BUDGETS").is_ok_and(|v| v == "only") {
+        20
+    } else {
+        40
+    };
     if filter.is_empty() {
         assert!(
-            tally.passed >= 40,
+            tally.passed >= floor,
             "only {} cases ran: did a glob come back empty?",
             tally.passed
         );
@@ -353,10 +360,12 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
         None => std::fs::read_to_string(src.join(&case.script)).expect("the script"),
     };
     let work = sb.path().join("work");
-    let prog = sb
-        .path()
-        .join("prog")
-        .join(format!("{base}{}", std::env::consts::EXE_SUFFIX));
+    let prog_at = |stage: &str| {
+        sb.path()
+            .join(format!("prog-{stage}"))
+            .join(format!("{base}{}", std::env::consts::EXE_SUFFIX))
+    };
+    let prog = prog_at("a");
     let lay_out = || {
         let _ = std::fs::remove_dir_all(&work);
         let _ = std::fs::remove_dir_all(sb.path().join("home"));
@@ -416,12 +425,16 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
             return;
         }
     }
-    // Compiled once. A script that does not check is refused by the
-    // compiler exactly as `cig run` refuses it.
+    // Compiled at each stage (differential_stage_b_is_identical): stage a
+    // runs the script on the tree-walker, stage b its bytecode on the VM,
+    // and both are held to `cig run`. A script that does not check is
+    // refused by the compiler exactly as `cig run` refuses it.
     lay_out();
     let mut c = Command::new(&tools.cc);
     env(&mut c);
-    let built = run(c.args(["build", &build_name, "-o"]).arg(&prog));
+    let built = run(c
+        .args(["build", &build_name, "--stage", "a", "-o"])
+        .arg(&prog));
     if built.code != Some(0) {
         let mut r = Command::new(&tools.cig);
         env(&mut r);
@@ -436,25 +449,50 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
         );
         return;
     }
+    let mut programs = vec![("a", prog.clone())];
+    let mut c = Command::new(&tools.cc);
+    env(&mut c);
+    let prog_b = prog_at("b");
+    let built_b = run(c
+        .args(["build", &build_name, "--stage", "b", "-o"])
+        .arg(&prog_b));
+    match built_b.code {
+        Some(0) => programs.push(("b", prog_b.clone())),
+        _ if built_b.stderr.contains("E1010") => tally.skipped.push(format!(
+            "{} at stage b ({})",
+            case.script,
+            built_b
+                .stderr
+                .lines()
+                .find(|l| l.contains("E1010"))
+                .unwrap_or("E1010")
+        )),
+        _ => report(
+            tally,
+            &format!("{} (built at stage b)", case.script),
+            false,
+            || format!("built at stage a, and at stage b: {built_b:?}"),
+        ),
+    }
     // The interpreter against itself, once for each mode.
     let mut controlled: Vec<String> = Vec::new();
-    for (i, r) in case.runs.iter().enumerate() {
+    let only_budgets = std::env::var("DIFF_BUDGETS").is_ok_and(|v| v == "only");
+    for (i, r) in case.runs.iter().enumerate().filter(|_| !only_budgets) {
         for mode in &r.modes {
             let name = format!("{} run {} {mode}", case.script, i + 1);
             let json = mode.split_whitespace().any(|w| w == "json");
-            let side = |program: bool| -> (Vec<Outcome>, String, String) {
+            let side = |program: Option<&Path>| -> (Vec<Outcome>, String, String) {
                 lay_out();
                 let home = sb.path().join("home");
                 let mut outs = Vec::new();
                 let mut order: Vec<String> = Vec::new();
                 for step in &r.steps {
-                    let mut c = if program {
-                        Command::new(&prog)
-                    } else {
-                        Command::new(&tools.cig)
+                    let mut c = match program {
+                        Some(p) => Command::new(p),
+                        None => Command::new(&tools.cig),
                     };
                     env(&mut c);
-                    if program {
+                    if program.is_some() {
                         c.args(mode_flags(mode));
                         if let Some(ch) = &step.light {
                             c.args(["--light", ch]);
@@ -480,10 +518,10 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
                 }
                 (outs, tree(&work), journals(&home, &order))
             };
-            let (a, ta, ja) = side(false);
+            let (a, ta, ja) = side(None);
             if !controlled.contains(mode) {
                 controlled.push(mode.clone());
-                let (a2, ta2, ja2) = side(false);
+                let (a2, ta2, ja2) = side(None);
                 if canon(&a, false, json) != canon(&a2, false, json) || ta != ta2 || ja != ja2 {
                     report(
                         tally,
@@ -496,38 +534,152 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
                     continue;
                 }
             }
-            let (b, tb, jb) = side(true);
-            let (ca, cb) = (canon(&a, true, json), canon(&b, false, json));
-            let mut same = ca == cb && ta == tb && ja == jb;
-            // The .out files are written with Unix paths (CigScript's own
-            // tests skip the path-printing ones on Windows too).
-            if let Some(want) = case
-                .expect_stdout
-                .as_ref()
-                .filter(|_| cfg!(unix) && mode == "run")
-            {
-                same &= b.first().is_some_and(|o| &o.stdout == want);
-            }
-            report(tally, &name, same, || {
-                let mut s = String::new();
-                for (x, y) in ca.iter().zip(cb.iter()) {
-                    if x != y {
-                        s += &format!("interpreter: {x:#?}\nprogram:     {y:#?}\n");
+            for (stage, at) in &programs {
+                let name = if *stage == "b" {
+                    format!("{name} stage b")
+                } else {
+                    name.clone()
+                };
+                let (b, tb, jb) = side(Some(at));
+                let (ca, cb) = (canon(&a, true, json), canon(&b, false, json));
+                let mut same = ca == cb && ta == tb && ja == jb;
+                // The .out files are written with Unix paths (CigScript's own
+                // tests skip the path-printing ones on Windows too).
+                if let Some(want) = case
+                    .expect_stdout
+                    .as_ref()
+                    .filter(|_| cfg!(unix) && mode == "run")
+                {
+                    same &= b.first().is_some_and(|o| &o.stdout == want);
+                }
+                report(tally, &name, same, || {
+                    let mut s = String::new();
+                    for (x, y) in ca.iter().zip(cb.iter()) {
+                        if x != y {
+                            s += &format!("interpreter: {x:#?}\nprogram:     {y:#?}\n");
+                        }
                     }
-                }
-                if ta != tb {
-                    s += &format!("files differ:\ninterpreter: {ta}\nprogram:     {tb}\n");
-                }
-                if ja != jb {
-                    s += &format!("journals differ:\ninterpreter:\n{ja}\nprogram:\n{jb}\n");
-                }
-                if s.is_empty() {
-                    s = "stdout differs from the .out file".to_string();
-                }
-                s
-            });
+                    if ta != tb {
+                        s += &format!("files differ:\ninterpreter: {ta}\nprogram:     {tb}\n");
+                    }
+                    if ja != jb {
+                        s += &format!("journals differ:\ninterpreter:\n{ja}\nprogram:\n{jb}\n");
+                    }
+                    if s.is_empty() {
+                        s = "stdout differs from the .out file".to_string();
+                    }
+                    s
+                });
+            }
         }
     }
+    if programs.len() == 2 && std::env::var("DIFF_BUDGETS").map_or(true, |v| v != "0") {
+        the_step_budget_stops_on_the_same_line(tools, case, &prog_b, &lay_out, &env, tally);
+    }
+}
+
+/// cig-compile#31: `--max-steps` stops the stage b program on the step,
+/// the line and the code the interpreter stops on, for the case's first
+/// one-step real run. Every budget from 1 to the run's total and one past
+/// it when the total is at most 100 steps (or with DIFF_BUDGETS=all);
+/// past that the first 50, fifty more spread over the rest, and the last
+/// 10. DIFF_BUDGETS=0 leaves the sweep out; DIFF_BUDGETS=only runs the
+/// sweep alone, without the modes.
+fn the_step_budget_stops_on_the_same_line(
+    tools: &Tools,
+    case: &Case,
+    prog_b: &Path,
+    lay_out: &dyn Fn(),
+    env: &dyn Fn(&mut Command),
+    tally: &mut Tally,
+) {
+    let Some(step) = case
+        .runs
+        .iter()
+        .find(|r| r.steps.len() == 1 && r.modes.iter().any(|m| m == "run"))
+        .map(|r| &r.steps[0])
+        .filter(|s| s.light.is_none())
+    else {
+        return;
+    };
+    let script = case.script.rsplit('/').next().unwrap_or_default();
+    let script_name = format!(
+        "{}.cig",
+        script.replace(['#', '.'], "-").trim_end_matches("-cig")
+    );
+    let side = |program: bool, max: u64| -> Outcome {
+        lay_out();
+        let mut c = if program {
+            Command::new(prog_b)
+        } else {
+            Command::new(&tools.cig)
+        };
+        env(&mut c);
+        if !program {
+            c.arg("run");
+        }
+        c.args(["--max-steps", &max.to_string()]);
+        if !program {
+            c.arg(&script_name);
+        }
+        c.arg("--").args(&step.args);
+        run(&mut c)
+    };
+    let stopped = |o: &Outcome| o.stderr.contains("E515");
+    // The run's total: the least budget the reference does not stop at.
+    let mut hi = 64u64;
+    while stopped(&side(false, hi)) {
+        hi *= 4;
+        if hi > 1 << 22 {
+            tally
+                .skipped
+                .push(format!("{} step budgets (more than 4M steps)", case.script));
+            return;
+        }
+    }
+    let mut lo = 0u64;
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if stopped(&side(false, mid)) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let total = hi;
+    let every = std::env::var("DIFF_BUDGETS").is_ok_and(|v| v == "all");
+    let stride = total.div_ceil(50).max(1);
+    let budgets: Vec<u64> = (1..=total + 1)
+        .filter(|b| every || total <= 100 || *b <= 50 || b % stride == 0 || b + 10 > total)
+        .collect();
+    let mut differ = None;
+    for &max in &budgets {
+        let a = side(false, max);
+        let b = side(true, max);
+        if canon(std::slice::from_ref(&a), true, false)
+            != canon(std::slice::from_ref(&b), false, false)
+        {
+            differ = Some((max, a, b));
+            break;
+        }
+    }
+    report(
+        tally,
+        &format!(
+            "{} the_step_budget_stops_on_the_same_line ({} budgets of {total} steps)",
+            case.script,
+            budgets.len()
+        ),
+        differ.is_none(),
+        || {
+            let (max, a, b) = differ.clone().unwrap();
+            format!(
+                "--max-steps {max}:
+interpreter: {a:#?}
+program:     {b:#?}"
+            )
+        },
+    );
 }
 
 /// A generated program as a case: one real run, from a tree with `out/`.
