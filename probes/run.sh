@@ -12,7 +12,9 @@ here=$(cd "$(dirname "$0")" && pwd); work=$PWD/probe-work; mkdir -p "$work"; cd 
 echo "== the runner"
 uname -r; nproc; grep -m1 "model name" /proc/cpuinfo
 echo "THP enabled: $(cat /sys/kernel/mm/transparent_hugepage/enabled)  defrag: $(cat /sys/kernel/mm/transparent_hugepage/defrag)"
-for f in /sys/kernel/mm/transparent_hugepage/hugepages-*/enabled; do [ -f "$f" ] && echo "$(basename "$(dirname "$f")"): $(cat "$f")"; done 2>/dev/null | tr '\n' ' '; echo
+for f in /sys/kernel/mm/transparent_hugepage/hugepages-*/enabled; do
+  if [ -f "$f" ]; then printf '%s: %s  ' "$(basename "$(dirname "$f")")" "$(cat "$f")"; fi
+done; echo
 df -T /tmp "$work" | awk 'NR>1{print $1, $2, $7}'
 echo "== sources"
 git clone -q https://github.com/otmof-ops/cig-compile cc
@@ -34,9 +36,10 @@ for s in A B; do
   for p in $PROGS; do
     "cc-$s/target/release/cigcompile" build "cc-$s/bench/$p.cig" -o "bin-$s/$p" >/dev/null 2>"build-$s-$p.log" || { echo "build of $p failed on $s:"; tail -5 "build-$s-$p.log"; exit 1; }
   done
-  rt=$(find "$work/home-$s" "$work/cache-$s" "$HOME/.cigscript" "$HOME/.cache" -type f -name 'cig-v*-linux-x86_64' 2>/dev/null | head -1)
-  [ -n "$rt" ] || { echo "the runtime cigcompile fetched was not found"; exit 1; }
-  echo "$rt" > "rt-$s"; echo "$s: runtime $(basename "$rt") $(stat -c %s "$rt") bytes; a compiled hello $(stat -c %s "bin-$s/hello") bytes"
+  # cigcompile keeps the release's runtime it fetched under its home: cigcompile/runtimes/<version>/<asset>/cig
+  rt=$(find "$work/home-$s/cigcompile/runtimes" -type f -name cig 2>/dev/null | sort | head -1 || true)
+  if [ -z "$rt" ]; then echo "the runtime cigcompile fetched was not found under $work/home-$s:"; find "$work/home-$s" -maxdepth 5 | head -30; exit 1; fi
+  echo "$rt" > "rt-$s"; echo "$s: runtime ${rt#"$work"/} ($("$rt" --version 2>&1 | head -1)) $(stat -c %s "$rt") bytes; a compiled hello $(stat -c %s "bin-$s/hello") bytes"
 done
 echo "== what each program held at its exit (MB)"
 for p in $PROGS; do
