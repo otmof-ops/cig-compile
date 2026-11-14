@@ -5,6 +5,27 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **The memory budget is held to what a program holds of its own
+  (#30).** "Peak memory of a compiled hello" was a budget on the
+  resident set, 14 MB, and a resident set counts the pages of the
+  program's file that the kernel has mapped. On Linux 7.0 that is the
+  whole file: a hello read its file's size plus 2.7 MB (18.9 MB for a
+  16.2 MB program on x86-64, 16.7 MB for a 14.0 MB one on arm64), on a
+  disk and on a memory file system, on cig 1.21.0's runtime and on
+  1.22.0's alike, so the row could not be met by any program and said
+  nothing about its heap. For the row's hello the bench now makes one
+  more run in which the program is traced by the bench just long enough
+  to be read at its exit (`VmHWM`, `RssAnon`, `RssFile` from its
+  `/proc/<pid>/status`), and the row is held to the program's own memory
+  at the old budget less the file pages it was set on (about 10 of the
+  11.5 MB a just-built hello read on Linux 6.17): **under 4 MB of its
+  own.** It prints both figures. A hello holds 1 to 2 MB of its own on a
+  runtime whose heap starts in small pages; two 2 MiB pages of heap are
+  over the budget, and the four that cig 1.21.0 kept are twice it, which
+  is what the row is for. Where a process cannot be traced by its parent,
+  and off Linux, the row reads "not measured" and is not held. The
+  `RSS MB` column and the memory gate against `main` are unchanged
+  (`docs/BENCHMARKS.md`, "Compiled peak memory: the budget").
 - **A call's window sits above every live register (#31,
   cig-script#230).** The VM now starts a callee's frame at its arguments,
   over every register above them, so the lowering places a `call`'s
