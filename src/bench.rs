@@ -293,6 +293,11 @@ struct Row {
     /// Allocations and bytes allocated by one interpreted run under the
     /// counting runtime (`--alloc`).
     allocs: Option<(u64, u64)>,
+    /// The compiled side's peak with the program's file on a memory file
+    /// system (`peak_rss_in_memory`): taken for the benchmark the memory
+    /// budget is held to, `None` for the rest and where there is no such
+    /// figure.
+    compiled_peak_in_memory: Option<u64>,
 }
 
 /// One benchmark the harness measures: its source, its 1x expected output,
@@ -519,6 +524,19 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
                 (Some(five), Some(fivec))
             }
         };
+        // The memory budget is held to a compiled hello (`budgets`): its
+        // peak is taken once more with the program's file on a memory file
+        // system, so the page cache's folio size is not in the figure.
+        let compiled_peak_in_memory = if name == "hello" && built.is_ok() {
+            peak_rss_in_memory(&bin, |copy| {
+                let mut c = Command::new(copy);
+                env(&mut c);
+                c.current_dir(fresh("pm", 0)).args(args);
+                c
+            })
+        } else {
+            None
+        };
         let allocs = o
             .alloc
             .and_then(|rt| count_allocs(rt, &env, fresh("a", 0), name, expect, args));
@@ -545,6 +563,7 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
             refs,
             refs_5x,
             allocs,
+            compiled_peak_in_memory,
         });
     }
     // A rebuild of the first benchmark that changes nothing.
@@ -844,6 +863,65 @@ fn peak_rss(c: &mut Command) -> Option<u64> {
     }
 }
 
+/// A compiled program's peak resident set with its file on a memory file
+/// system: a copy of `program` is made in [`memory_folder`], run once
+/// (untimed, as `make` builds the command for the copy) and removed.
+///
+/// Linux maps a program's file in the page cache's folios. A file system
+/// that keeps large folios for a file just written (ext4 on Linux 7.0)
+/// makes a 16 MB program resident whole: the peak of every small program
+/// there is its file's size plus what the run itself allocated, 18.9 MB
+/// for a hello whose own share is under 3 MB, on any runtime. A memory file
+/// system maps the pages a run touches and no more, so the figure is the
+/// program's and not the file system's. `None` where there is no such
+/// folder (another system, a container without one), where a file there
+/// cannot be executed, or where the run fails.
+fn peak_rss_in_memory(program: &Path, make: impl FnOnce(&Path) -> Command) -> Option<u64> {
+    let dir = memory_folder()?.join(format!("cigcompile-bench-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).ok()?;
+    let rss = program.file_name().and_then(|name| {
+        let copy = dir.join(name);
+        std::fs::copy(program, &copy).ok()?;
+        peak_rss(&mut make(&copy))
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    rss
+}
+
+/// A folder on a memory file system that this user can write: `/dev/shm`,
+/// else the session's runtime folder. Linux only: elsewhere `wait4`'s peak
+/// has no such share to take out.
+fn memory_folder() -> Option<PathBuf> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let mounts = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+    [
+        Some(PathBuf::from("/dev/shm")),
+        std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|d| d.is_dir() && on_memory_fs(&mounts, d))
+}
+
+/// Is `dir` on `tmpfs` or `ramfs`, by the text of `/proc/self/mountinfo`?
+/// The mount whose point is the longest prefix of `dir` decides. A line is
+/// `id parent major:minor root point options ... - fstype source options`.
+fn on_memory_fs(mountinfo: &str, dir: &Path) -> bool {
+    mountinfo
+        .lines()
+        .filter_map(|l| {
+            let (head, tail) = l.split_once(" - ")?;
+            let point = Path::new(head.split(' ').nth(4)?);
+            let fstype = tail.split(' ').next()?;
+            dir.starts_with(point)
+                .then(|| (point.components().count(), fstype))
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .is_some_and(|(_, fstype)| matches!(fstype, "tmpfs" | "ramfs"))
+}
+
 /// Run a command to its end; a command that fails is an error, never a time.
 fn measure(c: &mut Command) -> Result<Measured, String> {
     c.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -1123,6 +1201,10 @@ type Check = (String, String, String, bool, bool);
 /// 4 KiB pages; 11.5 MB straight after `cigcompile build` on a kernel that
 /// maps the new file in large page-cache folios (Linux 6.17, ext4). cig
 /// 1.21.0 as released peaked at 17.5 MB there (its heap in 2 MiB pages).
+/// On Linux 7.0 with ext4 the just-built file is resident whole: 18.9 MB
+/// for a 16.2 MB program and 16.7 MB for a 14.0 MB one, on any runtime,
+/// which is why the budget's figure is taken with the file on a memory
+/// file system (`peak_rss_in_memory`): 7 to 8 MB there for cig 1.22.0.
 const HELLO_PEAK_BUDGET: u64 = 14_000_000;
 
 /// Does this cig's runtime start a short program's heap in small pages? The
@@ -1200,8 +1282,13 @@ fn budgets(
     // Compiled peak memory has a budget of its own (cig-compile#30): held on
     // Linux, where the peak is the program's own (see `peak_rss`), and from
     // the first runtime that can meet it (`heap_starts_small`); a side with
-    // no figure is not measured, never missed.
-    let hello_peak = hello.and_then(|h| h.compiled.stats()).and_then(|s| s.rss);
+    // no figure is not measured, never missed. The figure is the one taken
+    // with the program's file on a memory file system where there is one
+    // (`peak_rss_in_memory`), so a kernel that keeps a just-written file in
+    // large folios does not put the whole file in it.
+    let in_memory = hello.and_then(|h| h.compiled_peak_in_memory);
+    let hello_peak =
+        in_memory.or_else(|| hello.and_then(|h| h.compiled.stats()).and_then(|s| s.rss));
     if let Some(bytes) = hello_peak {
         let small = heap_starts_small(runtime);
         checks.push((
@@ -1214,7 +1301,15 @@ fn budgets(
                     HELLO_PEAK_BUDGET / 1_000_000
                 )
             },
-            format!("{:.1} MB", bytes as f64 / 1e6),
+            format!(
+                "{:.1} MB{}",
+                bytes as f64 / 1e6,
+                if in_memory.is_some() {
+                    " (its file on a memory file system)"
+                } else {
+                    ""
+                }
+            ),
             cfg!(target_os = "linux") && small,
             bytes < HELLO_PEAK_BUDGET,
         ));
@@ -1870,6 +1965,30 @@ mod tests {
         );
     }
 
+    /// A folder is on a memory file system when the mount that holds it is
+    /// `tmpfs` or `ramfs`: the longest mount point that is a prefix of it
+    /// decides, so a disk mounted under a memory file system is a disk.
+    #[test]
+    fn a_folder_is_on_a_memory_file_system_by_its_own_mount() {
+        let mounts = "\
+22 1 259:2 / / rw,noatime shared:1 - ext4 /dev/nvme0n1p2 rw
+31 22 0:27 / /dev/shm rw,nosuid,nodev shared:4 - tmpfs tmpfs rw
+40 22 0:35 / /run rw,nosuid,nodev shared:5 - tmpfs tmpfs rw,mode=755
+55 40 0:60 / /run/user/1000 rw,nosuid,nodev,relatime shared:9 - tmpfs tmpfs rw,size=1G
+60 31 8:1 / /dev/shm/disk rw - ext4 /dev/sda1 rw
+";
+        assert!(on_memory_fs(mounts, Path::new("/dev/shm")));
+        assert!(on_memory_fs(
+            mounts,
+            Path::new("/dev/shm/cigcompile-bench-1")
+        ));
+        assert!(on_memory_fs(mounts, Path::new("/run/user/1000")));
+        assert!(!on_memory_fs(mounts, Path::new("/tmp")));
+        assert!(!on_memory_fs(mounts, Path::new("/dev/shm/disk/x")));
+        assert!(!on_memory_fs("", Path::new("/dev/shm")));
+        assert!(!on_memory_fs("garbage\n1 2 3\n", Path::new("/dev/shm")));
+    }
+
     /// Compiled peak memory has an explicit budget (cig-compile#30): a hello
     /// over it is missed where it is held, one under it is met, and a hello
     /// with no figure has no row. It is held from the first cig after 1.21.0:
@@ -1887,12 +2006,35 @@ mod tests {
             refs: Vec::new(),
             refs_5x: Vec::new(),
             allocs: None,
+            compiled_peak_in_memory: None,
         };
         let peak_on = |rss, runtime: &str| {
             budgets(&[row(rss)], None, None, runtime)
                 .into_iter()
                 .find(|c| c.0 == "peak memory of a compiled hello")
         };
+        // The figure taken with the program's file on a memory file system
+        // is the one the budget is held to: a hello whose resident set
+        // counts its whole 16 MB file is met when its own peak is under.
+        let whole_file = Row {
+            compiled_peak_in_memory: Some(7_800_000),
+            ..row(Some(18_900_000))
+        };
+        let own = budgets(&[whole_file], None, None, "1.22.0")
+            .into_iter()
+            .find(|c| c.0 == "peak memory of a compiled hello")
+            .expect("a row");
+        assert!(own.4 && own.2.contains("7.8 MB"), "{own:?}");
+        assert!(own.2.contains("memory file system"), "{own:?}");
+        let fat = Row {
+            compiled_peak_in_memory: Some(15_500_000),
+            ..row(Some(18_900_000))
+        };
+        let fat = budgets(&[fat], None, None, "1.22.0")
+            .into_iter()
+            .find(|c| c.0 == "peak memory of a compiled hello")
+            .expect("a row");
+        assert!(!fat.4, "{fat:?}");
         let peak = |rss| peak_on(rss, "1.22.0");
         let over = peak(Some(17_500_000)).expect("a row");
         assert_eq!(
