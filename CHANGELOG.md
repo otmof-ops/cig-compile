@@ -5,6 +5,33 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **A benchmark's peak memory is read from the program's own address
+  space (#30).** The `RSS MB` column and the budget "peak memory of a
+  compiled hello, under 14 MB" took a child's peak from `wait4`. On Linux
+  that is at least what the bench holds when it starts the program: a
+  forked child has its parent's own memory resident until it execs, and
+  the kernel keeps that mark across the `exec`. 0.4.1 let go of the
+  runtime's bytes and set the mark back before `exec`, which removed the
+  bench's earlier peak and not what it still held: on CI's tables, the
+  runtime's size plus 3 MB. Every smaller program read that figure: a
+  hello 19.3 MB on x86-64 and 16.8 MB on arm64, where its own peak is
+  11.3 and 11.0 MB (a child of a process holding 96 MiB reads 102.7 MB by
+  `wait4` and 1.4 MB of its own). The budget, held for the first time by
+  the first cig after 1.21.0, could not be met by any program, and the
+  memory gate could not see a change in a program under 19 MB. Now the
+  untimed run that takes the peak is traced by the bench just long
+  enough to read the program at its exit (`VmHWM` in its
+  `/proc/<pid>/status`: the peak of the address space it got at its
+  `exec`). The budget is the same budget, 14 MB, on that figure, and its
+  row says the two parts: `11.3 MB (0.7 MB of its own, 10.7 MB of its
+  files' pages)` on cig 1.23.0's runtime, `17.4 MB (6.6 MB of its own,
+  10.8 MB of its files' pages)` on 1.21.0's. Where a process cannot be
+  traced by its parent the column keeps `wait4`'s figure and the row
+  reads "not measured" and is not held. The first run of the memory gate
+  after this compares a `main` measured the old way with a pull request
+  measured the new way, so it reads lower, never higher
+  (`docs/BENCHMARKS.md`, "How a benchmark is measured" and "Compiled peak
+  memory: the budget").
 - **The bytecode lowering writes tight code (#31, step 9).** A slot
   read needs no copy and a value stored into a slot is made in its
   register, where nothing can tell the difference; a constant operand

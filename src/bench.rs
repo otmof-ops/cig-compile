@@ -293,6 +293,10 @@ struct Row {
     /// Allocations and bytes allocated by one interpreted run under the
     /// counting runtime (`--alloc`).
     allocs: Option<(u64, u64)>,
+    /// What the compiled program's memory was when it ended
+    /// (`memory_at_exit`): taken for the benchmark the memory budget is
+    /// held to, `None` for the rest and where the system does not say.
+    compiled_memory: Option<Memory>,
 }
 
 /// One benchmark the harness measures: its source, its 1x expected output,
@@ -519,6 +523,16 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
                 (Some(five), Some(fivec))
             }
         };
+        // The memory budget is held to a compiled hello (`budgets`): one
+        // more run, not timed, read at its exit.
+        let compiled_memory = if name == "hello" && built.is_ok() {
+            let mut c = Command::new(&bin);
+            env(&mut c);
+            c.current_dir(fresh("pm", 0)).args(args);
+            memory_at_exit(&mut c)
+        } else {
+            None
+        };
         let allocs = o
             .alloc
             .and_then(|rt| count_allocs(rt, &env, fresh("a", 0), name, expect, args));
@@ -545,6 +559,7 @@ pub fn bench(ctx: &Ctx, runtime: &Runtime, o: &Opts) -> i32 {
             refs,
             refs_5x,
             allocs,
+            compiled_memory,
         });
     }
     // A rebuild of the first benchmark that changes nothing.
@@ -783,9 +798,9 @@ fn sample(runs: usize, expect: &str, mut make: impl FnMut(usize) -> Command) -> 
             Err(e) => return Side::Wrong(e),
         }
     }
-    // The peak from one more run of its own (see `peak_rss`); the timed
-    // runs' figure only where that run has none.
-    let peak = peak_rss(&mut make(runs.max(1) + 1)).or(rss);
+    // The peak from one more run of its own (see `peak_rss`), each try in
+    // a folder of its own; the timed runs' figure only where it has none.
+    let peak = peak_rss(|n| make(runs.max(1) + 1 + n)).or(rss);
     Side::Timed(Stats::of(&ms, peak))
 }
 
@@ -806,17 +821,36 @@ struct Measured {
 }
 
 /// A command's peak resident set, from one more run that is not timed.
+/// `make(0)` is that run, and `make(1)` a second one where the first could
+/// not be read.
 ///
-/// Linux folds the parent's peak into a child's `ru_maxrss` when the child
-/// execs (the old address space's high-water mark is kept), so the peak a
-/// timed run reports is at least the bench's own: the bench holds its code,
-/// the runtime it read when it loaded it (15.8 MB for cig 1.21.0) and its
-/// results. On Linux this run forks (no shared address space) and, in the
-/// child before `exec`, sets the child's mark back to what it has resident
-/// (`5` to `/proc/self/clear_refs`): a forked child shares no file pages and
-/// little else, so the peak is the program's own. Elsewhere it is `wait4`'s
-/// figure for the run.
-fn peak_rss(c: &mut Command) -> Option<u64> {
+/// On Linux `wait4` cannot give it. A child made by `fork` has resident
+/// what its parent holds of its own until it execs, and the kernel keeps
+/// the old address space's high-water mark across the `exec`, so
+/// `ru_maxrss` is at least what the bench holds when it starts the
+/// program: on CI's tables the runtime's size plus about 3 MB, on two
+/// machines and two runtimes. Every program under that read the same
+/// figure (19.3 MB for a hello whose own peak is 11.3 MB). So the run is
+/// traced just long enough to
+/// read the program at its exit (`memory_at_exit`): `VmHWM` there is the
+/// peak of the address space the program got at its `exec`, and nothing
+/// of the bench's is in it.
+///
+/// Where a process cannot be traced by its parent the figure is `wait4`'s,
+/// after the child has set its mark back to what it has resident (`5` to
+/// `/proc/self/clear_refs`): that takes an earlier peak of the bench's out
+/// of it and leaves in what the bench still holds. Off Linux it is
+/// `wait4`'s figure for the run.
+fn peak_rss(mut make: impl FnMut(usize) -> Command) -> Option<u64> {
+    if let Some(m) = memory_at_exit(&mut make(0)) {
+        return Some(m.peak);
+    }
+    peak_by_wait(&mut make(if cfg!(target_os = "linux") { 1 } else { 0 }))
+}
+
+/// `wait4`'s peak for one run of a command, the child's mark set back on
+/// Linux before its `exec` (see `peak_rss` for what that leaves in).
+fn peak_by_wait(c: &mut Command) -> Option<u64> {
     c.stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(target_os = "linux")]
     {
@@ -842,6 +876,118 @@ fn peak_rss(c: &mut Command) -> Option<u64> {
     } else {
         None
     }
+}
+
+/// What a process's memory was when it ended, in bytes, from its
+/// `/proc/<pid>/status`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Memory {
+    /// `VmHWM`: the peak of its resident set.
+    peak: u64,
+    /// `RssAnon`: what it held of its own at the end.
+    anon: u64,
+    /// `RssFile` and `RssShmem`: mapped pages of files at the end, its
+    /// program's among them.
+    file: u64,
+}
+
+impl Memory {
+    /// From the text of a `status` file. `None` unless it has `VmHWM`,
+    /// `RssAnon` and `RssFile`, each in kB.
+    #[cfg(any(target_os = "linux", test))]
+    fn parse(status: &str) -> Option<Memory> {
+        let kb = |key: &str| {
+            status.lines().find_map(|l| {
+                let rest = l.strip_prefix(key)?.strip_prefix(':')?;
+                let n = rest.trim().strip_suffix("kB")?.trim();
+                n.parse::<u64>().ok().map(|k| k * 1024)
+            })
+        };
+        Some(Memory {
+            peak: kb("VmHWM")?,
+            anon: kb("RssAnon")?,
+            file: kb("RssFile")? + kb("RssShmem").unwrap_or(0),
+        })
+    }
+
+    /// The program's own memory: what it held of its own when it ended, or
+    /// its peak less the pages of files it had mapped by then when that is
+    /// more (a program that gave memory back before it ended). Never more
+    /// than its true peak of its own while it unmaps no file: its mapped
+    /// file pages only grow.
+    fn own(&self) -> u64 {
+        self.anon.max(self.peak.saturating_sub(self.file))
+    }
+}
+
+/// What a command's memory was when it ended: one run, not timed, stopped
+/// at its exit while its address space is still there.
+///
+/// `wait4` gives a process's peak, and on Linux that carries what its
+/// parent held when it was forked (`peak_rss`); `/proc/<pid>/status` has
+/// the program's own figures, the peak of the address space it got at its
+/// `exec` and how much of it is the program's own and how much the pages
+/// of files, but it is gone once the process is. So the child asks to be
+/// traced by this process, which sets one option (stop at exit) at the
+/// stop its `exec` makes, lets it run, reads its `status` at that last
+/// stop and lets it go. Signals on the way are passed on. `None` where
+/// the system does not let a process be traced by its parent, where the
+/// run fails, and off Linux.
+#[cfg(target_os = "linux")]
+fn memory_at_exit(c: &mut Command) -> Option<Memory> {
+    use std::os::unix::process::CommandExt;
+    c.stdout(Stdio::null()).stderr(Stdio::null());
+    // SAFETY: the closure runs in the forked child before `exec` and makes
+    // one async-signal-safe system call with no pointers.
+    unsafe {
+        c.pre_exec(|| {
+            let none: libc::c_long = 0;
+            if libc::ptrace(libc::PTRACE_TRACEME, none, none, none) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let child = c.spawn().ok()?;
+    let pid = child.id() as libc::pid_t;
+    let exit_stop = libc::SIGTRAP | (libc::PTRACE_EVENT_EXIT << 8);
+    let none: libc::c_long = 0;
+    let mut memory = None;
+    let mut traced = false;
+    loop {
+        let mut status = 0;
+        // SAFETY: waitpid writes only the status; the child is ours and
+        // is reaped here and nowhere else.
+        if unsafe { libc::waitpid(pid, &mut status, 0) } != pid {
+            return None;
+        }
+        if !libc::WIFSTOPPED(status) {
+            let ended_well = libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0;
+            return memory.filter(|_| ended_well);
+        }
+        let mut deliver = none;
+        if !traced {
+            // The stop its `exec` makes: from here its exit stops it once
+            // more, and it does not outlive this process.
+            let options = libc::c_long::from(libc::PTRACE_O_TRACEEXIT | libc::PTRACE_O_EXITKILL);
+            // SAFETY: a request on our own stopped child, no pointers.
+            unsafe { libc::ptrace(libc::PTRACE_SETOPTIONS, pid, none, options) };
+            traced = true;
+        } else if status >> 8 == exit_stop {
+            memory = std::fs::read_to_string(format!("/proc/{pid}/status"))
+                .ok()
+                .and_then(|s| Memory::parse(&s));
+        } else if libc::WSTOPSIG(status) != libc::SIGTRAP {
+            deliver = libc::c_long::from(libc::WSTOPSIG(status));
+        }
+        // SAFETY: as above; the last argument is the signal to pass on.
+        unsafe { libc::ptrace(libc::PTRACE_CONT, pid, none, deliver) };
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn memory_at_exit(_c: &mut Command) -> Option<Memory> {
+    None
 }
 
 /// Run a command to its end; a command that fails is an error, never a time.
@@ -1123,6 +1269,8 @@ type Check = (String, String, String, bool, bool);
 /// 4 KiB pages; 11.5 MB straight after `cigcompile build` on a kernel that
 /// maps the new file in large page-cache folios (Linux 6.17, ext4). cig
 /// 1.21.0 as released peaked at 17.5 MB there (its heap in 2 MiB pages).
+/// Linux 7.0 reads the same two: 11.3 MB (0.7 MB of the program's own and
+/// 10.7 MB of its file's pages) and 17.4 MB (6.6 MB and 10.8 MB).
 const HELLO_PEAK_BUDGET: u64 = 14_000_000;
 
 /// Does this cig's runtime start a short program's heap in small pages? The
@@ -1197,27 +1345,60 @@ fn budgets(
             hello.is_some_and(|h| h.bytes < 4_000_000),
         ),
     ]);
-    // Compiled peak memory has a budget of its own (cig-compile#30): held on
-    // Linux, where the peak is the program's own (see `peak_rss`), and from
-    // the first runtime that can meet it (`heap_starts_small`); a side with
-    // no figure is not measured, never missed.
-    let hello_peak = hello.and_then(|h| h.compiled.stats()).and_then(|s| s.rss);
-    if let Some(bytes) = hello_peak {
-        let small = heap_starts_small(runtime);
-        checks.push((
+    // Compiled peak memory has a budget of its own (cig-compile#30): the
+    // peak of a compiled hello's own address space, read at its exit
+    // (`memory_at_exit`), with what of it is the program's own and what
+    // is its files' pages said beside it. Held on Linux, where that can be
+    // read, and from the first runtime that can meet it
+    // (`heap_starts_small`). Where the program could not be read the row
+    // is there and says so: `wait4`'s figure counts what the bench itself
+    // holds (`peak_rss`), so nothing is held to it. Not measured is never
+    // missed.
+    let small = heap_starts_small(runtime);
+    let budget = if small {
+        format!("under {} MB (Linux)", HELLO_PEAK_BUDGET / 1_000_000)
+    } else {
+        format!(
+            "under {} MB (Linux, from the cig after 1.21.0)",
+            HELLO_PEAK_BUDGET / 1_000_000
+        )
+    };
+    let mb = |bytes: u64| bytes as f64 / 1e6;
+    match (
+        hello.and_then(|h| h.compiled_memory),
+        hello.and_then(|h| h.compiled.stats()).and_then(|s| s.rss),
+    ) {
+        (Some(m), _) => checks.push((
             "peak memory of a compiled hello".into(),
-            if small {
-                format!("under {} MB (Linux)", HELLO_PEAK_BUDGET / 1_000_000)
-            } else {
-                format!(
-                    "under {} MB (Linux, from the cig after 1.21.0)",
-                    HELLO_PEAK_BUDGET / 1_000_000
-                )
-            },
-            format!("{:.1} MB", bytes as f64 / 1e6),
+            budget,
+            format!(
+                "{:.1} MB ({:.1} MB of its own, {:.1} MB of its files' pages)",
+                mb(m.peak),
+                mb(m.own()),
+                mb(m.file)
+            ),
             cfg!(target_os = "linux") && small,
-            bytes < HELLO_PEAK_BUDGET,
-        ));
+            m.peak < HELLO_PEAK_BUDGET,
+        )),
+        (None, Some(rss)) if cfg!(target_os = "linux") => checks.push((
+            "peak memory of a compiled hello".into(),
+            budget,
+            format!(
+                "not measured: the program could not be read at its exit, and wait4's {:.1} MB counts what the bench holds",
+                mb(rss)
+            ),
+            false,
+            false,
+        )),
+        // Off Linux the figure is the run's own, shown and not held.
+        (None, Some(rss)) => checks.push((
+            "peak memory of a compiled hello".into(),
+            budget,
+            format!("{:.1} MB", mb(rss)),
+            false,
+            rss < HELLO_PEAK_BUDGET,
+        )),
+        (None, None) => {}
     }
     if let Some(ms) = orchestrate_ms {
         checks.push((
@@ -1235,6 +1416,7 @@ fn verdict(c: &Check) -> &'static str {
     match (c.3, c.4) {
         (_, true) => "met",
         (true, false) => "MISSED",
+        (false, false) if c.2.starts_with("not measured") => "not measured",
         (false, false) => "not yet (a later stage)",
     }
 }
@@ -1824,11 +2006,11 @@ mod tests {
         assert_eq!(Stats::of(&[], None), Stats::default());
     }
 
-    /// A child's peak memory is its own: the bench's earlier peak (here a
-    /// 96 MiB buffer, touched and freed) does not show in the child's row.
-    /// The probe runs in a process of its own: a forked child starts with
-    /// what its parent has resident, and beside this test the harness runs
-    /// others that hold a runtime's bytes each.
+    /// A child's peak memory is its own: neither what the bench holds when
+    /// it starts the program (here a 96 MiB buffer, touched and kept) nor
+    /// an earlier peak of the bench's (the same buffer, freed) shows in
+    /// the child's row. The probe runs in a process of its own: beside
+    /// this test the harness runs others that hold a runtime's bytes each.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_benchmarks_peak_memory_is_its_own_not_the_benchs() {
@@ -1857,26 +2039,56 @@ mod tests {
     #[ignore = "started by a_benchmarks_peak_memory_is_its_own_not_the_benchs, alone in its process"]
     fn the_peak_probe_in_a_process_of_its_own() {
         const BIG: usize = 96 << 20;
+        let quiet = |_: usize| {
+            let mut c = Command::new("true");
+            c.stdin(Stdio::null());
+            c
+        };
         let mut big = vec![0u8; BIG];
         for i in (0..BIG).step_by(4096) {
             big[i] = 1;
         }
         std::hint::black_box(&big);
+        // Held: a forked child has it resident until it execs, so only a
+        // reading of the program's own address space leaves it out.
+        let held = peak_rss(quiet).expect("a peak on Linux");
+        // What `wait4` says of the same child, for the record: it carries
+        // the buffer, which is why it is not what the bench reads.
+        let by_wait = peak_by_wait(&mut quiet(0));
+        eprintln!("holding {BIG} bytes: the child's own peak {held}, by wait4 {by_wait:?}");
+        if memory_at_exit(&mut quiet(0)).is_some() {
+            assert!(
+                held < (BIG as u64) / 2,
+                "the child's peak is {held} bytes, which carries the {BIG} the bench holds"
+            );
+        } else {
+            eprintln!(
+                "this system does not let a process be traced by its parent: \
+                 the child's peak, {held} bytes, carries what the bench holds"
+            );
+        }
+        std::hint::black_box(&big);
         drop(big);
-        let rss = peak_rss(Command::new("true").stdin(Stdio::null())).expect("a peak on Linux");
+        // Freed: an earlier peak of the bench's is not the child's on
+        // either road.
+        let rss = peak_rss(quiet).expect("a peak on Linux");
         assert!(
             rss < (BIG as u64) / 2,
             "the child's peak is {rss} bytes, which carries the bench's own {BIG}"
         );
     }
 
-    /// Compiled peak memory has an explicit budget (cig-compile#30): a hello
-    /// over it is missed where it is held, one under it is met, and a hello
-    /// with no figure has no row. It is held from the first cig after 1.21.0:
-    /// on 1.21.0 as released the row is there and reads "not yet".
+    /// Compiled peak memory has an explicit budget (cig-compile#30), held
+    /// to the peak of the program's own address space: a hello over it is
+    /// missed where it is held, one under it is met, and a hello with no
+    /// figure has no row. The row says what of the peak is the program's
+    /// own and what is its files' pages. It is held from the first cig
+    /// after 1.21.0: on 1.21.0 as released the row is there and reads "not
+    /// yet". Where the program could not be read at its exit the row says
+    /// so and is not held to what `wait4` says.
     #[test]
     fn a_compiled_hello_over_its_memory_budget_is_missed() {
-        let row = |rss: Option<u64>| Row {
+        let row = |memory: Option<Memory>, rss: Option<u64>| Row {
             name: "hello".into(),
             build_ms: 1.0,
             bytes: 1,
@@ -1887,24 +2099,61 @@ mod tests {
             refs: Vec::new(),
             refs_5x: Vec::new(),
             allocs: None,
+            compiled_memory: memory,
         };
-        let peak_on = |rss, runtime: &str| {
-            budgets(&[row(rss)], None, None, runtime)
+        let peak_on = |memory, rss, runtime: &str| {
+            budgets(&[row(memory, rss)], None, None, runtime)
                 .into_iter()
                 .find(|c| c.0 == "peak memory of a compiled hello")
         };
-        let peak = |rss| peak_on(rss, "1.22.0");
-        let over = peak(Some(17_500_000)).expect("a row");
+        let mem = |peak: u64, anon: u64, file: u64| Some(Memory { peak, anon, file });
+        // A heap in 2 MiB pages: 6.6 MB of its own on 10.8 MB of its file.
+        let over = peak_on(
+            mem(17_400_000, 6_600_000, 10_800_000),
+            Some(17_400_000),
+            "1.22.0",
+        )
+        .expect("a row");
         assert_eq!(
             (over.3, over.4),
             (cfg!(target_os = "linux"), false),
             "{over:?}"
         );
-        let under = peak(Some(5_000_000)).expect("a row");
+        // The same file's pages under a heap that starts small: met, and
+        // the row says the parts. What `wait4` said of the run (the bench's
+        // own 19.3 MB) is not what is held.
+        let under = peak_on(
+            mem(11_300_000, 700_000, 10_700_000),
+            Some(19_300_000),
+            "1.22.0",
+        )
+        .expect("a row");
         assert!(under.4, "{under:?}");
-        assert!(peak(None).is_none());
+        assert!(
+            under.2.starts_with("11.3 MB")
+                && under.2.contains("0.7 MB of its own")
+                && under.2.contains("10.7 MB of its files' pages"),
+            "{under:?}"
+        );
+        // The program could not be read at its exit: on Linux the row is
+        // there, says so, and is not held to wait4's figure; elsewhere that
+        // figure is the run's own and is shown.
+        let unread = peak_on(None, Some(19_300_000), "1.22.0").expect("a row");
+        assert_eq!((unread.3, unread.4), (false, false), "{unread:?}");
+        assert!(unread.2.contains("19.3 MB"), "{unread:?}");
+        if cfg!(target_os = "linux") {
+            assert_eq!(verdict(&unread), "not measured");
+        } else {
+            assert_eq!(unread.2, "19.3 MB");
+        }
+        assert!(peak_on(None, None, "1.22.0").is_none());
         // cig 1.21.0 as released cannot meet it: the row is not held there
-        let released = peak_on(Some(17_500_000), "1.21.0").expect("a row");
+        let released = peak_on(
+            mem(17_500_000, 6_600_000, 10_900_000),
+            Some(17_500_000),
+            "1.21.0",
+        )
+        .expect("a row");
         assert_eq!((released.3, released.4), (false, false), "{released:?}");
         assert_eq!(verdict(&released), "not yet (a later stage)");
         assert!(released.1.contains("after 1.21.0"), "{released:?}");
@@ -1919,6 +2168,55 @@ mod tests {
         ] {
             assert_eq!(heap_starts_small(v), small, "{v}");
         }
+    }
+
+    /// A `status` file gives the three figures in kB; without one of them
+    /// there is no reading, and shared-memory pages count with the files'.
+    #[test]
+    fn a_status_file_is_read_for_its_peak_its_own_and_its_files() {
+        let text = "Name:\tcig\nVmPeak:\t 1052304 kB\nVmHWM:\t    7216 kB\nVmRSS:\t    7100 kB\n\
+RssAnon:\t     948 kB\nRssFile:\t    6268 kB\nRssShmem:\t       4 kB\nThreads:\t1\n";
+        let m = Memory::parse(text).expect("a reading");
+        assert_eq!(
+            m,
+            Memory {
+                peak: 7216 * 1024,
+                anon: 948 * 1024,
+                file: 6272 * 1024
+            }
+        );
+        assert_eq!(m.own(), 948 * 1024);
+        assert!(Memory::parse(&text.replace("RssAnon", "RssAnom")).is_none());
+        assert!(Memory::parse(&text.replace("    7216 kB", "    lots kB")).is_none());
+        assert!(Memory::parse("").is_none());
+        // An older kernel has no RssShmem line: the files' pages are RssFile.
+        let old = Memory::parse(&text.replace("RssShmem:\t       4 kB\n", "")).expect("a reading");
+        assert_eq!(old.file, 6268 * 1024);
+    }
+
+    /// A process's memory is read at its exit: a program that does nothing
+    /// holds little of its own, and one that fills a 32 MiB buffer holds
+    /// that much, whatever of its file is resident. A command that fails
+    /// has no reading.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_process_is_read_at_its_exit_for_what_is_its_own() {
+        let Some(small) = memory_at_exit(Command::new("true").stdin(Stdio::null())) else {
+            // A system that does not let a process be traced by its parent
+            // (a locked-down container): nothing to hold here.
+            eprintln!("skipped: this system gave no reading at a process's exit");
+            return;
+        };
+        assert!(small.own() < 4 << 20, "{small:?}");
+        assert!(small.peak >= small.own(), "{small:?}");
+        let big = memory_at_exit(
+            Command::new("dd")
+                .args(["if=/dev/zero", "of=/dev/null", "bs=32M", "count=1"])
+                .stdin(Stdio::null()),
+        )
+        .expect("a reading");
+        assert!(big.own() >= 24 << 20, "{big:?}");
+        assert!(memory_at_exit(Command::new("false").stdin(Stdio::null())).is_none());
     }
 
     #[test]
