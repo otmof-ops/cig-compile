@@ -431,6 +431,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cig-bytecode"
+version = "0.1.0"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.23.0#8abe74d06ed17ceebd5beea2b42b681256fd0cc4"
+dependencies = [
+ "blake3",
+]
+
+[[package]]
 name = "cig-pass"
 version = "0.1.0"
 source = "git+https://github.com/otmof-ops/cig-script?tag=v1.20.0#4f47a370183c573605da315a4a128e8c6a5bc664"
@@ -450,7 +458,7 @@ dependencies = [
 [[package]]
 name = "cig-pass"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.21.0#b3a5a262c3e44f65467359b1494cab9a29dbfe66"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.23.0#8abe74d06ed17ceebd5beea2b42b681256fd0cc4"
 dependencies = [
  "base64",
  "blake3",
@@ -467,7 +475,7 @@ dependencies = [
 [[package]]
 name = "cig-vault"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.21.0#b3a5a262c3e44f65467359b1494cab9a29dbfe66"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.23.0#8abe74d06ed17ceebd5beea2b42b681256fd0cc4"
 dependencies = [
  "getrandom 0.2.17",
  "hex",
@@ -492,7 +500,7 @@ name = "cigcompile"
 version = "0.4.0"
 dependencies = [
  "cigarscript",
- "cigscript 1.21.0",
+ "cigscript 1.23.0",
  "clap",
  "flate2",
  "hex",
@@ -542,14 +550,15 @@ dependencies = [
 
 [[package]]
 name = "cigscript"
-version = "1.21.0"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.21.0#b3a5a262c3e44f65467359b1494cab9a29dbfe66"
+version = "1.23.0"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.23.0#8abe74d06ed17ceebd5beea2b42b681256fd0cc4"
 dependencies = [
  "argon2",
  "blake3",
  "chacha20poly1305",
  "chrono",
- "cig-pass 0.1.0 (git+https://github.com/otmof-ops/cig-script?tag=v1.21.0)",
+ "cig-bytecode",
+ "cig-pass 0.1.0 (git+https://github.com/otmof-ops/cig-script?tag=v1.23.0)",
  "cig-vault",
  "clap",
  "fastcdc",

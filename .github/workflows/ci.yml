@@ -335,7 +335,7 @@ jobs:
           set -euo pipefail
           printf 'exhale "hello from a program"\n' > hello.cig
           ./target/release/cigcompile build hello.cig -o hello | tee build.txt
-          grep -q 'for x86_64-unknown-linux-musl)' build.txt
+          grep -q 'for x86_64-unknown-linux-musl, stage a)' build.txt
           file hello
           if file hello | grep -q 'dynamically linked'; then echo "the program is dynamically linked"; exit 1; fi
           for image in debian:12 alpine:3.20; do

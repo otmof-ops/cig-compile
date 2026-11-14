@@ -110,9 +110,15 @@ The memory gate holds a pull request to `main`; the budget holds a compiled prog
 
 | what | budget | held | measured |
 |---|---|---|---|
-| peak memory of a compiled hello, real run, just built | under 14 MB | Linux, from the first cig after 1.21.0 | 5.9 MB on the runtime whose heap starts in 4 KiB pages, the file cold; 11.5 MB just built on Linux 6.17 (large page-cache folios); 17.5 MB on cig 1.21.0 as released, whose heap was in 2 MiB pages |
+| what a compiled hello holds that is its own, real run | under 4 MB | Linux, from the first cig after 1.21.0 | 0.9 to 1.6 MB on a runtime whose heap starts in 4 KiB pages (Linux 7.2); 8.4 MB of heap alone on cig 1.21.0 as released, which kept four 2 MiB pages where transparent huge pages are on |
 
-On cig 1.21.0 as released the row is shown and reads `not yet`: a hello peaks at 14 to 18 MB there, by the machine, and no change in the compiler can bring it under. The runtime's own share is held in cig-script (`tests/heap_pages.rs`: a dry-run hello under 9 MiB, and the heap's first 8 MiB in 4 KiB pages). Data-heavy programs are held by the memory gate, against `main`.
+**What the figure is.** A resident set is what the program allocated plus the pages of its file that the kernel has mapped, and how much of the file is mapped is the kernel's choice. The budget was first set on the resident set, at 14 MB, between two figures from one system (Linux 6.17, the program just built, so its file sat in large page-cache folios): 11.5 MB on a runtime whose heap starts in small pages, about 10 of them the file, and 17.5 MB on cig 1.21.0 as released. Once the file is cold the same hello reads 5.9 MB there. On Linux 7.0 the whole program is resident, on a disk and on a memory file system alike: a hello reads its file's size plus 2.7 MB (18.9 MB for a 16.2 MB program, 16.7 MB for a 14.0 MB one), the same as `fib` and `nbody`, on any runtime. A number meant to refuse a heap that grew would there only measure the kernel.
+
+So the row is held to the part the program decides. For the budget's hello the bench makes one more run, not timed, in which the program asks to be traced by the bench; the bench has it stop at its exit, reads `VmHWM`, `RssAnon`, `RssFile` and `RssShmem` from its `/proc/<pid>/status` while its address space is still there, and lets it go. The program's own memory is `RssAnon`, or the peak less the mapped file pages when that is more (a program that gave memory back before it ended). The budget is the old one less the file pages it was set on: 4 MB, which is less than two 2 MiB pages, so a hello whose heap keeps two or more large pages is over it. The row prints both figures, for example `2.7 MB of its own (18.9 MB resident with 16.2 MB of mapped files)`.
+
+Where a process cannot be traced by its parent (a locked-down container), and off Linux, the row shows the resident set, says it is not measured, and is not held. The `RSS MB` column and the memory gate are unchanged: they are the resident set as the system counts it, compared with `main` measured the same way.
+
+On cig 1.21.0 as released the row is shown and reads `not yet`: no change in the compiler can bring its heap's four large pages under the budget. The runtime's own share is held in cig-script (`tests/heap_pages.rs`: a dry-run hello under 9 MiB, and the heap's first 8 MiB in 4 KiB pages). Data-heavy programs are held by the memory gate, against `main`.
 
 ### Tests
 

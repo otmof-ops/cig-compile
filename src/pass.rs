@@ -39,11 +39,11 @@ fn facts(at: &Path, target: &str, sbom_at: Option<&Path>) -> Result<serde_json::
         .ok_or_else(|| format!("{} carries no program", at.display()))?;
     let mut f = serde_json::json!({
         "program_sha256": hex::encode(Sha256::digest(&bytes)),
-        "name": p.name,
-        "script": p.file,
-        "script_sha256": p.sha256,
-        "cig": p.cig,
-        "compiler": p.compiler,
+        "name": p.name(),
+        "script": p.file(),
+        "script_sha256": p.sha256(),
+        "cig": p.cig(),
+        "compiler": p.compiler(),
         "target": target,
     });
     if let Some(s) = sbom_at {

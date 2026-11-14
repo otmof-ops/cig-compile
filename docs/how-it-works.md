@@ -5,34 +5,58 @@ it the way `cig check` does, and writes it as a program that runs with
 nothing installed. This page is the map, for contributors; the design
 decision is in [the backend record](decisions/0001-backend.md).
 
-## Stage A: runtime, payload, trailer
+## What a program is
 
-Stage A (every release today) makes a program by appending:
-
-```
-+-------------------+-----------+-----------+
-|    cig runtime    |  payload  |  trailer  |
-+-------------------+-----------+-----------+
-     cig's binary     a record    a few bytes
-     for the target    (script +   that say
-                      checked AST) where the
-                                   payload is
-```
-
-The payload is CigScript's own `program` record: the script's text and
-name, a sha256 of each, the cig version it was compiled for, the
-cigcompile version that made it, and a trailer whose last bytes say
-where the record started. See CigScript's
+A program is the cig runtime with a payload appended, in CigScript's
+payload format 2 (CigScript's
 [docs/PROGRAMS.md](https://github.com/otmof-ops/cig-script/blob/main/docs/PROGRAMS.md)
-for the layout.
+has every byte; cig-compile's record 0004 has the reasons):
 
-At start, cig looks at itself: when it finds the trailer at its end, it
-is a compiled program, so it reads the record and runs the script
-through the same run as `cig run`. When it doesn't, it's just cig.
-That's it.
+```
++-------------+--------+---------+----------+----------+-------+---------+
+| cig runtime | record | padding | source   | bytecode | table | trailer |
++-------------+--------+---------+----------+----------+-------+---------+
+  cig's binary  JSON     zeros     the        stage b    64 B a  56 B,
+  for the       (name,   to 16     script     only: the  section "CIGPROG2",
+  target        stage,             (DEFLATE   module     (id,    lengths,
+                opt, ...)          from 4 KiB)           sha256) head sha256
+```
 
-Why this is the first stage, and what comes after (a bytecode VM, then
-Cranelift) is in [the backend decision](decisions/0001-backend.md).
+- The **record** says what the program is: its name, the script's file
+  name and sha256, the cig it runs on, the compiler, the **stage**, the
+  level it was built at (`opt`, from `-O`), the target triple, the
+  runtime's sha256, and `own_flags` when every argument is the
+  program's (`--args direct`, or the script's `pack { own_flags: true }`).
+- Each **section** body starts at a file offset that is a multiple of
+  16; the **table** names each one with its sha256; the **trailer**'s
+  head sha256 covers the record and the table. A start reads the
+  trailer, the record and the table, a constant amount, and a body only
+  when it uses it.
+- **Stage `b`** programs carry the `bytecode` section: the module
+  `src/bc` lowers the checked script to, at the program's level,
+  verified, loaded in this cig's VM at build time, and written as
+  `serialize_module` writes it (its own `CIGB` header and BLAKE3
+  included). cig's VM runs it through the same run as `cig run`. The
+  script stays in `source`, for `--interp`, an error's quoted line and
+  `--chains`.
+- **Stage `a`** programs carry `source` alone, and the tree-walker runs
+  it. A build makes stage `a` unless it is given `--stage b`, until
+  stage `b` passes its speed gates (`DEFAULT_STAGE` in `src/build.rs`
+  is the one place that choice is made); `--stage b` on a script that
+  does not lower is refused with `E1010`.
+
+At start, cig looks at itself: when it finds a trailer at its end, it
+is a compiled program, so it reads the record and runs its stage's body.
+When it doesn't, it's just cig. A program's record starts where its
+runtime's image ends, so a program cut short or written after is
+damaged (`E1050`), never cig.
+
+`src/build.rs` makes the bytes (`program_bytes`: the library's
+`program::Build` and `append2`); `src/verify.rs` reads them back part by
+part. The same inputs give the same bytes at either stage.
+
+Why a runtime and a payload, and what comes after (Cranelift) is in
+[the backend decision](decisions/0001-backend.md).
 
 ## The runtime search
 
@@ -164,11 +188,10 @@ catch.
 `--passes-diff` adds a unified diff of what each pass changed, or a
 line that says it did not; `--remarks` says the same thing in
 prose. Neither changes what a program does: the verifier re-reads
-the IR after each pass, and a program's bytes at stage A come from
-the script, not from the IR. The level shapes `--emit` only.
-
-Stage B is where `-O1` and `-O2` will start to differ: the passes
-there will shape the bytecode a program runs.
+the IR after each pass. A stage `b` program's bytecode is lowered at
+`-O`'s level (`--passes` shapes `--emit` and `--remarks` only), and the
+program records the level, so `verify --script` lowers it again the
+same way; a stage `a` program runs the script, whatever the level.
 
 ### The bytecode lowering
 
@@ -179,15 +202,40 @@ that does not verify is the compiler's bug). A slot is a register for
 the whole function; a value has a register from its definition to its
 last use. A read of a slot no closure captures is the slot's register
 itself, with no copy, when nothing writes the slot before the read's
-last reader, and a value whose one reader stores it into such a slot is
-made in that slot's register (`add R1, R1, R8`); an operation that fails
+last reader, and a value stored into such a slot right after it is made
+is made in that slot's register (`add R1, R1, R8`), also when other
+readers read it later (a `stick` that `-O1` forwards), as long as each
+of them reads the slot as it was stored: after the store in the same
+block, or inside a later statement of that block that writes the slot
+nowhere, and nothing in between writes it. An operation that fails
 writes nothing, so the slot keeps its value as in the interpreter. A
 constant right operand is the instruction's own (`addk` to `modk`,
-`eqk`, `ltk`, `lek`); a constant left operand swaps over only where the
-value and the error are the same either way (`==`, `!=`, and `+` or `*`
-of two numbers), and a constant every reader takes this way is never
-loaded. A call moves its callee and arguments into consecutive
-registers. `a > b` is `le a, b` then `not`, so the operands keep the
+`eqk`, `ltk`, `lek`; a bool constant too); a constant left operand
+swaps over only where the value and the error are the same either way
+(`==`, `!=`, and `+` or `*` of two numbers), and a constant every
+reader takes this way is never loaded. A constant inside a loop that
+an instruction reads from a register is loaded once, before the
+outermost loop around it, into a register held until that loop is
+done and below 256 (past that it is loaded where it is read): a
+literal is the same value every time and loading it cannot fail, so
+the loop cannot tell. A call's callee and arguments sit in consecutive
+registers, its window; a callee, a receiver or an argument only the
+call reads, made in the call's block, is made in its place there, the
+window taken before it is evaluated and kept until the call, so
+nothing else writes it in between; the rest are moved in. A value
+block (`and`, `or`, `??`, `?.`) makes its subject and the value its
+right side yields in its own result register when nothing else reads
+them.
+A `call`'s window is taken above every register in
+use, because the callee's frame starts at the window's second register
+and runs over everything above it (cig-script's `docs/BYTECODE.md`, what
+a call leaves undefined; its verifier refuses a read of such a register
+before a write): a captured slot's register is given at the function's
+start, below every window, and a window taken early for an argument is
+moved to the top, its arguments with it, when a value made since sits
+above it and outlives the call. `callb`, `callm` and `burn.op` make no
+frame and keep the lowest free run.
+`a > b` is `le a, b` then `not`, so the operands keep the
 order the interpreter's errors name. A comparison read only by the
 `if` or loop condition after it is that branch's jump (`nej`, `eqj`,
 `lej`, `ltj`; `a < b` and `a <= b` jump over a `jmp`), with the same
@@ -202,12 +250,16 @@ that turn's value, and a pull calls itself or a sibling through the
 cell its closure was declared into. `for` over `a..b` counts with
 `forprep`/`forloop`, and over a list, a map or a string walks the
 interpreter's snapshot with `iterprep`/`iternext`; the item is fresh
-each turn. An index read or store checks the types of its operands
-first, so a wrong index type is reported at the index and a value
-that cannot be indexed at the object, as the interpreter reports them,
-taking those positions from the spans the IR stores, and an `exhale`
-part or interpolation piece is turned to text where the interpreter
-shows it, before a later part can change it. A computed map key is
+each turn. An index read is one `getindex` and a plain indexed store
+one `setindex`, each followed by a `nop` carrying the index's position
+(and a store's, a second carrying the object's), taken from the spans
+the IR stores: the VM reports a wrong index type at the index and a
+value that cannot be indexed at the object, as the interpreter does,
+and never runs the `nop`s. A compound store (`xs[i] += v`, `m.k += v`)
+checks its operands' types first, so its error stays the store's
+rather than the read's. An `exhale` part or interpolation piece is
+turned to text where the interpreter shows it, before a later part
+can change it. A computed map key is
 checked by its own `key` instruction, before the entry's value runs.
 A `try` is laid out as the format sets out: `try.enter`, the body
 (the handler's range), the `ashtray` block, then the `finally` block,
@@ -335,10 +387,9 @@ compiler simple at the cost of linking all of cig into the output.
 [#1](https://github.com/otmof-ops/cig-compile/issues/1) is the crate split that lets stage B's runtime be only what a
 program uses — the smaller runtime #36 and #14 are aiming at.
 
-The `vm` feature turns on the bytecode lowering, `--emit bc` and their
-tests. It needs a cigscript that carries the bytecode VM and re-exports
-its format crate, which no cig release does yet, so it is off by
-default and the compiler builds at its pinned tag without it.
+The bytecode lowering is always built: it needs the cigscript that
+carries the VM and re-exports its format crate (`cig_bytecode`), as cig
+does from 1.22.0.
 
 ## The launcher
 
@@ -359,7 +410,10 @@ beside its module in `src/`.
 ## Where a start goes
 
 A program is cig, so its start is cig's start plus a payload lookup:
-the tail of the file read, the trailer parsed, the record found. On
+the tail of the file read, the trailer parsed, the record and table
+read and their head sha256 checked; then, at stage `b`, the bytecode
+read, parsed, verified and loaded, and at stage `a` the script read and
+parsed. On
 Linux the whole thing is about 5 ms for `hello` on this machine; the
 first 1.6 ms is spawning the process, the rest is cig starting and
 the script's one line of work. The budget tracked in [#14](https://github.com/otmof-ops/cig-compile/issues/14) is 5 ms at

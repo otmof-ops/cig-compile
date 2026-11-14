@@ -9,7 +9,8 @@ use crate::project::Job;
 use crate::runtime::{Runtime, Target};
 use cigscript::cli::Ctx;
 use cigscript::diagnostics::{usage, Diagnostic};
-use cigscript::program::{self, Program};
+use cigscript::program::{self, Section, Stage};
+use cigscript::syntax::span::Span;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::io::Write as _;
@@ -31,6 +32,14 @@ pub struct Built {
     pub bytes: u64,
     /// False when the program was already there, byte for byte.
     pub written: bool,
+    /// The stage the program is (read back from it when it was up to date).
+    pub stage: Option<Stage>,
+}
+
+/// The stage of the program at `path`, from its record.
+fn stage_at(path: &Path) -> Option<Stage> {
+    let mut f = std::fs::File::open(path).ok()?;
+    program::read(&mut f).ok().flatten().map(|l| l.stage())
 }
 
 pub fn read_script(ctx: &Ctx, job: &Job) -> Result<String, i32> {
@@ -57,12 +66,205 @@ pub fn read_script(ctx: &Ctx, job: &Job) -> Result<String, i32> {
     })
 }
 
-/// What a build does besides compile: the SBOM, and the strength a
-/// `.cigar` script is held to (`--strength`; a `.cig` script is always mild).
-#[derive(Clone, Copy, Debug, Default)]
+/// What a build does besides compile: the SBOM, the strength a `.cigar`
+/// script is held to (`--strength`; a `.cig` script is always mild), the
+/// stage asked for, the level the program is lowered at, and whether every
+/// argument is the program's.
+#[derive(Clone, Copy, Debug)]
 pub struct Options {
     pub sbom: bool,
     pub strength: Option<cigarscript::features::Strength>,
+    /// `--stage`: `None` makes the default stage (`DEFAULT_STAGE`).
+    pub stage: Option<Stage>,
+    /// `-O`: the level the bytecode is lowered at, recorded as `opt`.
+    pub opt: u8,
+    /// `--args direct`: every argument is the program's, as a script's
+    /// `pack { own_flags: true }` says.
+    pub args_direct: bool,
+}
+
+impl Default for Options {
+    fn default() -> Options {
+        Options {
+            sbom: false,
+            strength: None,
+            stage: None,
+            opt: 1,
+            args_direct: false,
+        }
+    }
+}
+
+/// Why a script cannot be a stage `b` program: the first thing that
+/// stopped its lowering, and where, when it has a place in the script.
+#[derive(Clone, Debug)]
+pub struct NotB {
+    pub what: String,
+    pub span: Option<Span>,
+}
+
+impl NotB {
+    /// `file:line:col: what`, or `file: what`.
+    pub fn said(&self, file: &str) -> String {
+        match self.span {
+            Some(s) => format!("{file}:{}:{}: {}", s.line, s.col, self.what),
+            None => format!("{file}: {}", self.what),
+        }
+    }
+}
+
+/// The bytecode a stage `b` program carries: the script lowered to CIR,
+/// through the passes of level `opt`, to bytecode, verified, and loaded by
+/// this cig's VM (its builtins, prelude names and burn-op kinds), with no
+/// instruction the VM lists as not built. `Err` names the first thing that
+/// stops it. The bytes are the module as `serialize_module` writes it.
+pub fn bytecode_of(source: &str, file: &str, opt: u8) -> Result<Vec<u8>, NotB> {
+    use cigcompile::bc::{compile, CompileError, Error};
+    use cigcompile::cir::LowerError;
+    use cigscript::cig_bytecode as bc;
+    let passes = cigcompile::cir::pass::level(opt);
+    let m = compile(source, file, &passes).map_err(|e| match e {
+        CompileError::Lower(LowerError::Diagnostic(d)) => NotB {
+            what: d.message,
+            span: d.span,
+        },
+        CompileError::Lower(LowerError::Internal(e)) => NotB {
+            what: format!("the lowering to IR failed ({e}), a cigcompile bug"),
+            span: None,
+        },
+        CompileError::Verify(e) => NotB {
+            what: format!(
+                "the IR broke a rule after {} ({}), a cigcompile bug",
+                e.pass,
+                e.errors
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+            span: None,
+        },
+        CompileError::Bytecode(Error::Refused { construct, span }) => NotB {
+            what: format!("{construct} is not lowered to bytecode"),
+            span: Some(span),
+        },
+        CompileError::Bytecode(Error::Limit { what, span }) => NotB {
+            what,
+            span: Some(span),
+        },
+        CompileError::Bytecode(Error::Internal(e)) => NotB {
+            what: format!("{e}, a cigcompile bug"),
+            span: None,
+        },
+    })?;
+    if let Some(n) = not_built(&m.main) {
+        return Err(n);
+    }
+    let verified = bc::verify_module(&m).map_err(|e| NotB {
+        what: format!("the bytecode does not verify: {e}, a cigcompile bug"),
+        span: None,
+    })?;
+    cigscript::vm::load(verified).map_err(|d| NotB {
+        what: format!("this cig's VM does not load it: {}", d.message),
+        span: d.span,
+    })?;
+    Ok(bc::serialize_module(&m))
+}
+
+/// The first instruction, in pre-order, that this cig's VM lists as not
+/// built (`vm::NOT_BUILT`), with its line from the function's line table.
+fn not_built(f: &cigscript::cig_bytecode::Function) -> Option<NotB> {
+    use cigscript::cig_bytecode::decode;
+    let mut pc = 0u32;
+    while (pc as usize) < f.instrs.len() {
+        let Ok(d) = decode(&f.instrs, pc) else {
+            break;
+        };
+        if cigscript::vm::NOT_BUILT.contains(&d.op) {
+            let row = f.lines.iter().take_while(|r| r.pc <= pc).last();
+            let span =
+                row.map(|r| Span::new(0, 0, f.span_base.line.saturating_add(r.line_off), r.col));
+            return Some(NotB {
+                what: format!(
+                    "it needs the instruction `{:?}`, which this cig's VM does not run",
+                    d.op
+                ),
+                span,
+            });
+        }
+        pc = d.pc + d.width;
+    }
+    f.children.iter().find_map(not_built)
+}
+
+/// The stage a build makes and, at stage `b`, its bytecode; with the note
+/// a build says when it makes stage `a` of a script it was not told to.
+pub struct Staged {
+    pub stage: Stage,
+    pub bytecode: Option<Vec<u8>>,
+    pub note: Option<String>,
+}
+
+/// The stage a build makes without `--stage`: `a` until stage `b` passes
+/// its speed gates (cig-compile#31), so a build with no flag never makes a
+/// slower program. Set to `B`, a build with no flag makes stage `b` when
+/// the script lowers and stage `a`, with a note naming why, when it does
+/// not.
+pub const DEFAULT_STAGE: Stage = Stage::A;
+
+/// The stage of one script. `--stage a` never lowers; `--stage b` on a
+/// script that does not lower is `E1010`, said here; no flag makes
+/// [`DEFAULT_STAGE`].
+pub fn stage_of(ctx: &Ctx, job: &Job, source: &str, opts: &Options) -> Result<Staged, i32> {
+    let asked = opts.stage.or(match DEFAULT_STAGE {
+        Stage::A => Some(Stage::A),
+        Stage::B => None,
+    });
+    if asked == Some(Stage::A) {
+        return Ok(Staged {
+            stage: Stage::A,
+            bytecode: None,
+            note: None,
+        });
+    }
+    match bytecode_of(source, &recorded_file(job), opts.opt) {
+        Ok(b) => Ok(Staged {
+            stage: Stage::B,
+            bytecode: Some(b),
+            note: None,
+        }),
+        Err(n) if opts.stage == Some(Stage::B) => {
+            let mut d = usage(format!(
+                "{} cannot be a stage b program: {}",
+                job.file, n.what
+            ))
+            .code("E1010")
+            .with_hint("build it without --stage b (a stage a program runs the same script on the tree-walker), or rewrite what the message names");
+            if let Some(s) = n.span {
+                d = d.at(s);
+            }
+            cigscript::cli::report(ctx, &d, Some(&job.file), Some(source));
+            Err(exit::USAGE)
+        }
+        Err(n) => Ok(Staged {
+            stage: Stage::A,
+            bytecode: None,
+            note: Some(format!(
+                "note: {} is a stage a program: {}\n",
+                job.file,
+                n.said(&job.file)
+            )),
+        }),
+    }
+}
+
+/// Whether every argument is the program's: the script's `pack` says
+/// `own_flags: true`, or the build says `--args direct`.
+pub fn own_flags(source: &str, opts: &Options) -> bool {
+    opts.args_direct
+        || cigscript::syntax::parse(source)
+            .map(|p| p.own_flags())
+            .unwrap_or(false)
 }
 
 /// A `.cigar` script, checked at its strength by `cigar`'s own checker and
@@ -198,15 +400,44 @@ pub fn recorded_file(job: &Job) -> String {
         .unwrap_or_else(|| job.file.clone())
 }
 
-/// The program's bytes: the runtime with the checked script appended.
-pub fn program_bytes(job: &Job, source: &str, runtime: &Runtime) -> std::io::Result<Vec<u8>> {
-    let p = Program::new(
+/// What a program is made of, beside its runtime: format 2's record keys
+/// and its sections after `source`.
+pub struct Made<'a> {
+    pub staged: &'a Staged,
+    pub opt: u8,
+    pub target: &'a str,
+    pub own_flags: bool,
+}
+
+/// The program's bytes: the runtime with the checked script appended in
+/// format 2, its record's `stage`, `opt`, `target` and `own_flags` filled,
+/// and at stage `b` the `bytecode` section beside `source`.
+pub fn program_bytes(
+    job: &Job,
+    source: &str,
+    runtime: &Runtime,
+    made: &Made,
+) -> std::io::Result<Vec<u8>> {
+    let mut b = program::Build::new(
         &job.name,
         &recorded_file(job),
         source,
         &format!("cigcompile {}", env!("CARGO_PKG_VERSION")),
+        made.target,
     );
-    Ok(program::append(runtime.bytes()?, &p))
+    b.stage = made.staged.stage;
+    b.opt = made.opt.to_string();
+    b.own_flags = made.own_flags;
+    if let Some(code) = &made.staged.bytecode {
+        b.sections.push(Section {
+            id: "bytecode".to_string(),
+            version: cigscript::cig_bytecode::FORMAT_VERSION,
+            encoding: program::Encoding::Stored,
+            required: true,
+            bytes: code.clone(),
+        });
+    }
+    program::append2(runtime.bytes()?, &b).map_err(std::io::Error::other)
 }
 
 /// Build every job; the first failure stops the build (a later script is
@@ -298,6 +529,13 @@ pub fn build(
             &recorded_file(job),
             &job.name,
             &hex::encode(Sha256::digest(source.as_bytes())),
+            opts.stage.map_or("auto", Stage::as_str),
+            &opts.opt.to_string(),
+            if opts.args_direct {
+                "args-direct"
+            } else {
+                "args"
+            },
         ]);
         // Where the program (and the SBOM) is written. With staging, a
         // path in the staging folder beside `job.out`; without, `job.out`
@@ -324,6 +562,7 @@ pub fn build(
                         .map(|i| i.len)
                         .unwrap_or(0),
                     written: false,
+                    stage: stage_at(&job.out),
                 };
                 if sbom {
                     if let Err(e) =
@@ -344,7 +583,7 @@ pub fn build(
                 continue;
             }
         }
-        let warnings =
+        let mut warnings =
             phase(&job.file, "check", || check(ctx, job, &source)).inspect_err(|_| {
                 progress(serde_json::json!({"event": "failed", "script": job.file}));
             })?;
@@ -354,6 +593,22 @@ pub fn build(
             cigscript::cli::report(ctx, &d, None, None);
             return Err(exit::USAGE);
         }
+        let staged = phase(&job.file, "bytecode", || stage_of(ctx, job, &source, &opts))
+            .inspect_err(|_| {
+                progress(serde_json::json!({"event": "failed", "script": job.file}));
+            })?;
+        if let Some(note) = &staged.note {
+            // Kept with the warnings, so a build that changes nothing
+            // says it again.
+            say_warnings(ctx, std::slice::from_ref(note));
+            warnings.push(note.clone());
+        }
+        let made = Made {
+            staged: &staged,
+            opt: opts.opt,
+            target: &crate::runtime::triple_of(target, runtime),
+            own_flags: own_flags(&source, &opts),
+        };
         let cannot_write = |e: std::io::Error, what: &str| {
             let d = usage(format!("cannot {what}: {e}"))
                 .code("E1004")
@@ -367,7 +622,7 @@ pub fn build(
             cannot_write(e, &format!("read the runtime {}", runtime.path.display()))
         })?;
         let bytes = phase(&job.file, "assemble", || {
-            program_bytes(job, &source, runtime)
+            program_bytes(job, &source, runtime, &made)
         })
         .map_err(|e| cannot_write(e, &format!("read the runtime {}", runtime.path.display())))?;
         let sha256 = phase(&job.file, "hash", || hex::encode(Sha256::digest(&bytes)));
@@ -391,6 +646,7 @@ pub fn build(
             sha256,
             bytes: bytes.len() as u64,
             written,
+            stage: Some(staged.stage),
         };
         say(ctx, &built, target, runtime);
         out.push(built);
@@ -413,6 +669,7 @@ fn say(ctx: &Ctx, b: &Built, target: &Target, runtime: &Runtime) {
                 "bytes": b.bytes,
                 "sha256": b.sha256,
                 "written": b.written,
+                "stage": b.stage.map(Stage::as_str),
             })
         );
         return;
@@ -420,11 +677,12 @@ fn say(ctx: &Ctx, b: &Built, target: &Target, runtime: &Runtime) {
     let size = format!("{:.1} MB", b.bytes as f64 / 1_000_000.0);
     if b.written {
         println!(
-            "compiled {} -> {} ({size}, cig {} for {})",
+            "compiled {} -> {} ({size}, cig {} for {}, stage {})",
             b.job.file,
             b.job.out.display(),
             runtime.version,
-            crate::runtime::label(target, runtime)
+            crate::runtime::label(target, runtime),
+            b.stage.map_or("?", Stage::as_str)
         );
     } else {
         println!("up to date: {} ({size})", b.job.out.display());

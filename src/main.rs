@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
 // SPDX-License-Identifier: FSL-1.1-ALv2
 //! cigcompile: CigScript scripts as programs that run with nothing
-//! installed. Stage A (#2): a program is the `cig` of the version this
-//! compiler pins, with the checked script appended; it runs through the
-//! same run as `cig run` (CigScript's docs/PROGRAMS.md).
+//! installed. A program is the `cig` of the version this compiler pins,
+//! with the checked script appended in payload format 2: at stage `b` with
+//! the bytecode it lowers to (#31), which cig's VM runs, at stage `a` the
+//! script alone, on the tree-walker. Either runs through the same run as
+//! `cig run` (CigScript's docs/PROGRAMS.md).
 
 mod audit;
 mod bench;
@@ -251,22 +253,21 @@ struct BuildArgs {
     /// Check only: write nothing, need no runtime.
     #[arg(long)]
     check: bool,
-    /// `cir`: print the verified IR (#3) instead of a program, shaped by `-O`/`--passes`. `cir-opt`: the same IR, said in words: after the passes (at stage A, equivalent to `cir` at the chosen level; stage B may split them). `bc`: the bytecode that IR lowers to (#31), verified and disassembled (a cigcompile built with the `vm` feature only). `oci`: the program, and beside it an OCI image of it (`<program>.oci.tar`, a scratch image of one file; Linux targets). `deb`: the program, and beside it a `.deb` that installs it to `/usr/bin/<name>` (Linux targets; `--pkg-version`, `--pkg-maintainer`, `--pkg-description` shape the control file).
-    #[cfg_attr(
-        feature = "vm",
-        arg(long, value_name = "WHAT", value_parser = ["cir", "cir-opt", "bc", "oci", "deb"])
-    )]
-    #[cfg_attr(
-        not(feature = "vm"),
-        arg(long, value_name = "WHAT", value_parser = ["cir", "cir-opt", "oci", "deb"])
-    )]
+    /// `cir`: print the verified IR (#3) instead of a program, shaped by `-O`/`--passes`. `cir-opt`: the same IR, said in words: after the passes (at stage A, equivalent to `cir` at the chosen level; stage B may split them). `bc`: the bytecode that IR lowers to (#31), verified and disassembled: what a stage b program carries. `oci`: the program, and beside it an OCI image of it (`<program>.oci.tar`, a scratch image of one file; Linux targets). `deb`: the program, and beside it a `.deb` that installs it to `/usr/bin/<name>` (Linux targets; `--pkg-version`, `--pkg-maintainer`, `--pkg-description` shape the control file).
+    #[arg(long, value_name = "WHAT", value_parser = ["cir", "cir-opt", "bc", "oci", "deb"])]
     emit: Option<String>,
-    /// The optimisation level: 0 (lowering only), 1 or 2 (every pass there is). Stage A programs carry the script, so the level shapes `--emit` until stage B.
+    /// The optimisation level: 0 (lowering only), 1 or 2 (every pass there is), default 1. A stage b program's bytecode is lowered at it, and every program records it.
     #[arg(short = 'O', value_name = "LEVEL", value_parser = ["0", "1", "2"], conflicts_with = "passes")]
     opt: Option<String>,
-    /// Run exactly these passes, in this order, for bisecting: a comma list of fold-consts, copy-prop, sccp, dead-pure.
+    /// Run exactly these passes, in this order, for bisecting: a comma list of fold-consts, copy-prop, sccp, dead-pure. They shape --emit and --remarks; a program is lowered at -O's level.
     #[arg(long, value_name = "A,B", value_delimiter = ',')]
     passes: Option<Vec<String>>,
+    /// `b`: the program runs its bytecode on cig's VM, and a script that does not lower is refused (E1010). `a` (the default, until stage b passes its speed gates): it runs its script on the tree-walker.
+    #[arg(long, value_name = "a|b", value_parser = ["a", "b"])]
+    stage: Option<String>,
+    /// `direct`: every argument on the program's command line is its script's, flags included, and the program takes no run flags (as a script's `pack { own_flags: true }` says).
+    #[arg(long, value_name = "direct", value_parser = ["direct"])]
+    args: Option<String>,
     /// With --emit: after the IR, what each pass changed, as a unified diff of the printed IR.
     #[arg(long, requires = "emit")]
     passes_diff: bool,
@@ -633,7 +634,6 @@ fn build_cmd(
         emit_cir(ctx, &jobs, &passes, a.passes_diff, a.remarks, strength)?;
         return Ok(None);
     }
-    #[cfg(feature = "vm")]
     if a.emit.as_deref() == Some("bc") {
         emit_bc(ctx, &jobs, &passes, strength)?;
         return Ok(None);
@@ -691,7 +691,7 @@ fn build_cmd(
             &mut index,
             build::Options {
                 sbom: false,
-                strength,
+                ..options_of(a, strength)
             },
             None,
         )
@@ -751,7 +751,7 @@ fn build_cmd(
         &mut index,
         build::Options {
             sbom: a.sbom,
-            strength,
+            ..options_of(a, strength)
         },
         stage_to,
     );
@@ -1272,6 +1272,26 @@ fn strength_of(
     }
 }
 
+/// What a build is told: its strength, stage, level and `--args`.
+fn options_of(a: &BuildArgs, strength: Option<cigarscript::features::Strength>) -> build::Options {
+    build::Options {
+        sbom: a.sbom,
+        strength,
+        stage: match a.stage.as_deref() {
+            Some("a") => Some(cigscript::program::Stage::A),
+            Some("b") => Some(cigscript::program::Stage::B),
+            _ => None,
+        },
+        opt: level_of(a),
+        args_direct: a.args.as_deref() == Some("direct"),
+    }
+}
+
+/// `-O`'s level, 1 when it is not given.
+fn level_of(a: &BuildArgs) -> u8 {
+    a.opt.as_deref().unwrap_or("1").parse::<u8>().unwrap_or(1)
+}
+
 fn passes_of(
     a: &BuildArgs,
 ) -> Result<Vec<&'static dyn cigcompile::cir::pass::Pass>, cigscript::diagnostics::Diagnostic> {
@@ -1291,8 +1311,7 @@ fn passes_of(
         }
         return Ok(out);
     }
-    let level = a.opt.as_deref().unwrap_or("1").parse::<u8>().unwrap_or(1);
-    Ok(pass::level(level))
+    Ok(pass::level(level_of(a)))
 }
 
 /// `--emit=cir` (or `--emit=cir-opt`): each script's IR, lowered, through
@@ -1363,7 +1382,6 @@ fn emit_cir(
 /// register bytecode (#31), verified and disassembled. A construct the
 /// lowering does not cover yet is said with its position; a module that
 /// does not verify is the compiler's bug.
-#[cfg(feature = "vm")]
 fn emit_bc(
     ctx: &Ctx,
     jobs: &[project::Job],
@@ -1511,7 +1529,7 @@ fn clean(ctx: &Ctx, a: &CleanArgs) -> i32 {
         let Some(program) = std::fs::File::open(&job.out)
             .ok()
             .and_then(|mut f| cigscript::program::read(&mut f).ok().flatten())
-            .filter(|p| p.file == build::recorded_file(job))
+            .filter(|p| p.file() == build::recorded_file(job))
         else {
             continue;
         };
@@ -1522,7 +1540,7 @@ fn clean(ctx: &Ctx, a: &CleanArgs) -> i32 {
         if !ours && !a.force {
             let why = format!(
                 "a program, but not one this cigcompile wrote there (compiled from {}, sha256 {}...)",
-                program.file,
+                program.file(),
                 &sha256[..sha256.len().min(12)]
             );
             if ctx.json {
