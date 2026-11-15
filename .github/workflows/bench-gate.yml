@@ -4,9 +4,9 @@ name: bench-gate
 # the pull request's, round by round (main, pull request, main, pull request,
 # ...), so a runner that drifts drifts under both; the rounds are pooled and
 # `bench --against` decides: a non-noisy benchmark more than 5% slower, the
-# set's geometric mean more than 2% slower, or peak memory or allocations more
-# than 10% over main's, each by a Mann-Whitney test of the samples. The heavy
-# suites, the references and the trend are nightly (bench.yml).
+# set's geometric mean more than 2% slower, each by a Mann-Whitney test of the
+# samples, or what a benchmark touched or its allocations more than 10% over
+# main's. The heavy suites, the references and the trend are nightly (bench.yml).
 on:
   pull_request:
     branches: [main]
