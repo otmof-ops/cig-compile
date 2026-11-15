@@ -113,7 +113,7 @@ string printable (the format 1 rules for `name`, `file`, `compiler` and `cig` ca
 | `opt` | string | the level it was built at: `"0"`, `"1"`, `"2"` (later `"3"`, `"s"`, #33) | #31, #40 |
 | `target` | string | the target triple, at most 64 characters | #40 |
 | `runtime_sha256` | hex | sha256 of the bytes before `P`: the runtime as it was appended to, which for a release asset is the asset's published sha256 | #40 |
-| `own_flags` | `true` | present only when set: every argument is the program's, and the run flags come from `CIG_RUN_FLAGS` | #8 |
+| `own_flags` | `true` | present only when set: every argument is the program's, and the program takes no run flags (amendment 1) | #8 |
 
 Readers ignore record keys they do not know, so a later optional key (a program's own step
 budget, for one) does not need a format bump. A key that changes how a program runs is safe to
@@ -181,13 +181,14 @@ bytes, encoding, sha256) beside the record.
    (`E1051`).
 3. Check the table's rules and the stage's required sections (`E1050`).
 4. Read the command line: the run flags first, or, with `own_flags`, every argument the
-   program's and the run flags from `CIG_RUN_FLAGS`. `--help`, `--explain` and `--cig-program`
+   program's and no run flags (amendment 1). `--help`, `--explain` and `--cig-program`
    answer here and read no body.
-5. Without `--interp`: read the `bytecode` body, `parse_module` (its magic, version and BLAKE3),
-   `verify_module`, `vm::load` (builtins, prelude names, burn-op kinds), then run through the
-   same kernel entry as the tree-walker. Any failure in this step is `E1050` with the rule and
+5. Without `--interp`: read the `bytecode` body, check the module's magic, version and BLAKE3,
+   read its directory, then run through the same kernel entry as the tree-walker; a function
+   is verified and loaded when the run first enters it, the top level before the first
+   instruction (amendment 3). Any failure in this step is `E1050` with the rule and
    `fn<i>+<pc>`, as `docs/BYTECODE.md` words it.
-6. With `--interp` (a run flag, and a word in `CIG_RUN_FLAGS`): read the `source` body, check its
+6. With `--interp` (a run flag, so never an own-flags program's): read the `source` body, check its
    sha256 and the record's `sha256`, run it on the tree-walker. On a stage `a` program
    `--interp` changes nothing.
 
@@ -196,11 +197,10 @@ refuses with `E1050`; it never runs its source instead. A fallback would hide a 
 and change both its speed and what the differential compares. The source runs only when asked,
 with `--interp`.
 
-**Which stage a build makes.** With the VM available, a build makes stage `b` when the whole
-script lowers and verifies, and contains no instruction the pinned runtime's VM lists as not
-built; otherwise it makes stage `a` and says so in a note. `--stage b` refuses a script that
-cannot be stage `b` with a new cigcompile code (the next free one, `E1010`), naming the first
-construct the lowering does not cover. `--stage a` always makes stage `a`.
+**Which stage a build makes.** A build without `--stage` makes stage `a`, as `--stage a` does,
+until stage `b` passes #31's speed gates (amendment 2). `--stage b` makes stage `b` and refuses
+a script that does not lower, verify and load with a new cigcompile code (`E1010`), naming the
+first construct the lowering does not cover.
 
 **Errors while running.** A diagnostic quotes its line from the `source` body, which is read and
 hashed the first time a diagnostic needs it. If it does not match, the program's own error is
@@ -212,7 +212,7 @@ still reported, without the quoted line and with a note that the source section 
 | what | at build | at every start | when used | `cigcompile verify` |
 |---|---|---|---|---|
 | record and table | head sha256 written into the trailer | sha256 of at most 66 KiB: **constant in the script's size** | | checked, named `record` or `section table` |
-| `bytecode` | sha256 into the table; BLAKE3 in the module's own header | | BLAKE3 in `parse_module`, then verify and load (already linear in the module, within #31's 5 ms load budget for 12,500 lines) | sha256, parse and verify; with `--script`, re-lowered at the recorded `opt` and compared |
+| `bytecode` | sha256 into the table; BLAKE3 in the module's own header | | BLAKE3 over the module when the body is read; a function is verified and loaded at its first entry (amendment 3) | sha256, parse and verify of every function; with `--script`, re-lowered at the recorded `opt` and compared |
 | `source` | sha256 into the table; the text's sha256 into the record | | sha256 when decoded (stage `a`, `--interp`, a quoted error, `--chains`) | sha256, and against `--script` |
 | `tree`, `snap` | sha256 into the table; validated by the writer | | validated before use | sha256 and full validation |
 | `sbom` | sha256 into the table | | sha256 on `--cig-program --sbom` | sha256 |
@@ -262,11 +262,11 @@ cigcompile after it repins.
 |---|---|---|---|---|
 | 0 | cig-compile | this record | yes | none |
 | 1 | cig-script | the container: reader for both formats, the format 2 writer with the `source` body, the record's keys (`stage`, `opt`, `target`, `runtime_sha256`, `own_flags`), the table rules, `CIG_VALIDATE`, `--cig-program` listing sections, `PROGRAMS.md`, the registry (`E1050` text, `E1010`) | it lands on main and ships in the next release | `archive_tamper_refused` (on `source` and a test-only section), plus `format_1_programs_still_run`, `an_unknown_required_section_is_refused`, `an_unknown_optional_section_is_skipped`, `the_head_is_all_a_start_hashes`, `the_same_inputs_give_the_same_bytes` |
-| 2 | cig-script | own flags (#8): `pack { own_flags: true }`, the record key, `CIG_RUN_FLAGS` | same release as step 1 | `a_program_with_own_flags_gets_every_argument`, `run_flags_come_from_the_environment`, `an_old_program_keeps_its_bytes` (a format 1 fixture still runs) |
+| 2 | cig-script | own flags (#8): `pack { own_flags: true }`, the record key; no run flags for such a program (amendment 1) | same release as step 1 | `a_program_with_own_flags_gets_every_argument`, `an_old_program_keeps_its_bytes` (a format 1 fixture still runs) |
 | 3 | cig-script | the SBOM's runtime half (#40): the crate list in the runtime's bytes, `--cig-program --sbom` | same release if ready, else the next; the container needs no change | `the_sbom_lists_the_runtime_crates`, the 20 KB budget |
 | 4 | cig-script | stage `b` at run time (#31): the `bytecode` body, the start in 4, `--interp` | in the release that carries the VM; the container already reserves the section | `a_program_with_damaged_bytecode_is_e1050`, `interp_fallback_gives_the_same_bytes` |
 | 5 | cig-compile | after the repin: the writer fills `stage`, `opt`, `target`, `runtime_sha256` and `own_flags` (`--args direct` is the build-side name for the same bit); the `sbom` section from `sbom.rs`, the sidecar as that document plus the program's own sha256; `verify` by section | no: it needs the release with steps 1 to 3 | `verify_detects_a_changed_byte` (runtime, record, table, each section, trailer), `args_direct`, `the_sbom_lists_the_runtime_crates` |
-| 6 | cig-compile | after the repin to the VM release: `vm` on by default, `--stage a\|b`, the `bytecode` body at the recorded `opt` | no: it needs the release with step 4 | `differential_stage_b_is_identical`, `the_step_budget_stops_on_the_same_line`, `the_budget_table_holds` |
+| 6 | cig-compile | after the repin to the VM release: the lowering always built (the `vm` feature goes), `--stage a\|b` with `a` the default (amendment 2), the `bytecode` body at the recorded `opt` | no: it needs the release with step 4 | `differential_stage_b_is_identical`, `the_step_budget_stops_on_the_same_line`, `the_budget_table_holds` |
 | 7 | both | `tree` and `snap` (#71, after cig-script#185's archive) | in a later release; additive, no format change | `programs_start_without_parsing`, `startup_flat_in_script_size`, `archive_tamper_refused` (on `tree`), `same_archive_as_cig`, `snapshot_restores_constants`, `impure_top_level_runs_live` |
 
 Steps 1 and 2 touch the same two files (`src/program.rs`, `src/cli/compiled.rs`; step 2 the
@@ -314,3 +314,31 @@ depends on an unreleased cig.
    A start never hashes a large body with it, so BLAKE3's speed does not decide it.
 5. **The SBOM is in every program** (about 5 KB deflated), as #40 asks; `build --sbom` still
    writes the sidecar.
+
+## Amendments
+
+Made on 2026-11-13, while the parts were built (otmof-ops/cig-script#229, #231, #233 and #234,
+and the cigcompile change that carries this text). The sections above are edited to say what
+was built; each amendment says what the record first decided and why it changed.
+
+1. **An own-flags program takes no run flags, and there is no `CIG_RUN_FLAGS`.** The record
+   first gave such a program its run flags from that environment variable. A variable would
+   let whatever sets a program's environment turn its run into a dry run, a help page or the
+   undoing of an earlier run, and a program that stands in for a tool is started from
+   environments its author does not control. So every argument is the script's and nothing
+   outside the command line changes how the program runs. What the run flags do stays
+   available from outside the program: `cig runs`, `cig unburn <run>`, `cig run <script>` with
+   every flag, and `cigcompile verify` for what the program is made of.
+2. **A build without `--stage` makes stage `a`.** The record first made stage `b` the default
+   wherever a script lowers. Stage `b` is correct (the differential suite holds both stages to
+   the interpreter, at every step budget) but not yet faster than stage `a` on every program,
+   so a build asks for it by name until it passes #31's speed gates; the default then moves
+   in one line (`DEFAULT_STAGE`).
+3. **The module's file layout is version 2, and a function is verified and loaded at its first
+   entry.** The record first verified and loaded the whole module at every start, which for a
+   20,000-line script was most of the start. A start now checks the module's BLAKE3 (every
+   byte after its header), reads the function directory, and verifies and loads the top level;
+   every other function at its first call. Nothing runs unverified, a damaged byte anywhere in
+   the module is still refused before the first instruction, and `cigcompile verify` and
+   `CIG_VALIDATE=1` still check every function. The table's sha256 of the `bytecode` section
+   is no longer checked at a start, as section 5 always said.

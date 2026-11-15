@@ -182,20 +182,35 @@ fn the_nesting_ceiling_is_a_refusal_not_a_crash() {
 
 #[test]
 fn a_programs_trailer_holds_on_any_bytes() {
+    use cigscript::program;
     let mut r = Rng(42);
-    let good = cigscript::program::append(
+    let one = program::append(
         b"runtime",
-        &cigscript::program::Program::new("p", "p.cig", "exhale 1\n", "t"),
+        &program::Program::new("p", "p.cig", "exhale 1\n", "t"),
     );
-    for _ in 0..2_000 {
-        let mut b = good.clone();
-        for _ in 0..1 + r.below(3) {
-            let at = r.below(b.len());
-            b[at] = r.next() as u8;
+    // Format 2 at stage b: a record, `source` and `bytecode`, a table.
+    let module = cigcompile::bc::compile("exhale 1\n", "p.cig", &[]).expect("hello lowers");
+    let mut b2 = program::Build::new("p", "p.cig", "exhale 1\n", "t", "x86_64-unknown-linux-gnu");
+    b2.stage = program::Stage::B;
+    b2.sections.push(program::Section {
+        id: "bytecode".into(),
+        version: cigscript::cig_bytecode::FORMAT_VERSION,
+        encoding: program::Encoding::Stored,
+        required: true,
+        bytes: cigscript::cig_bytecode::serialize_module(&module),
+    });
+    let two = program::append2(b"runtime", &b2).expect("a format 2 program");
+    for good in [one, two] {
+        for _ in 0..2_000 {
+            let mut b = good.clone();
+            for _ in 0..1 + r.below(3) {
+                let at = r.below(b.len());
+                b[at] = r.next() as u8;
+            }
+            if r.below(4) == 0 {
+                b.truncate(r.below(b.len()));
+            }
+            hold("program", &b, fuzz::program);
         }
-        if r.below(4) == 0 {
-            b.truncate(r.below(b.len()));
-        }
-        hold("program", &b, fuzz::program);
     }
 }

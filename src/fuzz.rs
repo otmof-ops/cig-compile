@@ -72,7 +72,11 @@ pub fn lower(data: &[u8]) {
 }
 
 /// Any bytes as the end of a program's binary: a program, none, or a
-/// refusal (E1050), never a panic.
+/// refusal (E1050), never a panic; and for a program that reads, each of
+/// its sections read, checked and decoded, as `cigcompile verify` does.
 pub fn program(data: &[u8]) {
-    let _ = cigscript::program::read(&mut std::io::Cursor::new(data));
+    let mut c = std::io::Cursor::new(data);
+    if let Ok(Some(p)) = cigscript::program::read(&mut c) {
+        let _ = p.validate(&mut c);
+    }
 }

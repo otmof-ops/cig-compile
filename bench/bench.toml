@@ -28,7 +28,7 @@
 #
 # The set is cig's `bench/compute`, copied by set.sh after every file's sha256
 # is held to set.sha256 (the pinned cig's own); it is not kept here. Timings are
-# reported, never gated (DECISIONS 1); #14's budgets stay in `cigcompile bench
+# reported, never gated; #14's budgets stay in `cigcompile bench
 # --budgets`.
 #
 # Not here yet:

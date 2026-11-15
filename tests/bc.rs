@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 //! Stage B's lowering (#31), first part: CIR to the register bytecode,
 //! verified, loaded and run in the cig runtime's VM, and held to the
-//! tree-walker. Built only with the `vm` feature, against a cigscript
-//! whose runtime carries the VM.
-#![cfg(feature = "vm")]
+//! tree-walker.
 
 #[path = "differential/gen.rs"]
 #[allow(dead_code)]
@@ -1639,10 +1637,13 @@ fn burns_agree(template: &str, names: &[&str], max_steps: u64) -> (Left, Left) {
         .iter()
         .map(|n| dir.path().join(n).to_string_lossy().into_owned())
         .collect();
-    let mut src = template.to_string();
-    for (k, p) in paths.iter().enumerate().rev() {
-        src = src.replace(&format!("P{k}"), &format!("{p:?}"));
-    }
+    // One pass over the template: a temporary path may itself hold `P1`.
+    let src = regex::Regex::new(r"P(\d+)")
+        .expect("a literal pattern")
+        .replace_all(template, |c: &regex::Captures| {
+            format!("{:?}", paths[c[1].parse::<usize>().expect("digits")])
+        })
+        .into_owned();
     let program = cigscript::syntax::parse(&src).expect("parses");
     let modules: Vec<(u8, Module)> = [0, 1].into_iter().map(|l| (l, compile(&src, l))).collect();
     let mut runs = Vec::new();
@@ -2560,4 +2561,629 @@ fn the_lowering_writes_the_tight_forms() {
         assert!(!t.contains("nej"), "-O{level}: too far for nej:\n{t}");
         assert!(t.contains("eqj"), "-O{level}: `a != 1` near:\n{t}");
     }
+}
+
+// ----- index operations: one instruction, its positions in trailing `nop`s -----
+
+/// Index reads and stores of every kind of object with every kind of
+/// index, as plain statements, in a `try`, in a loop, as an argument, as
+/// an operand and nested, out of range and with a missing key; plain and
+/// compound stores; the operands in `roll`s, so -O1 keeps them as values,
+/// and in `stick`s, so -O1 forwards them as constants.
+fn index_corpus() -> Vec<(String, String)> {
+    let objects = [
+        ("list", "[10, 20]"),
+        ("string", "\"ab\""),
+        ("map", "{a: 1, b: 2}"),
+        ("null", "null"),
+        ("int", "5"),
+        ("bool", "true"),
+        ("function", "pack(x) => x"),
+    ];
+    let indexes = [
+        ("int", "0"),
+        ("negative", "-1"),
+        ("past-end", "5"),
+        ("float", "1.5"),
+        ("string", "\"a\""),
+        ("missing-key", "\"zz\""),
+        ("bool", "false"),
+        ("null", "null"),
+        ("list", "[0]"),
+    ];
+    let shapes = [
+        ("read", "exhale o[k]\n"),
+        ("read-spaced", "exhale 1 ==   o[ k ]\n"),
+        ("read-arg", "exhale str(o[k]), 1\n"),
+        ("read-operand", "roll t = o[k] == 2\nexhale t\n"),
+        (
+            "read-try",
+            "try {\n  exhale o[k]\n} ashtray e {\n  exhale e.message, e.line\n}\nexhale \"after\"\n",
+        ),
+        (
+            "read-loop",
+            "for i in 0..2 {\n  exhale i, o[k]\n}\n",
+        ),
+        ("read-nested", "roll ks = [k]\nexhale o[ks[0]]\n"),
+        ("read-nested-outer", "roll w = [o]\nexhale w[0][k]\n"),
+        ("store", "o[k] = 7\nexhale o\n"),
+        ("store-spaced", "o  [  k ] = 7\nexhale o\n"),
+        (
+            "store-try",
+            "try {\n  o[k] = 7\n} ashtray e {\n  exhale e.message, e.line\n}\nexhale o\n",
+        ),
+        ("store-loop", "for i in 0..2 {\n  o[k] = i\n}\nexhale o\n"),
+        ("store-nested", "roll w = [o]\nw[0][k] = 7\nexhale w\n"),
+        ("store-index-of-index", "roll ks = [k]\no[ks[0]] = 7\nexhale o\n"),
+        ("compound", "o[k] += 1\nexhale o\n"),
+        ("compound-nested", "roll w = [o]\nw[0][k] *= 2\nexhale w\n"),
+    ];
+    let mut c = Vec::new();
+    for (on, o) in objects {
+        for (kn, k) in indexes {
+            for (sn, s) in shapes {
+                for decl in ["roll", "stick"] {
+                    c.push((
+                        format!("{on}[{kn}] {sn} {decl}"),
+                        format!("{decl} o = {o}\n{decl} k = {k}\n{s}"),
+                    ));
+                }
+            }
+        }
+    }
+    c
+}
+
+/// Every index program at -O0 and -O1 runs as the tree-walker does, with
+/// no budget and with every step budget from 1 to one past its total:
+/// the value, or the error's code, message, hint, line and column.
+#[test]
+fn an_index_error_is_raised_where_the_tree_walker_raises_it() {
+    big_stack(|| {
+        let (mut runs, mut errors) = (0, 0);
+        for (name, src) in index_corpus() {
+            let (want, total) = tree_walker(&src, 0);
+            errors += usize::from(want.end.is_some());
+            for level in [0, 1] {
+                let m = compile(&src, level);
+                for max in std::iter::once(0).chain(1..=total + 1) {
+                    let (want, want_steps) = tree_walker(&src, max);
+                    let (got, got_steps) = vm(&m, max);
+                    assert_eq!(got, want, "{name} -O{level} --max-steps {max}:\n{src}");
+                    assert_eq!(got_steps, want_steps, "{name} -O{level} --max-steps {max}");
+                    runs += 1;
+                }
+            }
+        }
+        println!(
+            "{runs} runs agree ({} programs, {errors} of them stop on an error)",
+            index_corpus().len()
+        );
+    });
+}
+
+/// An index read is one `getindex` and a `nop`, a plain store one
+/// `setindex` and two `nop`s, with no `type_of`; the `nop`s carry the
+/// index's and the object's positions. A compound store keeps its checks.
+#[test]
+fn an_index_is_one_instruction_and_its_positions() {
+    for level in [0, 1] {
+        let m = compile(
+            "roll xs = [1, 2]\nroll i = 1\nroll v = xs[i]\nxs [ i] = v\nexhale xs\n",
+            level,
+        );
+        let t = bc::disassemble(&m);
+        assert!(!t.contains("callb"), "-O{level}:\n{t}");
+        assert!(!t.contains("eqk"), "-O{level}:\n{t}");
+        let ops: Vec<&str> = t
+            .lines()
+            .filter_map(|l| l.split_whitespace().nth(1))
+            .collect();
+        let at = |op: &str| ops.iter().position(|o| *o == op).expect(op);
+        let (g, s) = (at("getindex"), at("setindex"));
+        assert_eq!(ops[g + 1], "nop", "-O{level}:\n{t}");
+        assert_ne!(ops[g + 2], "nop", "-O{level}:\n{t}");
+        assert_eq!(&ops[s + 1..s + 3], ["nop", "nop"], "-O{level}:\n{t}");
+        // The rows: the read at 3:10, its index at 3:13; the store at
+        // 4:1, its index at 4:6, its object at 4:1.
+        let lines = t.lines().find(|l| l.starts_with("; fn 0 lines:")).unwrap();
+        for row in ["@3:10", "@3:13", "@4:6"] {
+            assert!(lines.contains(row), "-O{level} {row}: {lines}");
+        }
+        let t = bc::disassemble(&compile("roll xs = [1]\nxs[0] += 1\n", level));
+        assert!(
+            t.contains("callb"),
+            "-O{level}: a compound keeps its checks:\n{t}"
+        );
+    }
+}
+
+// ----- call arguments made in their window --------------------------------------
+
+/// Calls whose arguments are made in their place in the window: by name,
+/// by value, to builtins and to methods; nested calls in a later
+/// argument, a value block between an argument and its call, arguments
+/// that fail (in a `try` and not), in loops and in recursion, a closure,
+/// a list, a map, an index, a member and an interpolation as arguments,
+/// a captured slot and a slot read with no copy beside them.
+fn window_corpus() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("by-name", "pull f(a, b) {\n  snuff a * 10 + b\n}\nroll x = 3\nexhale f(x + 1, x * 2), f(1, 2)\n"),
+        ("nested", "pull f(a, b) {\n  snuff a - b\n}\npull g(a, b, c) {\n  snuff a + b * c\n}\nroll x = 2\nexhale f(x + 1, g(x * 2, f(x - 1, 7), x + 5)), g(f(1, x), x, x + x)\n"),
+        ("value-block-between", "pull f(a, b, c) {\n  snuff [a, b, c]\n}\nroll n = null\nroll y = 4\nexhale f(y + 1, n ?? 9, y > 3 and y < 9), f(y - 1, y or 0, n?.k)\n"),
+        ("fails-in-try", "pull f(a, b) {\n  snuff a + b\n}\nroll z = 0\nroll s = \"x\"\ntry {\n  exhale f(1 / z, 2)\n} ashtray e {\n  exhale e.message, e.line\n}\ntry {\n  exhale f(2, s - 1)\n} ashtray e {\n  exhale e.message, e.line\n}\nexhale f(3, 4)\n"),
+        ("fails-top", "pull f(a, b) {\n  snuff a + b\n}\nroll xs = [1]\nexhale f(5, xs[3])\n"),
+        ("fails-second", "roll m = {a: 1}\nexhale str(m.a + 1), str(m.zz)\n"),
+        ("loop", "roll t = []\nfor i in 0..5 {\n  t.push(i * 2)\n  t.push(str(i + 1))\n}\nroll j = 0\nwhile j < 3 {\n  t.push(len(\"${j}x\"))\n  j += 1\n}\nexhale t\n"),
+        ("recursion", "pull fib(n) {\n  if n < 2 {\n    snuff n\n  }\n  snuff fib(n - 1) + fib(n - 2)\n}\npull fact(n, acc) {\n  if n <= 1 {\n    snuff acc\n  }\n  snuff fact(n - 1, acc * n)\n}\nexhale fib(12), fact(10, 1)\n"),
+        ("by-value", "roll f = pack(a, b) => a + b\nroll g = f\nroll x = 1\nexhale g(x + 1, x * 3), [f][0](x, x + 9)\n"),
+        ("methods", "roll xs = [3, 1, 2]\nroll s = \"abc\"\nexhale xs.map(pack(x) => x * 2), s.contains(\"b\"), xs.filter(pack(x) => x > 1).len(), s.replace(\"a\", str(xs[0] + 1))\n"),
+        ("made-values", "pull f(a, b, c, d) {\n  snuff \"${a} ${b} ${c} ${d}\"\n}\nroll m = {k: 5}\nroll xs = [7, 8]\nexhale f([1, xs[1]], {q: m.k}, \"v${m.k}\", xs[0]), len([m.k, 2]), keys({z: 1})\n"),
+        ("captured", "roll c = 1\nroll inc = pack() {\n  c += 1\n  snuff c\n}\npull f(a, b) {\n  snuff a * 100 + b\n}\nexhale f(c + 1, inc()), f(inc(), c * 2), c\n"),
+        ("slot-beside", "pull f(a, b, c) {\n  snuff a - b - c\n}\nroll a = 10\nroll b = 3\nexhale f(a, b + 1, a), f(b * 2, a, b)\nb = f(b + 1, b, b - 1)\nexhale b\n"),
+        ("arg-then-write", "pull f(a, b) {\n  snuff [a, b]\n}\nroll x = 1\nroll y = x + 1\nx = 5\nexhale f(y + 0, x), f(x + 1, x)\nx = f(x * 2, x)[0]\nexhale x\n"),
+        ("builtins", "roll n = 16\nexhale math.sqrt(n * 1.0), str(n % 5), type_of(n / 2), range(n - 14, n - 10)\n"),
+        ("error-positions", "pull f(a, b) {\n  snuff a\n}\nroll s = \"x\"\nroll n = 1\nexhale f(n, s * s)\n"),
+    ]
+}
+
+/// Every window program at -O0 and -O1 runs as the tree-walker does,
+/// with no budget and with every step budget from 1 to one past its
+/// total.
+#[test]
+fn arguments_made_in_their_window_run_like_the_interpreter() {
+    big_stack(|| {
+        let mut runs = 0;
+        for (name, src) in window_corpus() {
+            let (_, total) = tree_walker(src, 0);
+            for level in [0, 1] {
+                let m = compile(src, level);
+                for max in std::iter::once(0).chain(1..=total + 1) {
+                    let (want, want_steps) = tree_walker(src, max);
+                    let (got, got_steps) = vm(&m, max);
+                    assert_eq!(got, want, "{name} -O{level} --max-steps {max}:\n{src}");
+                    assert_eq!(got_steps, want_steps, "{name} -O{level} --max-steps {max}");
+                    runs += 1;
+                }
+            }
+        }
+        println!("{runs} runs agree");
+    });
+}
+
+/// An argument read only by its call is made in the window: `fib`'s two
+/// calls move nothing, and a slot read with no copy is still moved.
+#[test]
+fn an_argument_is_made_in_its_window() {
+    for level in [0, 1] {
+        let t = bc::disassemble(&compile(
+            "pull fib(n) {\n  if n < 2 {\n    snuff n\n  }\n  snuff fib(n - 1) + fib(n - 2)\n}\nexhale fib(5)\n",
+            level,
+        ));
+        let pull = t.split("fn 1 fib").nth(1).expect("the pull");
+        let pull = pull.split("\n\n").next().unwrap_or(pull);
+        assert!(!pull.contains("mov "), "-O{level}:\n{t}");
+        assert_eq!(pull.matches("call ").count(), 2, "-O{level}:\n{t}");
+        let t = bc::disassemble(&compile("roll a = 1\nexhale str(a)\n", level));
+        assert!(
+            t.contains("mov "),
+            "-O{level}: a slot read with no copy is moved:\n{t}"
+        );
+    }
+}
+
+// ----- a forwarded value made in its slot ---------------------------------------
+
+/// Values -O1 forwards past their `stick` (or that a store also reads)
+/// with readers after the store: in the same block, in a branch, in a
+/// loop's condition and body, as a `for`'s bounds, in a `try` and its
+/// catch, beside a slot written in a nested block, redeclared each turn
+/// of a loop, and captured by a closure.
+fn slot_corpus() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("same-block", "roll x = 3\nstick d = x * 2 + 1\nstick e = d * d\nexhale d, e, d + e\n"),
+        ("nested-loops", "stick w = 4\nstick h = 3\nroll n = 0\nfor y in 0..h {\n  for x in 0..w {\n    stick c = 2.0 * x / w - 1.5\n    roll k = 0\n    while k < 3 and c < 1.0 {\n      n += 1\n      k += 1\n    }\n    if c > 0.0 {\n      n += 10\n    }\n  }\n}\nexhale n\n"),
+        ("branches", "roll a = 5\nstick b = a - 2\nif b > 1 {\n  exhale b\n} else {\n  exhale -b\n}\nwhile b < 0 {\n  exhale \"never\"\n}\nexhale b\n"),
+        ("for-bounds", "roll s = 2\nstick n = 3 * s\nroll t = 0\nfor i in 0..n {\n  t += i + n\n}\nexhale t, n\n"),
+        ("try-catch", "roll z = 0\nstick q = z + 7\ntry {\n  exhale q / z\n} ashtray e {\n  exhale e.message, q\n}\nexhale q\n"),
+        ("slot-written-nested", "roll a = 1\nroll b = a + 1\nexhale b\nfor i in 0..3 {\n  b = b + i\n}\nexhale b\nroll c = a * 4\nif a == 1 {\n  c = 0\n}\nexhale c\n"),
+        ("redeclared-per-turn", "roll out = []\nfor i in 0..4 {\n  stick sq = i * i\n  if sq % 2 == 0 {\n    out.push(sq)\n  }\n  roll j = 0\n  while j < sq {\n    j += 3\n  }\n  out.push(j - sq)\n}\nexhale out\n"),
+        ("captured", "roll base = 2\nstick k = base * 5\nroll f = pack(x) => x + k\nexhale f(1), k\n"),
+        ("stored-again", "roll a = 2\nroll v = a * 3\nroll w = v\nv = 1\nexhale v, w\nroll p = a + 1\nroll q = p\nfor i in 0..2 {\n  q += p\n}\nexhale p, q\n"),
+        ("index-member-into-slot", "roll xs = [[1, 2], [3]]\nroll m = {inner: {k: 5}, n: 1}\nroll x = 0\nfor i in 0..3 {\n  try {\n    x = xs[i]\n  } ashtray e {\n    exhale e.message, e.line, x\n  }\n}\nroll y = 9\ntry {\n  y = m.zz\n} ashtray e {\n  exhale e.message, y\n}\nroll ys = xs\nys = ys[0]\nys = ys[1]\nroll mm = m\nmm = mm.inner\nmm = mm.k\nstick c = xs[1]\nstick d = m.n\nfor j in 0..2 {\n  exhale c, d + j\n}\nexhale x, y, ys, mm\n"),
+        ("fails-into-slot", "roll a = 9223372036854775807\nroll b = 0\nfor i in 0..2 {\n  try {\n    b = a + i\n  } ashtray e {\n    exhale e.message, b\n  }\n}\nexhale b\n"),
+    ]
+}
+
+/// Every slot program at -O0 and -O1 runs as the tree-walker does, with
+/// no budget and every step budget from 1 to one past its total.
+#[test]
+fn a_forwarded_value_made_in_its_slot_runs_like_the_interpreter() {
+    big_stack(|| {
+        let mut runs = 0;
+        for (name, src) in slot_corpus() {
+            let (_, total) = tree_walker(src, 0);
+            for level in [0, 1] {
+                let m = compile(src, level);
+                for max in std::iter::once(0).chain(1..=total + 1) {
+                    let (want, want_steps) = tree_walker(src, max);
+                    let (got, got_steps) = vm(&m, max);
+                    assert_eq!(got, want, "{name} -O{level} --max-steps {max}:\n{src}");
+                    assert_eq!(got_steps, want_steps, "{name} -O{level} --max-steps {max}");
+                    runs += 1;
+                }
+            }
+        }
+        println!("{runs} runs agree");
+    });
+}
+
+/// -O1 writes no more instructions than -O0 where it forwards a `stick`
+/// into a nested loop: the value is made in its slot, with no move.
+#[test]
+fn a_forwarded_stick_is_made_in_its_slot() {
+    let src = "stick w = 4\nroll n = 0\nfor x in 0..w {\n  stick c = 2.0 * x / w - 1.5\n  roll k = 0\n  while k < 3 {\n    n += c\n    k += 1\n  }\n}\nexhale n\n";
+    let count = |level| {
+        let t = bc::disassemble(&compile(src, level));
+        t.lines()
+            .filter(|l| l.starts_with("  0") || l.starts_with("    0"))
+            .count()
+    };
+    assert!(count(1) <= count(0), "-O1 {} > -O0 {}", count(1), count(0));
+    let t = bc::disassemble(&compile(src, 1));
+    assert!(
+        !t.contains("subk") || {
+            let after = t.split("subk").nth(1).unwrap_or("");
+            let next = after.lines().nth(1).unwrap_or("");
+            !next.contains("mov ")
+        },
+        "-O1: the value is moved into its slot:\n{t}"
+    );
+}
+
+/// The slot a value is made in must hold it at every reader. A pass that
+/// forwards a value to a reader past a store of its slot (none of ours
+/// does: they forward `stick`s) leaves the value read where the slot was
+/// written over: then the value keeps its own register. The CIR here is
+/// the lowered source with the reader pointed at the first value by hand,
+/// so the expected output is the CIR's, not the source's.
+#[test]
+fn a_value_is_not_made_in_a_slot_written_before_its_reader() {
+    /// Point the `exhale`s numbered in `which` (in lowering order) at
+    /// `to`.
+    fn point(b: &mut Block, which: &[usize], seen: &mut usize, to: ValueId) {
+        for i in &mut b.instrs {
+            if let Kind::Exhale(vs) = &mut i.kind {
+                if which.contains(seen) {
+                    vs[0] = to;
+                }
+                *seen += 1;
+            }
+            for nested in i.kind.blocks_mut() {
+                point(nested, which, seen, to);
+            }
+        }
+    }
+    let cases = [
+        // Written in a nested block of the reader's own instruction.
+        (
+            "roll x = 1\nroll a = x + 1\nfor i in 0..3 {\n  exhale a\n  a = i * 10\n}\n",
+            0,
+            "2\n2\n2\n",
+        ),
+        // Written between the store and the reader.
+        (
+            "roll x = 1\nroll a = x + 1\nexhale a\na = 7\nexhale a\n",
+            1,
+            "2\n2\n",
+        ),
+    ];
+    for (src, which, want) in cases {
+        let mut m = cigcompile::cir::lower_source(src, "t.cig").expect("lowers");
+        let main = &mut m.funcs[0];
+        let first = main
+            .body
+            .instrs
+            .iter()
+            .filter_map(|i| match i.kind {
+                Kind::Decl(_, v) => Some(v),
+                _ => None,
+            })
+            .nth(1)
+            .expect("the decl of `a`");
+        // That `exhale a` reads the first value.
+        point(&mut main.body, &[which], &mut 0, first);
+        let module = bc::lower(&m).expect("lowers to bytecode");
+        let (got, _) = vm(&module, 0);
+        assert_eq!(got.printed, want, "{src}\n{}", bc::disassemble(&module));
+    }
+}
+
+// ----- constants made once, before their loop -----------------------------------
+
+/// Loops whose constants are made once before the outermost loop around
+/// them: a loop entered no times and then twice, left by `break` and
+/// entered again, `continue`, a `try` around a loop that fails mid-turn
+/// and is entered again, a failing turn caught inside the loop, a call
+/// and a recursive call inside the loop, a call inside an argument,
+/// nested loops sharing a constant, closures made in the loop, every
+/// kind of constant (null, a bool, a small and a large int, a float, a
+/// string) as an operand, a comparison, an index and an item, and a
+/// function with more than 255 registers live around its loop.
+fn hoist_corpus() -> Vec<(&'static str, String)> {
+    let mut wide = String::new();
+    for k in 0..260 {
+        wide.push_str(&format!("roll v{k} = {k}\n"));
+    }
+    wide.push_str("roll t = []\nroll i = 0\nwhile i < 3 {\n  t.push([i, 2.5, \"w\", null, i == 1])\n  i += 1\n}\nexhale t, v0 + v259\n");
+    vec![
+        ("zero-then-twice", "pull f(n) {\n  roll out = []\n  roll i = 0\n  while i < n {\n    out.push([i * 2.5, \"c\", null, i == 3, 70000])\n    i += 1\n  }\n  snuff out\n}\nexhale f(0), f(2), f(0), f(4)\n".into()),
+        ("break-and-again", "roll t = []\nfor r in 0..3 {\n  roll k = 0\n  while true {\n    if k >= 2 {\n      break\n    }\n    t.push([k, 100000, -70000])\n    k += 1\n  }\n  for j in 0..r {\n    if j == 1 {\n      continue\n    }\n    t.push([j, -7, false])\n  }\n}\nexhale t\n".into()),
+        ("fails-mid-turn", "roll xs = [1, 0, 2, \"q\"]\nroll s = 0\nfor x in xs {\n  try {\n    s += 10 / x\n    s += [5, 6][1]\n  } ashtray e {\n    exhale e.message, e.line, 7.5\n  }\n}\nexhale s\n".into()),
+        ("loop-in-try", "pull g(n) {\n  roll acc = []\n  try {\n    for i in 0..n {\n      acc.push([i, \"x\" + str(i), 3 - i])\n      roll q = 6 / (2 - i)\n      acc.push(q)\n    }\n  } ashtray e {\n    acc.push(e.message)\n  } finally {\n    acc.push(\"done\")\n  }\n  snuff acc\n}\nfor r in 0..4 {\n  exhale g(r + 1)\n}\n".into()),
+        ("recursion-in-loop", "pull walk(d) {\n  roll out = 0\n  roll i = 0\n  while i < 3 {\n    if d > 0 {\n      out += walk(d - 1) * 2\n    }\n    out += [10, 20, 30][i]\n    i += 1\n  }\n  snuff out\n}\nexhale walk(3)\n".into()),
+        ("call-in-argument", "pull f(a, b) {\n  snuff a * 10 + b\n}\nroll t = 0\nfor i in 0..4 {\n  t += f(f(i, 2), f(3, i)) - [1, 2][0]\n  t = t % 1000\n  exhale t, 1000\n}\n".into()),
+        ("every-kind", "roll n = null\nroll out = []\nroll i = 0\nwhile i < 3 {\n  if n == null {\n    out.push(\"null\")\n  }\n  if (i == 1) == true {\n    out.push(\"one\")\n  }\n  if i * 1.5 > 2.0 {\n    out.push(1.5 * i)\n  }\n  if \"a${i}\" == \"a2\" {\n    out.push(\"two\")\n  }\n  out.push(-40000 + i)\n  out.push([null, true, false, 0.0, -0.0, \"\"])\n  i += 1\n}\nexhale out\n".into()),
+        ("nested-shared", "roll t = []\nfor a in 0..3 {\n  t.push([a, 9])\n  for b in 0..2 {\n    t.push([b, 9, \"s\"])\n    roll c = 0\n    while c < 2 {\n      t.push([\"s\", 9])\n      c += 1\n    }\n  }\n}\nexhale t.len(), t[5], t[17]\n".into()),
+        ("closures-in-loop", "roll fs = []\nfor i in 0..3 {\n  stick k = i * 2\n  fs.push(pack(x) => x + k + 100)\n}\nroll out = []\nfor f in fs {\n  out.push([f(1), 5])\n}\nexhale out\n".into()),
+        ("store-of-constant", "roll a = 0\nroll b = 0\nroll i = 0\nwhile i < 3 {\n  a = 4\n  exhale a, b\n  b = \"z\"\n  a = a + i\n  i += 1\n}\nexhale a, b\n".into()),
+        ("past-255", wide),
+    ]
+}
+
+/// Every program whose loops have constants made before them runs as
+/// the tree-walker does, at -O0 and -O1, with no budget and with every
+/// step budget from 1 to one past its total.
+#[test]
+fn constants_made_before_their_loop_run_like_the_interpreter() {
+    big_stack(|| {
+        let mut runs = 0;
+        for (name, src) in hoist_corpus() {
+            let (_, total) = tree_walker(&src, 0);
+            for level in [0, 1] {
+                let m = compile(&src, level);
+                for max in std::iter::once(0).chain(1..=total + 1) {
+                    let (want, want_steps) = tree_walker(&src, max);
+                    let (got, got_steps) = vm(&m, max);
+                    assert_eq!(got, want, "{name} -O{level} --max-steps {max}:\n{src}");
+                    assert_eq!(got_steps, want_steps, "{name} -O{level} --max-steps {max}");
+                    runs += 1;
+                }
+            }
+        }
+        println!("{runs} runs agree");
+    });
+}
+
+/// The pcs from a loop's first `steps k, 0` to its last back-edge.
+fn loop_text(t: &str) -> String {
+    let lines: Vec<&str> = t.lines().collect();
+    let first = lines
+        .iter()
+        .position(|l| l.contains("steps     1, 0"))
+        .expect("a loop");
+    let last = lines
+        .iter()
+        .rposition(|l| l.contains(" loop ") || l.contains(" forloop "))
+        .expect("a back-edge");
+    lines[first..=last].join("\n")
+}
+
+/// A constant an instruction in a loop reads from a register is made
+/// once, before the loop, in a register below the loop's call windows;
+/// one stored into a slot is made in the slot; past 255 registers it is
+/// made where it is read.
+#[test]
+fn a_loops_constants_are_made_before_it() {
+    for level in [0, 1] {
+        let src = "roll is = [true, true, true, true]\nroll m = 0\nroll n = 3\nwhile m <= n {\n  is[m] = false\n  exhale str(m), 2.5, \"x\"\n  m += 1\n}\nexhale is\n";
+        let t = bc::disassemble(&compile(src, level));
+        let body = loop_text(&t);
+        assert!(!body.contains("load"), "-O{level}:\n{t}");
+        let before = t.split("steps     1, 0").next().unwrap_or("");
+        assert!(before.contains("loadbool"), "-O{level}:\n{t}");
+        // Below the call's window.
+        let reg = |line: &str| -> u32 {
+            line.split_whitespace()
+                .nth(2)
+                .and_then(|r| r.trim_start_matches('R').trim_end_matches(',').parse().ok())
+                .expect("a register")
+        };
+        let made = before
+            .lines()
+            .filter(|l| l.contains("loadbool") || l.contains("loadk"))
+            .map(reg)
+            .max()
+            .expect("the constants");
+        let window = body
+            .lines()
+            .find(|l| l.contains("callb"))
+            .map(reg)
+            .expect("a call");
+        assert!(made < window, "-O{level}: R{made} >= R{window}:\n{t}");
+        // A constant stored into a slot is made there.
+        let t = bc::disassemble(&compile(
+            "roll a = 0\nroll i = 0\nwhile i < 2 {\n  a = 4\n  i += 1\n}\nexhale a\n",
+            level,
+        ));
+        assert!(loop_text(&t).contains("loadint"), "-O{level}:\n{t}");
+    }
+    let wide = hoist_corpus()
+        .into_iter()
+        .find(|(n, _)| *n == "past-255")
+        .map(|(_, s)| s)
+        .expect("the wide program");
+    big_stack(move || {
+        let t = bc::disassemble(&compile(&wide, 0));
+        assert!(loop_text(&t).contains("loadk"), "{t}");
+    });
+}
+
+// ----- a bool constant as an operand ----------------------------------------------
+
+/// A bool constant on either side of `==` and `!=`, and on the right of
+/// every other operator, including the ones that fail (`+`, `<`) in a
+/// `try` and not.
+fn bool_k_corpus() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("compare", "roll xs = [true, false, null, 1, \"true\"]\nroll out = []\nfor x in xs {\n  roll a = x == true\n  roll b = false != x\n  roll c = true == x\n  out.push([a, b, c, x != false])\n}\nexhale out\n"),
+        ("fails", "roll n = 1\ntry {\n  exhale n + true\n} ashtray e {\n  exhale e.message, e.line\n}\ntry {\n  exhale n < false\n} ashtray e {\n  exhale e.message, e.line\n}\nroll s = \"a\"\ntry {\n  exhale s * true\n} ashtray e {\n  exhale e.message, e.line\n}\nexhale n - false\n"),
+    ]
+}
+
+/// The bool programs run as the tree-walker does at -O0 and -O1 and
+/// every step budget; `== true` is one `eqk` with no `loadbool`.
+#[test]
+fn a_bool_constant_is_an_operand() {
+    big_stack(|| {
+        for (name, src) in bool_k_corpus() {
+            let (_, total) = tree_walker(src, 0);
+            for level in [0, 1] {
+                let m = compile(src, level);
+                for max in std::iter::once(0).chain(1..=total + 1) {
+                    let (want, want_steps) = tree_walker(src, max);
+                    let (got, got_steps) = vm(&m, max);
+                    assert_eq!(got, want, "{name} -O{level} --max-steps {max}:\n{src}");
+                    assert_eq!(got_steps, want_steps, "{name} -O{level} --max-steps {max}");
+                }
+            }
+        }
+    });
+    for level in [0, 1] {
+        let t = bc::disassemble(&compile(
+            "roll x = len(\"ab\") > 1\nroll a = x == true\nexhale a\n",
+            level,
+        ));
+        assert!(
+            t.contains("eqk") && !t.contains("loadbool"),
+            "-O{level}:\n{t}"
+        );
+    }
+}
+
+// ----- value blocks and callees made where they are read -------------------------
+
+/// Value blocks (`and`, `or`, `??`, `?.`) whose subject or right side is
+/// made in the block's register: each kind with subjects and right sides
+/// of every kind, nested on either side, as a call's argument, as a
+/// receiver, in a loop's condition, with a right side that fails (in a
+/// `try` and not); callees and receivers made in their window: a list,
+/// a map, a member, an index, a closure, a value block, a prelude name,
+/// one that fails, a call inside an argument, and recursion.
+fn short_corpus() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("each-kind", "roll n = null\nroll m = {a: {b: 2}, z: null}\nroll xs = [0, 1, \"\", \"s\", null, false, true, 2.5]\nroll out = []\nfor x in xs {\n  out.push([x and [x], x or 7, x ?? \"dflt\", m.a?.b, m.z?.b, n?.q, x == 1 or x == 2.5, not x and 3])\n}\nexhale out\n"),
+        ("made-subjects", "roll m = {k: [1, 2], s: \"t\"}\nroll i = 1\nexhale m.k[i] and m.s, -i or 5, [i] ?? 0, \"${i}\" and {q: i}, (i < 2) or i, m.k ?? 1, len(m.s) and i * 3\n"),
+        ("nested", "roll a = 0\nroll b = null\nroll c = 3\nexhale a and (b or c), (a or b) ?? c, b ?? (a and c) ?? 9, (c > 1 and (b ?? c) > 2) or a, a or b or c, a and b and c\n"),
+        ("loop-condition", "roll k = 0\nroll done = false\nroll t = 0\nwhile k < 50 and not done {\n  t += k\n  if t > 100 {\n    done = true\n  }\n  k += 1\n}\nroll j = 0\nwhile j < 3 or (t > 1000 and j < 9) {\n  j += 1\n}\nexhale k, t, j\n"),
+        ("rhs-fails", "roll s = \"x\"\nroll v = 1\nfor i in 0..3 {\n  try {\n    v = (i > 0) and s - i\n  } ashtray e {\n    exhale e.message, e.line, v\n  }\n}\ntry {\n  exhale null ?? s * s\n} ashtray e {\n  exhale e.message\n}\nroll w = 2\ntry {\n  w = w or s - 1\n  w = null ?? [1][4]\n} ashtray e {\n  exhale e.message, e.line, w\n}\nexhale v, w\n"),
+        ("as-argument", "pull f(a, b) {\n  snuff [a, b]\n}\nroll n = null\nroll x = 4\nexhale f(n ?? x, x and x + 1), str(x > 3 or n), f(f(n?.k, x or 0), n ?? (x ?? 2))\n"),
+        ("callees", "roll fs = [pack(a) => a + 1, pack(a) => a * 2]\nroll m = {f: pack(a) => a - 1, g: {h: pack() => \"h\"}}\nroll n = null\nexhale fs[1](5), m.f(3), m.g.h(), [3, 1, 2].len(), {q: 1}.keys(), (pack(x) => x * 10)(4), (n ?? fs[0])(1), \"abc\".len(), len(\"ab\")\n"),
+        ("callee-fails", "roll fs = [pack(a) => a]\nroll m = {}\ntry {\n  exhale fs[3](1)\n} ashtray e {\n  exhale e.message, e.line\n}\ntry {\n  exhale m.nope(1)\n} ashtray e {\n  exhale e.message, e.line\n}\ntry {\n  exhale (null ?? 5)(1)\n} ashtray e {\n  exhale e.message\n}\nexhale fs[0](fs[0](2))\n"),
+        ("recursion", "pull fib(n) {\n  snuff (n < 2 and n) or fib(n - 1) + fib(n - 2)\n}\npull walk(t) {\n  snuff t?.l and (walk(t.l) + walk(t.r)) or 1\n}\nexhale fib(10), walk({l: {l: null, r: null}, r: {l: {l: null, r: null}, r: null}})\n"),
+        ("receiver-in-loop", "roll out = []\nfor i in 0..4 {\n  out.push([i, i + 1].map(pack(x) => x * i).len() + {a: i}.keys().len())\n  roll t = (i > 1 and [i]) or []\n  out.push(t.len())\n}\nexhale out\n"),
+    ]
+}
+
+/// Every value-block and callee program at -O0 and -O1 runs as the
+/// tree-walker does, with no budget and every step budget from 1 to
+/// one past its total.
+#[test]
+fn values_made_where_their_block_or_call_reads_them_run_like_the_interpreter() {
+    big_stack(|| {
+        let mut runs = 0;
+        for (name, src) in short_corpus() {
+            let (_, total) = tree_walker(src, 0);
+            for level in [0, 1] {
+                let m = compile(src, level);
+                for max in std::iter::once(0).chain(1..=total + 1) {
+                    let (want, want_steps) = tree_walker(src, max);
+                    let (got, got_steps) = vm(&m, max);
+                    assert_eq!(got, want, "{name} -O{level} --max-steps {max}:\n{src}");
+                    assert_eq!(got_steps, want_steps, "{name} -O{level} --max-steps {max}");
+                    runs += 1;
+                }
+            }
+        }
+        println!("{runs} runs agree");
+    });
+}
+
+/// `k < 50 and not done` as a loop's condition makes both sides in the
+/// block's register: no `mov`. A callee made by an index is made in its
+/// window, with no `mov`.
+#[test]
+fn a_value_block_makes_its_sides_in_its_register() {
+    for level in [0, 1] {
+        let t = bc::disassemble(&compile(
+            "roll k = 0\nroll done = false\nwhile k < 50 and not done {\n  k += 1\n}\nexhale k\n",
+            level,
+        ));
+        assert!(!loop_text(&t).contains("mov "), "-O{level}:\n{t}");
+        let t = bc::disassemble(&compile(
+            "roll fs = [pack(a) => a + 1]\nexhale fs[0](2)\n",
+            level,
+        ));
+        let call = t
+            .lines()
+            .position(|l| l.contains(" call "))
+            .expect("a call");
+        let before: Vec<&str> = t.lines().take(call).collect();
+        assert!(
+            before.iter().rev().take(3).all(|l| !l.contains("mov ")),
+            "-O{level}:\n{t}"
+        );
+    }
+}
+
+// ----- a call's window sits above every live register (cig-script#230 step 3) ------
+
+/// A value made after a call's window was taken (its first argument is
+/// made in it) and read after the call: the window moves to the top, so
+/// the callee's frame lies over no live register, and the module keeps
+/// `read-before-write`.
+#[test]
+fn a_value_made_above_a_taken_window_moves_the_call_to_the_top() {
+    let src = "pull f(a, b) {\n  snuff len(a) + b\n}\nroll x = 1\nexhale f([x], x * 2)\nexhale 0\n";
+    let mut m = cigcompile::cir::lower_source(src, "t.cig").expect("lowers");
+    let main = &mut m.funcs[0];
+    let twice = main
+        .body
+        .instrs
+        .iter()
+        .find_map(|i| match i.kind {
+            Kind::Binary(BinOp::Mul, ..) => i.result,
+            _ => None,
+        })
+        .expect("x * 2");
+    // The second `exhale` reads `x * 2` too: it lives past the call.
+    let mut seen = 0;
+    for i in &mut main.body.instrs {
+        if let Kind::Exhale(vs) = &mut i.kind {
+            if seen == 1 {
+                vs[0] = twice;
+            }
+            seen += 1;
+        }
+    }
+    let module = bc::lower(&m).expect("lowers to bytecode");
+    verify_module(&module).expect("verifies");
+    let dis = bc::disassemble(&module);
+    let (got, _) = vm(&module, 0);
+    assert_eq!(got.printed, "3\n2\n", "{dis}");
+    // The call's window is above the register `x * 2` is in.
+    let reg = |op: &str| -> u32 {
+        dis.lines()
+            .map(|l| l.split_whitespace().collect::<Vec<_>>())
+            .find(|t| t.get(1) == Some(&op))
+            .and_then(|t| {
+                t.get(2)?
+                    .trim_start_matches('R')
+                    .trim_end_matches(',')
+                    .parse()
+                    .ok()
+            })
+            .unwrap_or_else(|| panic!("no {op}: {dis}"))
+    };
+    assert!(reg("call") > reg("mulk"), "{dis}");
 }

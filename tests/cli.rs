@@ -734,24 +734,103 @@ fn levels_and_pass_lists_shape_the_emitted_ir() {
     );
 }
 
-/// #40: `verify` reads a program's three parts and names the one that
-/// differs: the runtime (against the cig given, or cig's release assets),
-/// the payload (against its own sha256, and the script with --script) and
-/// the whole file (against what a build of those parts writes).
+/// Where a format 2 program's parts lie in its file (CigScript's
+/// docs/PROGRAMS.md): the payload's start, the record, each section's body,
+/// the table and the trailer.
+struct Layout {
+    p: usize,
+    record: std::ops::Range<usize>,
+    sections: Vec<(String, std::ops::Range<usize>)>,
+    table: std::ops::Range<usize>,
+    trailer: usize,
+}
+
+fn le(b: &[u8]) -> usize {
+    b.iter().rev().fold(0usize, |n, x| (n << 8) | *x as usize)
+}
+
+fn layout(bytes: &[u8]) -> Layout {
+    let trailer = bytes.len() - 56;
+    assert_eq!(
+        &bytes[trailer..trailer + 8],
+        b"CIGPROG2",
+        "a format 2 program"
+    );
+    let len = le(&bytes[trailer + 8..trailer + 16]);
+    let record_len = le(&bytes[trailer + 16..trailer + 20]);
+    let count = le(&bytes[trailer + 20..trailer + 22]);
+    let p = trailer - len;
+    let table = trailer - 64 * count..trailer;
+    let sections = bytes[table.clone()]
+        .chunks_exact(64)
+        .map(|e| {
+            let id = String::from_utf8_lossy(&e[..8])
+                .trim_end_matches('\0')
+                .to_string();
+            let at = p + le(&e[16..24]);
+            (id, at..at + le(&e[24..32]))
+        })
+        .collect();
+    Layout {
+        p,
+        record: p..p + record_len,
+        sections,
+        table,
+        trailer,
+    }
+}
+
+/// The record of the program at `path`, as cig reads it.
+fn record_of(path: &Path) -> cigscript::program::Record {
+    let mut f = fs::File::open(path).unwrap();
+    cigscript::program::read(&mut f)
+        .expect("the program reads")
+        .expect("a program")
+        .record()
+        .expect("format 2")
+        .clone()
+}
+
+/// The parts `verify` says differ.
+fn differing(out: &Output) -> Vec<String> {
+    let json: serde_json::Value = serde_json::from_str(text(&out.stdout).trim())
+        .unwrap_or_else(|_| panic!("verify --json: {}", text(&out.stdout)));
+    json["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["verdict"] == "differs")
+        .map(|p| p["part"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// #40: `verify` reads a program part by part and names the one that
+/// differs: for format 2 the runtime, the record, each section, the table,
+/// the padding and the trailer; for format 1 the runtime, the payload, the
+/// script and the whole file.
 #[test]
 fn verify_names_the_part_that_differs() {
     let s = Sandbox::new();
     s.write("hi.cig", "exhale \"hi\"\n");
-    ok(&s.cc(&["build", "hi.cig"]));
+    ok(&s.cc(&["build", "hi.cig", "--stage", "b"]));
     let prog = exe_name("hi");
     let good = ok(&s.cc(&["verify", &prog, "--runtime", RT, "--script", "hi.cig"]));
-    for part in ["runtime", "payload", "script", "whole"] {
+    for part in [
+        "runtime",
+        "record",
+        "section source",
+        "section bytecode",
+        "section table",
+        "padding",
+        "trailer",
+    ] {
         assert!(
             good.lines()
-                .any(|l| l.trim_start().starts_with(part) && l.contains("ok")),
+                .any(|l| l.trim_start().starts_with(part) && l.contains(" ok ")),
             "{part}: {good}"
         );
     }
+    assert!(good.contains("what hi.cig lowers to at -O1"), "{good}");
     let json: serde_json::Value =
         serde_json::from_str(ok(&s.cc(&["--json", "verify", &prog, "--runtime", RT])).trim())
             .unwrap();
@@ -764,25 +843,57 @@ fn verify_names_the_part_that_differs() {
         "{}",
         text(&plain.stdout)
     );
-    // One byte changed in each part.
-    let bytes = fs::read(s.path().join(&prog)).unwrap();
-    let flip = |name: &str, at: usize| {
-        let mut b = bytes.clone();
-        b[at] ^= 0xff;
-        fs::write(s.path().join(name), b).unwrap();
-    };
-    flip("in-runtime", bytes.len() / 2);
-    flip("in-payload", bytes.len() - 60);
-    flip("in-trailer", bytes.len() - 5);
-    let r = s.cc(&["verify", "in-runtime", "--runtime", RT]);
+    // The script changed since the build: its section is named.
+    s.write("hi.cig", "exhale \"bye\"\n");
+    let r = s.cc(&[
+        "--json",
+        "verify",
+        &prog,
+        "--runtime",
+        RT,
+        "--script",
+        "hi.cig",
+    ]);
     assert_eq!(r.status.code(), Some(1));
-    assert!(
-        text(&r.stdout)
-            .lines()
-            .any(|l| l.contains("runtime") && l.contains("DIFFERS")),
+    assert_eq!(
+        differing(&r),
+        ["section source", "section bytecode"],
         "{}",
         text(&r.stdout)
     );
+    assert!(
+        text(&r.stdout).contains("changed since the build, from line 1"),
+        "{}",
+        text(&r.stdout)
+    );
+    // A format 1 program keeps its parts.
+    let runtime = fs::read(RT).unwrap();
+    let one = cigscript::program::append(
+        &runtime,
+        &cigscript::program::Program::new(
+            "one",
+            "one.cig",
+            "exhale 1\n",
+            &format!("cigcompile {}", env!("CARGO_PKG_VERSION")),
+        ),
+    );
+    fs::write(s.path().join("one"), &one).unwrap();
+    s.write("one.cig", "exhale 1\n");
+    let good = ok(&s.cc(&["verify", "one", "--runtime", RT, "--script", "one.cig"]));
+    for part in ["runtime", "payload", "script", "whole"] {
+        assert!(
+            good.lines()
+                .any(|l| l.trim_start().starts_with(part) && l.contains(" ok ")),
+            "{part}: {good}"
+        );
+    }
+    let flip = |name: &str, at: usize| {
+        let mut b = one.clone();
+        b[at] ^= 0xff;
+        fs::write(s.path().join(name), b).unwrap();
+    };
+    flip("in-payload", one.len() - 60);
+    flip("in-trailer", one.len() - 5);
     for damaged in ["in-payload", "in-trailer"] {
         let r = s.cc(&["verify", damaged, "--runtime", RT]);
         assert_eq!(r.status.code(), Some(1), "{damaged}");
@@ -792,18 +903,264 @@ fn verify_names_the_part_that_differs() {
             text(&r.stdout)
         );
     }
-    // The script changed since the build.
-    s.write("hi.cig", "exhale \"bye\"\n");
-    let r = s.cc(&["verify", &prog, "--runtime", RT, "--script", "hi.cig"]);
-    assert_eq!(r.status.code(), Some(1));
-    assert!(
-        text(&r.stdout).contains("changed since the build, from line 1"),
-        "{}",
-        text(&r.stdout)
-    );
     // Something that is not a program at all.
     s.write("plain.txt", "not a program\n");
     assert_eq!(s.cc(&["verify", "plain.txt"]).status.code(), Some(3));
+}
+
+/// Payload format 2 (cig-compile 0004, step 5): one byte changed in each
+/// part of a stage b program is named by that part, and only that part:
+/// the runtime, the record, the section table, each section, the padding
+/// and the trailer.
+#[test]
+fn verify_detects_a_changed_byte() {
+    let s = Sandbox::new();
+    // A name long enough that the record is not a multiple of 16: there
+    // is padding before the first body.
+    let mut script = None;
+    for n in 0..16 {
+        let name = format!("p{}", "q".repeat(n));
+        s.write(
+            &format!("{name}.cig"),
+            "stick n = 2\nexhale \"n is ${n * 21}\"\n",
+        );
+        ok(&s.cc(&["build", &format!("{name}.cig"), "--stage", "b"]));
+        let bytes = fs::read(s.exe(&name)).unwrap();
+        let l = layout(&bytes);
+        if l.sections[0].1.start > l.record.end {
+            script = Some((name, bytes, l));
+            break;
+        }
+    }
+    let (name, bytes, l) = script.expect("a record with padding after it");
+    assert_eq!(
+        l.sections
+            .iter()
+            .map(|(i, _)| i.as_str())
+            .collect::<Vec<_>>(),
+        ["source", "bytecode"]
+    );
+    let good = s.cc(&["--json", "verify", &exe_name(&name), "--runtime", RT]);
+    assert_eq!(
+        differing(&good),
+        Vec::<String>::new(),
+        "{}",
+        text(&good.stdout)
+    );
+    let name_at = l.record.start
+        + bytes[l.record.clone()]
+            .windows(8)
+            .position(|w| w == b"\"name\":\"")
+            .unwrap()
+        + 8;
+    let mut cases: Vec<(String, usize, u8)> = vec![
+        ("runtime".into(), l.p / 2, 0xff),
+        // `p` to `q`: still a name, so only the head sha256 tells.
+        ("record".into(), name_at, 0x01),
+        // A byte of the first entry's sha256.
+        ("section table".into(), l.table.start + 40, 0xff),
+        ("padding".into(), l.record.end, 0x01),
+        // The trailer's flags.
+        ("trailer".into(), l.trailer + 22, 0x01),
+        // Its payload length.
+        ("trailer".into(), l.trailer + 9, 0x01),
+    ];
+    for (id, body) in &l.sections {
+        cases.push((format!("section {id}"), body.start + body.len() / 2, 0xff));
+    }
+    for (n, (part, at, mask)) in cases.iter().enumerate() {
+        let mut b = bytes.clone();
+        b[*at] ^= mask;
+        let file = format!("changed-{n}");
+        fs::write(s.path().join(&file), b).unwrap();
+        let r = s.cc(&["--json", "verify", &file, "--runtime", RT]);
+        assert_eq!(r.status.code(), Some(1), "{part}: {}", text(&r.stdout));
+        assert_eq!(
+            differing(&r),
+            std::slice::from_ref(part),
+            "byte {at} ({part}): {}",
+            text(&r.stdout)
+        );
+    }
+}
+
+/// Without `--stage` a build makes stage a (`DEFAULT_STAGE`, until stage
+/// b passes its speed gates), with no `bytecode` section and no note, even
+/// for a script that lowers. `--stage b` opts in, and refuses a script
+/// that does not lower with E1010 at the construct; `--stage a` always
+/// makes stage a.
+#[test]
+fn the_default_stage_is_a_and_stage_b_is_asked_for() {
+    let s = Sandbox::new();
+    s.write("lowers.cig", "exhale \"hi\"\n");
+    s.write(
+        "packs.cig",
+        "pack { root() }\npull root() {\n  snuff \".\"\n}\nexhale \"packed\"\n",
+    );
+    for script in ["lowers", "packs"] {
+        let built = s.cc(&["build", &format!("{script}.cig")]);
+        let out = ok(&built);
+        assert!(out.contains("stage a)"), "{out}");
+        assert!(
+            !text(&built.stderr).contains("note:"),
+            "{}",
+            text(&built.stderr)
+        );
+        let mut f = fs::File::open(s.exe(script)).unwrap();
+        let l = cigscript::program::read(&mut f).unwrap().unwrap();
+        assert_eq!(l.record().unwrap().stage, cigscript::program::Stage::A);
+        assert_eq!(l.record().unwrap().opt, "1");
+        assert!(
+            l.entry("bytecode").is_none(),
+            "{script}: no bytecode at stage a"
+        );
+    }
+    assert_eq!(text(&s.prog(&exe_name("packs"), &[]).stdout), "packed\n");
+    // --stage b: built, and recorded.
+    let out = ok(&s.cc(&["build", "lowers.cig", "--stage", "b", "-o", &exe_name("b1")]));
+    assert!(out.contains("stage b)"), "{out}");
+    assert_eq!(record_of(&s.exe("b1")).stage, cigscript::program::Stage::B);
+    // --stage b on a script that does not lower: refused at the
+    // construct, nothing written.
+    let refused = s.cc(&["build", "packs.cig", "--stage", "b", "-o", "nope"]);
+    assert_eq!(refused.status.code(), Some(3));
+    let err = text(&refused.stderr);
+    assert!(err.contains("E1010"), "{err}");
+    assert!(err.contains("packs.cig:1:1"), "{err}");
+    assert!(
+        err.contains("a `pack` root that runs a pull or a function"),
+        "{err}"
+    );
+    assert!(!s.path().join("nope").exists());
+    // --stage a: stage a, whatever the script.
+    ok(&s.cc(&["build", "lowers.cig", "--stage", "a", "-o", &exe_name("la")]));
+    assert_eq!(record_of(&s.exe("la")).stage, cigscript::program::Stage::A);
+    // --stage b at -O0: the level is recorded.
+    ok(&s.cc(&[
+        "build",
+        "lowers.cig",
+        "--stage",
+        "b",
+        "-O",
+        "0",
+        "-o",
+        &exe_name("lb"),
+    ]));
+    let r = record_of(&s.exe("lb"));
+    assert_eq!(
+        (r.stage, r.opt.as_str()),
+        (cigscript::program::Stage::B, "0")
+    );
+    assert_eq!(text(&s.prog(&exe_name("lb"), &[]).stdout), "hi\n");
+    assert_eq!(text(&s.prog(&exe_name("la"), &[]).stdout), "hi\n");
+}
+
+/// `--args direct` (cig-compile#8): the program takes every argument as
+/// its script's, flags included, and takes no run flags; a script's
+/// `pack { own_flags: true }` says the same, and without either a leading
+/// flag is the run's.
+#[test]
+fn args_direct() {
+    let s = Sandbox::new();
+    s.write("echo.cig", "exhale args\n");
+    s.write("own.cig", "pack { \".\", own_flags: true }\nexhale args\n");
+    ok(&s.cc(&[
+        "build",
+        "echo.cig",
+        "--args",
+        "direct",
+        "-o",
+        &exe_name("direct"),
+    ]));
+    ok(&s.cc(&["build", "echo.cig", "-o", &exe_name("plain")]));
+    ok(&s.cc(&["build", "own.cig"]));
+    assert!(record_of(&s.exe("direct")).own_flags);
+    assert!(!record_of(&s.exe("plain")).own_flags);
+    assert!(record_of(&s.exe("own")).own_flags);
+    for p in ["direct", "own"] {
+        let o = s.prog(&exe_name(p), &["--dry-run", "--help", "x"]);
+        assert_eq!(
+            text(&o.stdout),
+            "[\"--dry-run\", \"--help\", \"x\"]\n",
+            "{p}: {}",
+            text(&o.stderr)
+        );
+    }
+    let o = s.prog(&exe_name("plain"), &["--version"]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o.stderr));
+    assert!(text(&o.stderr).contains("E1052"), "{}", text(&o.stderr));
+    // The flag is part of what a program is: the same script is two programs.
+    assert_ne!(
+        fs::read(s.exe("direct")).unwrap(),
+        fs::read(s.exe("plain")).unwrap()
+    );
+    let unknown = s.cc(&["build", "echo.cig", "--args", "all"]);
+    assert_eq!(unknown.status.code(), Some(3), "{}", text(&unknown.stderr));
+}
+
+/// A stage b program whose bytecode section is damaged refuses to run
+/// (E1050) and never runs its source instead; it still answers
+/// `--cig-program`, which reads no body.
+#[test]
+fn a_stage_b_program_refuses_a_damaged_bytecode_section_and_still_answers_cig_program() {
+    let s = Sandbox::new();
+    s.write(
+        "b.cig",
+        "burn {\n  fs.write_text(\"ran.txt\", \"ran\")\n}\nexhale \"ran\"\n",
+    );
+    ok(&s.cc(&["build", "b.cig", "--stage", "b"]));
+    let mut bytes = fs::read(s.exe("b")).unwrap();
+    let l = layout(&bytes);
+    let (_, code) = l.sections.iter().find(|(i, _)| i == "bytecode").unwrap();
+    bytes[code.start + code.len() / 2] ^= 0xff;
+    fs::write(s.exe("damaged"), &bytes).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(s.exe("damaged"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let run = s.prog(&exe_name("damaged"), &[]);
+    assert_eq!(run.status.code(), Some(3), "{}", text(&run.stderr));
+    assert!(text(&run.stderr).contains("E1050"), "{}", text(&run.stderr));
+    assert_eq!(text(&run.stdout), "");
+    assert!(
+        !s.path().join("ran.txt").exists(),
+        "the source never runs instead"
+    );
+    let info = s.prog(&exe_name("damaged"), &["--cig-program", "--json"]);
+    assert_eq!(info.status.code(), Some(0), "{}", text(&info.stderr));
+    let j: serde_json::Value = serde_json::from_str(text(&info.stdout).trim()).unwrap();
+    assert!(text(&info.stdout).contains("bytecode"), "{j}");
+    // The undamaged program runs.
+    assert_eq!(text(&s.prog(&exe_name("b"), &[]).stdout), "ran\n");
+}
+
+/// The same inputs give the same bytes at either stage, wherever the
+/// program is written.
+#[test]
+fn the_same_build_twice_gives_the_same_bytes_at_both_stages() {
+    let s = Sandbox::new();
+    s.write(
+        "same.cig",
+        "roll t = 0\nfor i in 0..10 {\n  t += i\n}\nexhale t\n",
+    );
+    for stage in ["a", "b"] {
+        let one = format!("one-{stage}{}", std::env::consts::EXE_SUFFIX);
+        let two = format!("out/two-{stage}{}", std::env::consts::EXE_SUFFIX);
+        ok(&s.cc(&["build", "same.cig", "--stage", stage, "-o", &one]));
+        ok(&s.cc(&["build", "same.cig", "--stage", stage, "-o", &two]));
+        let a = fs::read(s.path().join(&one)).unwrap();
+        assert_eq!(a, fs::read(s.path().join(&two)).unwrap(), "stage {stage}");
+        assert_eq!(
+            record_of(&s.path().join(&one)).stage.as_str(),
+            stage,
+            "stage {stage}"
+        );
+    }
+    assert_ne!(
+        fs::read(s.path().join(exe_name("one-a"))).unwrap(),
+        fs::read(s.path().join(exe_name("one-b"))).unwrap()
+    );
 }
 
 /// #37, #12, #40: `--timings` tables the phases (and writes a Chrome trace),
@@ -2279,7 +2636,12 @@ fn a_program_pass_names_who_built_the_program() {
         "--allowed-signers",
         allowed.to_str().unwrap(),
     ]));
-    assert!(trusted.contains("pass     ok"), "{trusted}");
+    assert!(
+        trusted
+            .lines()
+            .any(|l| l.trim_start().starts_with("pass ") && l.contains(" ok ")),
+        "{trusted}"
+    );
     assert!(
         !there.path().join(".cigscript-keys").exists(),
         "checking a pass made a key on the other machine"
@@ -2807,4 +3169,86 @@ fn references_agree_with_the_expect_files() {
         !have_any || checked > 0,
         "tools installed, no reference ran"
     );
+}
+
+/// cig-compile#8 and #31: cigo's `orchestrate.cig`, of the checkout
+/// `CIGO_SRC` names, with its pack taking its own flags, built at stage a
+/// and at stage b: `--version`, `help` and `list` in a project say what
+/// `cig run orchestrate.cig --` says (the interpreter's check warnings
+/// aside: a program said them when it was built). Without `CIGO_SRC` it
+/// says so and passes.
+#[test]
+fn cigos_program_at_stage_b_says_what_cig_run_says() {
+    let Some(src) = std::env::var_os("CIGO_SRC").map(PathBuf::from) else {
+        eprintln!("note: skipping; set CIGO_SRC to a cig-orchestrator checkout");
+        return;
+    };
+    let s = Sandbox::new();
+    let script = fs::read_to_string(src.join("orchestrate.cig")).expect("orchestrate.cig");
+    let script = script.replacen("pack { \".\" }", "pack { \".\", own_flags: true }", 1);
+    assert!(script.contains("own_flags: true"), "cigo's pack moved");
+    s.write("orchestrate.cig", &script);
+    for stage in ["a", "b"] {
+        ok(&s.cc(&[
+            "build",
+            "orchestrate.cig",
+            "--stage",
+            stage,
+            "-o",
+            &exe_name(&format!("cigo-{stage}")),
+        ]));
+        let r = record_of(&s.exe(&format!("cigo-{stage}")));
+        assert_eq!(r.stage.as_str(), stage);
+        assert!(r.own_flags);
+    }
+    s.write(
+        "proj/cig-tasks.json",
+        "{\n  \"project\": \"demo\",\n  \"tasks\": {\n    \"lint\": {\"cmd\": [\"python3\", \"lint.py\"], \"desc\": \"style\"},\n    \"build\": {\"cmd\": [\"sh\", \"build.sh\"], \"needs\": [\"lint\"]}\n  }\n}\n",
+    );
+    let without_warnings = |e: &str| {
+        let mut lines: Vec<&str> = e.split('\n').collect();
+        while lines.first().is_some_and(|l| l.starts_with("warning[")) {
+            let end = lines
+                .iter()
+                .position(|l| l.is_empty())
+                .unwrap_or(lines.len() - 1);
+            lines.drain(..=end);
+        }
+        lines.join("\n")
+    };
+    let in_proj = |c: &mut Command| {
+        s.env(c);
+        c.current_dir(s.path().join("proj"))
+            .env("CIGO_HOME", s.path().join("cigo-home"))
+            .env("HOME", s.path().join("h"));
+    };
+    for args in [&["--version"][..], &["help"], &["list"]] {
+        let mut c = Command::new(RT);
+        in_proj(&mut c);
+        let want = c
+            .args(["run", "../orchestrate.cig", "--"])
+            .args(args)
+            .output()
+            .unwrap();
+        for stage in ["a", "b"] {
+            let mut c = Command::new(s.exe(&format!("cigo-{stage}")));
+            in_proj(&mut c);
+            let got = c.args(args).output().unwrap();
+            assert_eq!(
+                got.status.code(),
+                want.status.code(),
+                "{args:?} stage {stage}"
+            );
+            assert_eq!(
+                text(&got.stdout),
+                text(&want.stdout),
+                "{args:?} stage {stage}"
+            );
+            assert_eq!(
+                without_warnings(&text(&got.stderr)),
+                without_warnings(&text(&want.stderr)),
+                "{args:?} stage {stage}"
+            );
+        }
+    }
 }
