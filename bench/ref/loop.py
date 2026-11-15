@@ -1,3 +1,11 @@
-t=0
-for i in range(400000): t+=i*i%7
-print(t)
+# SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Mirrors bench/loop.cig: a tight numeric loop.
+def main():
+    total = 0
+    for i in range(400000):
+        total += i * i % 7
+    print(total)
+
+
+main()

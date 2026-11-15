@@ -1,1 +1,25 @@
-const parts=[];for(let i=0;i<40000;i++)parts.push("w"+((i*7919)%997));const c=new Map();for(const w of parts.join(" ").split(" "))c.set(w,(c.get(w)||0)+1);let best="",bn=0;for(const [w,n] of c)if(n>bn||(n==bn&&w<best)){best=w;bn=n}console.log(c.size,best,bn);
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Mirrors bench/words.cig: word count, split text, count in a map, top word.
+const parts = [];
+for (let i = 0; i < 40000; i++) {
+  parts.push(`w${(i * 7919) % 997}`);
+}
+const text = parts.join(" ");
+const counts = new Map();
+for (const w of text.split(" ")) {
+  if (counts.has(w)) {
+    counts.set(w, counts.get(w) + 1);
+  } else {
+    counts.set(w, 1);
+  }
+}
+let best = "";
+let bestn = 0;
+for (const w of counts.keys()) {
+  if (counts.get(w) > bestn || (counts.get(w) === bestn && w < best)) {
+    best = w;
+    bestn = counts.get(w);
+  }
+}
+console.log(counts.size, best, bestn);

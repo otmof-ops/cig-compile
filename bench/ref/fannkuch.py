@@ -1,12 +1,65 @@
-n=8; p1=list(range(n)); cnt=[0]*n; mf=0; cs=0; pc=0; r=n
-while True:
-    while r!=1: cnt[r-1]=r; r-=1
-    p=p1[:]; f=0; k=p[0]
-    while k: p[:k+1]=p[k::-1]; f+=1; k=p[0]
-    mf=max(mf,f); cs+= f if pc%2==0 else -f
-    while True:
-        if r==n: print(cs,mf); raise SystemExit
-        p0=p1[0]; p1[:r]=p1[1:r+1]; p1[r]=p0; cnt[r]-=1
-        if cnt[r]>0: break
-        r+=1
-    pc+=1
+# SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Mirrors bench/fannkuch.cig: fannkuch-redux, list indexing and swaps.
+# The flips and the rotation are loops over indexes, as in the cig program; the
+# idiomatic variant in CigScript's bench/ref/idiom/fannkuch.py does both with slice
+# assignments.
+def main():
+    n = 8
+    perm1 = []
+    for i in range(n):
+        perm1.append(i)
+    count = []
+    for i in range(n):
+        count.append(0)
+    maxflips = 0
+    checksum = 0
+    permcount = 0
+    r = n
+    done = False
+    while not done:
+        while r != 1:
+            count[r - 1] = r
+            r -= 1
+        perm = perm1[:]
+        flips = 0
+        k = perm[0]
+        while k != 0:
+            i = 0
+            j = k
+            while i < j:
+                t = perm[i]
+                perm[i] = perm[j]
+                perm[j] = t
+                i += 1
+                j -= 1
+            flips += 1
+            k = perm[0]
+        if flips > maxflips:
+            maxflips = flips
+        if permcount % 2 == 0:
+            checksum += flips
+        else:
+            checksum -= flips
+        more = True
+        while more:
+            if r == n:
+                done = True
+                more = False
+            else:
+                p0 = perm1[0]
+                i = 0
+                while i < r:
+                    perm1[i] = perm1[i + 1]
+                    i += 1
+                perm1[r] = p0
+                count[r] = count[r] - 1
+                if count[r] > 0:
+                    more = False
+                else:
+                    r += 1
+        permcount += 1
+    print(checksum, maxflips)
+
+
+main()

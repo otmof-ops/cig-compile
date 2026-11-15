@@ -1,3 +1,24 @@
-text=" ".join(f"w{(i*7919)%997}" for i in range(40000)); c={}
-for w in text.split(" "): c[w]=c.get(w,0)+1
-best=min(c, key=lambda w:(-c[w],w)); print(len(c),best,c[best])
+# SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Mirrors bench/words.cig: word count, split text, count in a map, top word.
+def main():
+    parts = []
+    for i in range(40000):
+        parts.append(f"w{(i * 7919) % 997}")
+    text = " ".join(parts)
+    counts = {}
+    for w in text.split(" "):
+        if w in counts:
+            counts[w] = counts[w] + 1
+        else:
+            counts[w] = 1
+    best = ""
+    bestn = 0
+    for w in counts.keys():
+        if counts[w] > bestn or (counts[w] == bestn and w < best):
+            best = w
+            bestn = counts[w]
+    print(len(counts), best, bestn)
+
+
+main()

@@ -1,1 +1,13 @@
-const counter=s=>{let n=s;return()=>n+1};let t=0;for(let i=0;i<100000;i++)t+=counter(i)();console.log(t);
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Mirrors bench/closures.cig: closures made in a loop and called.
+function counter(start) {
+  let n = start;
+  return () => n + 1;
+}
+let total = 0;
+for (let i = 0; i < 100000; i++) {
+  const f = counter(i);
+  total += f();
+}
+console.log(total);

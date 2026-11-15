@@ -1,0 +1,11 @@
+## How fast a program runs
+
+The 25 programs of the benchmark set, built on cig 1.24.0 and timed on one machine beside `cig run` and the same programs written in Lua, Python, JavaScript and Rust, every run's output checked. Every number here is made from the run's raw samples by a script and made again by a second one written apart from it ([the paper](docs/BENCHMARKS-2026-11-15.md)). A cell is the program's time divided by the other's over the {{programs.compute}} compute programs, so under 1 means faster; in brackets, how many programs it was faster, level and slower on:
+
+{{table:ratios-compute}}
+
+- **A stage `b` program** (`cigcompile build --stage b`, the script's bytecode on cig's VM) takes {{geomean.compute.stage-b.cig}} of `cig run`'s time, faster on all {{n.compute.stage-b.cig}}, and {{geomean.compute.stage-b.python}} of CPython 3.13's; it starts in {{median.hello.stage-b}} ms, where CPython takes {{median.hello.python}} ms.
+- **A stage `a` program**, the default, runs on the interpreter as `cig run` does ({{geomean.compute.stage-a.cig}} of its time).
+- **Lua is faster**: a stage `b` program takes {{geomean.compute.stage-b.lua}} times Lua 5.4's time and {{geomean.compute.stage-b.luajit}} times LuaJIT's.
+
+Whole processes, start-up included, on a 2018 laptop on battery.

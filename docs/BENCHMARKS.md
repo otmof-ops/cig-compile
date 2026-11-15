@@ -20,7 +20,7 @@
 
    `strings` touches less on the newer runtime and is resident 3.8 MB more; on one runtime the same script read 13.7 MB interpreted and 18.2 MB compiled, and touched 6.8 and 6.6. With every page 4 KiB the peak is what the program touched, which is the figure a change in the compiler or the runtime can move. `--json` carries it as `touched_bytes` beside `rss_bytes`; the tables' `RSS MB` stays the resident set, what a run on that system really holds. Where the program cannot be read at its exit, or the kernel has no such switch, there is no `touched_bytes`.
 4. **Conditions.** Every report starts with the CPU, cores, kernel, CPU governor, the cig and cigcompile versions, `CIG_SEAL_KEY` and the runtime's sha256.
-5. **References.** `--ref` runs the Python, Node and Rust versions in `bench/ref/` too, where `python3`, `node` and `rustc` are installed (`rustc -O`), and gives cig's ratio to each. Each reference is held to the same `.expect` file.
+5. **References.** `--ref` runs the Python, Node and Rust versions in `bench/ref/` too, where `python3`, `node` and `rustc` are installed (`rustc -O`), and gives cig's ratio to each. Each reference is held to the same `.expect` file, and to the rule CigScript's `bench/ref` sets out: the same program as its CigScript twin, statement for statement. They were rewritten to it on 2026-11-15, after a review found some of them doing in C or in a typed array what the CigScript program does in script (CigScript's `docs/BENCHMARKS-2026-11-15.md` has the review and a comparison with them: [BENCHMARKS-2026-11-15.md](BENCHMARKS-2026-11-15.md) here is its compiled side).
 
 `--json` is for tools (it carries every raw sample, which the gates read) and `--markdown` for a pull request comment. `--set DIR` measures a folder of `<name>.cig` and `<name>.expect` instead of the set. CI runs the set on five machines on every pull request; a WRONG output there fails the build. A nightly run (`.github/workflows/bench.yml`) adds the references, posts the table to its summary and keeps the trend ([the gates](#the-gates)).
 
@@ -79,6 +79,8 @@ Two sizes differ from #30's table, on purpose. `strbuild` appends 10,000 times, 
 `orchestrate` is cig-orchestrator's own `orchestrate.cig`, the copy the differential suite already carries in `tests/corpus/cig-orchestrator/` (12.5k lines), run with `help`: the whole program is read, checked and started, and one command answers. Its `.expect` is that copy's help text. It times what a large program pays to start, interpreted and compiled; `cigcompile bench --orchestrate <file>` still times a full build of any copy.
 
 ## Stage A, measured
+
+The table below is cig 1.15.0's, measured with the references as they were before the rewrite of 2026-11-15; [BENCHMARKS-2026-11-15.md](BENCHMARKS-2026-11-15.md) measures cig 1.24.0 and stage `b` programs against the rewritten ones.
 
 `cigcompile bench --ref --runs 5`, cig 1.15.0, on an Intel Core Ultra 7 255H (16 cores, Linux 6.17, governor powersave), Python 3.12, Node 18 and Rust stable; medians in ms:
 

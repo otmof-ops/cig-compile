@@ -1,0 +1,103 @@
+# Benchmarks, 2026-11-15: programs cigcompile builds, against `cig run`, Lua, LuaJIT, CPython, Node and Rust
+
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
+What a program cigcompile 0.5.0 builds runs at: the 25 programs of the benchmark set, built at stage `a` and at stage `b` on cig 1.24.0 as released, timed on one machine beside `cig run` and beside the same programs written in Lua, Python, JavaScript and Rust. This is the compiled side of a run CigScript's paper reports in full, [cig-script's `docs/BENCHMARKS-2026-11-15.md`](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCHMARKS-2026-11-15.md): the programs in the other languages, the rule they are held to and the harness are there. This run's raw samples are in [`bench/results/2026-11-15/`](../bench/results/2026-11-15/).
+
+Every measured number below is made from those samples by CigScript's `bench/compare/report.py` and made again by its `bench/compare/check.py`, a second program written apart from the first to the same definitions. The two agree on every number and every character of this file: none was typed by hand.
+
+## In short
+
+- **A stage `b` program takes {{geomean.compute.stage-b.cig}} of `cig run`'s time** on the {{programs.compute}} compute programs, {{inverse.compute.stage-b.cig}} times as fast, and is faster on all {{n.compute.stage-b.cig}}; on the start-up programs it takes {{geomean.start.stage-b.cig}} of it. Stage `b`'s target ([#31](https://github.com/otmof-ops/cig-compile/issues/31)) is a third of the interpreter's time: not reached yet.
+- **Against CPython 3.13 it takes {{geomean.compute.stage-b.python}} of the time**, {{inverse.compute.stage-b.python}} times as fast (faster on {{faster.compute.stage-b.python}} of {{n.compute.stage-b.python}}, level on {{level.compute.stage-b.python}}, slower on {{slower.compute.stage-b.python}}), and against Node 22 {{geomean.compute.stage-b.node}}, Node taking {{median.hello.node}} ms just to start.
+- **Lua is faster**: a stage `b` program takes {{geomean.compute.stage-b.lua}} times Lua 5.4's time, {{geomean.compute.stage-b.luajit-off}} times LuaJIT's interpreter's and {{geomean.compute.stage-b.luajit}} times LuaJIT's with its compiler on.
+- **A stage `a` program**, what a build makes by default, runs on the interpreter as `cig run` does: it takes {{geomean.compute.stage-a.cig}} of `cig run`'s time.
+- **A program starts in {{median.hello.stage-b}} ms** (`hello` at stage `b`; {{median.hello.stage-a}} ms at stage `a`), where `cig run` takes {{median.hello.cig}} ms, CPython {{median.hello.python}} ms and Node {{median.hello.node}} ms.
+- **cig's start-up grows with its run history** ([cig-script#252](https://github.com/otmof-ops/cig-script/issues/252)), and so does a program's: `hello` at stage `b` took {{median.pass1.hello.stage-b}} ms over the first pass, while the history grew from {{history.first.pass1}} to {{history.last.pass1}} runs, and {{median.pass2.hello.stage-b}} ms over the second ({{history.first.pass2}} to {{history.last.pass2}}).
+
+## Against each language
+
+A cell is the time on that row divided by the other language's: the geometric mean, over the programs both have, of the ratio of their median times. Under 1, the cig side took less time. In brackets: how many of those programs it was faster on, level with (within 3%) and slower on.
+
+{{table:ratios-compute}}
+
+- **`cig run`**: the script on cig's tree-walking interpreter.
+- **A stage `a` program**: `cigcompile build`, the default; cig itself with the script inside, run by the same interpreter.
+- **A stage `b` program**: `cigcompile build --stage b`; the script's bytecode, run on cig's VM.
+
+The start-up programs:
+
+{{table:ratios-start}}
+
+## Every program, on cig's sides
+
+The median time of each program, in milliseconds, over {{rounds.pass1}} rounds in each of {{passes}} passes, as a run and as a dry run (`--dry-run`, which runs the program and keeps no run record):
+
+{{table:medians-cig}}
+
+What the run record costs, over the programs that have both:
+
+{{table:record}}
+
+## Memory
+
+The peak resident memory of each program, in MB, read as it exits (the median of every reading, three in each pass). It counts the pages of the program's own file with its allocations: a compiled program carries the whole cig runtime in its file (about 16 MB), the same binary `cig run` is.
+
+{{table:memory}}
+
+## cigcompile's own suite
+
+`cigcompile bench`, cigcompile 0.5.0 as released, run between the two passes, as it prints it (its JSON, with every sample, is in the results folder). It builds its programs at stage `a`, the default, so its "compiled" column is a stage `a` program, and its budget line "compiled vs interpreted" is stage `a`'s; the stage `b` programs are in the tables above.
+
+**cigcompile bench**: Intel(R) Core(TM) i5-8265U CPU @ 1.60GHz, 8 cores, linux 7.2.11+parrot7.1-amd64, governor powersave; cig 1.24.0, cigcompile 0.5.0, CIG_SEAL_KEY=file, runtime sha256 957ddff2c27c9baa
+
+| benchmark | stresses | interpreted ms | compiled ms | compute ms | p10 to p90 | CV | RSS MB |
+|---|---|---:|---:|---:|---|---:|---:|
+| `hello` | start-up | 1.9 | 1.7 | - | 1.8 to 2.0 | 2.9% | 11.4 |
+| `loop` | integer arithmetic in a counted loop | 58.3 | 58.1 | - | 58.1 to 58.4 | 0.2% | 11.5 |
+| `fib` | calls and returns: fib(25) | 53.7 | 52.8 | - | 53.5 to 53.8 | 0.8% | 11.5 |
+| `strings` | string building | 20.8 | 20.4 | - | 20.6 to 21.0 | 0.9% | 24.9 |
+| `maps` | map reads and writes | 35.8 | 36.1 | - | 35.7 to 36.0 | 0.5% | 25.4 |
+| `lists` | list building and reads | 27.4 | 31.4~ | - | 27.3 to 27.5 | 0.2% | 23.0 |
+| `json` | JSON encode and decode | 67.9 | 67.9 | - | 67.4 to 68.7 | 1.0% | 69.7 |
+| `csv` | CSV parsing | 41.4 | 41.4 | - | 41.1 to 41.8 | 0.8% | 35.9 |
+| `files` | walking a tree of files | 14.7 | 14.3~ | - | 14.6 to 14.8 | 0.7% | 19.0 |
+| `burn-big` | a 1,000-write burn and its journal | 52.9 | 52.8 | - | 52.9 to 53.1 | 0.3% | 23.8 |
+| `nbody` | float arithmetic, map fields | 444.9 | 443.4 | - | 444.2 to 451.8 | 1.8% | 11.8 |
+| `trees` | allocation and recursion | 361.1 | 361.1 | - | 359.9 to 366.2 | 0.8% | 13.5 |
+| `spectral` | nested float loops and calls | 197.7 | 200.7 | - | 197.3 to 200.5 | 0.8% | 13.8 |
+| `mandel` | a float loop with an early exit | 340.3 | 343.2 | - | 340.0 to 364.0 | 2.9% | 11.8 |
+| `fannkuch` | list index reads, writes and swaps | 295.2 | 310.0 | - | 294.9 to 296.9 | 0.3% | 11.8 |
+| `closures` | closures made and called | 46.7 | 47.6 | - | 46.6 to 46.8 | 0.2% | 13.8 |
+| `dispatch` | lambdas kept in a map, called by key | 72.2 | 72.0 | - | 71.8 to 72.5 | 0.5% | 11.8 |
+| `sieve` | a 300k-element list of booleans | 157.9 | 157.7~ | - | 157.6 to 158.3 | 0.2% | 48.3 |
+| `words` | split, map counting, string compare | 34.1 | 33.4 | - | 34.0 to 34.2 | 0.2% | 24.9 |
+| `regex-ish` | string find, replace and split | 37.3 | 37.0~ | 33.1 | 37.1 to 37.4 | 0.2% | 33.6 |
+| `json-deep` | a six-level nested document, parse and walk | 5.4 | 4.7 | 1.1 | 5.3 to 5.5 | 1.5% | 13.1 |
+| `strbuild` | s += piece, the quadratic trap | 7.0 | 6.1 | 16.9 | 6.9 to 7.0 | 0.8% | 12.1 |
+| `richards` | a priority scheduler of tasks | 23.1 | 22.3 | 20.6 | 23.1 to 23.2 | 0.3% | 11.9 |
+| `deltablue` | a constraint chain, method-heavy | 8.9 | 7.7 | 5.9 | 8.8 to 9.0 | 1.3% | 12.6 |
+| `burn-mixed` | 200 small burns of five writes each at 5x | 15.3 | 14.5 | 11.9 | 15.1 to 15.3 | 0.6% | 15.8 |
+| `orchestrate` | cig-orchestrator's own 12.5k-line orchestrate.cig: help | 46.5 | 44.2 | - | 46.0 to 46.6 | 1.5% | 49.2 |
+| `startup-0` | start-up, no stdlib module touched | 3.1 | 2.2 | - | 3.0 to 3.2 | 2.7% | 12.2 |
+| `startup-1` | start-up, one stdlib module | 3.2 | 2.2 | - | 3.0 to 3.2 | 3.0% | 12.2 |
+| `startup-10` | start-up, ten stdlib modules | 3.6 | 2.4 | - | 3.4 to 3.7 | 3.2% | 13.1 |
+
+| budget (#14) | target | measured | verdict |
+|---|---|---:|---|
+| incremental rebuild, nothing changed | under 50 ms | 1.8 ms | met |
+| start-up of a compiled hello | under 5 ms | 1.7 ms | met |
+| compiled vs interpreted, median | at least 3x (stage B) | 1.01x | not yet (a later stage) |
+| hello binary size | under 4 MB (the trimmed runtime, #4) | 16.3 MB | not yet (a later stage) |
+| peak memory of a compiled hello | under 14 MB (Linux) | 8.3 MB (2.6 MB of its own, 5.7 MB of its files' pages) | met |
+
+## Conditions
+
+{{table:conditions}}
+
+## What this does not show
+
+- **One machine.** A 2018 laptop processor, on battery and on its everyday settings. Another processor, another operating system or another power setting moves every number; the ratios move less than the times.
+- **Small programs, timed whole.** Most of these programs run for tens of milliseconds, so start-up is a large part of every time; it is the time a program's user waits, not the speed of a long-running program.
+- **cig as it ships today**: cig 1.24.0 and cigcompile 0.5.0, both released. The work merged since and in progress on the VM ([cig-script#243](https://github.com/otmof-ops/cig-script/issues/243)) is not in these numbers.
+- **Not every program in every language.** Rust has eight of the 25 programs; Lua has no `json`, `json-deep`, `csv` or `startup-10`; Node has no `csv`. The three counts beside each geometric mean add up to the programs it covers.
