@@ -83,7 +83,7 @@ cigcompile bench --against main.json           # the regression gate: exit 1 on 
 cigcompile bench --trend history               # the nightly trend gate over a folder of dated results
 ```
 
-A pull request fails on a non-noisy benchmark more than 5% slower than `main`'s, the set's geometric mean more than 2% slower, or peak memory or allocations more than 10% over; each by a Mann-Whitney test, so noise does not fail it. The nightly keeps the trend and fails after five slower nights. [BENCHMARKS.md](docs/BENCHMARKS.md#the-gates) has the rules and the tests.
+A pull request fails on a non-noisy benchmark more than 5% slower than `main`'s or the set's geometric mean more than 2% slower, each by a Mann-Whitney test, so noise does not fail it; and on the memory a benchmark touches or its allocations more than 10% over. The nightly keeps the trend and fails after five slower nights. [BENCHMARKS.md](docs/BENCHMARKS.md#the-gates) has the rules and the tests.
 
 ## Guides
 

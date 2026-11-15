@@ -5,6 +5,25 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **The memory gate holds a benchmark to what it touched (#30).** A
+  resident set is counted in the pages the kernel gave, and cig's runtime
+  asks for 2 MiB pages past its heap's first 8 MiB: a block there is
+  resident 2 MiB at a time from its first byte, so the figure moves by
+  whole pages with where a program's blocks happen to land. Measured on
+  the hosted runner: a compiled `strings` is resident 25.4 MB on cig
+  1.21.0 and 29.3 MB on cig 1.24.0, and touches 18.3 and 17.7 MB; on one
+  runtime the same script holds 13.7 MB of its own interpreted and 18.2
+  MB compiled, and touches 6.8 and 6.6. A 10% limit on a 25 MB program
+  was a limit of one such page. `bench` now takes one more untimed run
+  of each side with transparent huge pages off for the program
+  (`PR_SET_THP_DISABLE`, Linux) and reads its peak at its exit:
+  `touched_bytes` in `--json`, beside `rss_bytes`. `--against` holds a
+  row to what it touched where both sides have that figure, and to the
+  resident set, as before, where one does not; its table shows both
+  columns and says which is held to, and a failure names the figures.
+  The limit is the same 10% and 1 MiB. The tables' `RSS MB` and the
+  compiled hello's 14 MB budget are still the resident set
+  (`docs/BENCHMARKS.md`, "How a benchmark is measured" and "The gates").
 - **A benchmark's peak memory is read from the program's own address
   space (#30).** The `RSS MB` column and the budget "peak memory of a
   compiled hello, under 14 MB" took a child's peak from `wait4`. On Linux

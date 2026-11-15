@@ -12,8 +12,14 @@
 //!   drifts under both. A benchmark that is noisy on either side (CV over
 //!   5%) is reported and never gated: a gate that trips on noise is
 //!   ignored.
-//! - **Memory:** peak resident set, and the allocation count where both
-//!   sides have one (`bench --alloc`), more than 10% over `main`'s.
+//! - **Memory:** what a benchmark touched (its peak with transparent huge
+//!   pages off, where both sides have that reading; its peak resident set
+//!   where one does not), and the allocation count where both sides have
+//!   one (`bench --alloc`), more than 10% over `main`'s. A resident set
+//!   read under 2 MiB pages moves by whole pages with where a program's
+//!   blocks happen to land, so it is shown and not held to: on one
+//!   runtime the same script read 13.7 MB interpreted and 18.2 MB
+//!   compiled, and touched 6.8 and 6.6.
 //! - **Trend** (nightly): the set's geometric mean slower than the night
 //!   before, by more than 0.5%, five nights in a row.
 //!
@@ -51,6 +57,8 @@ pub struct Point {
     pub cv: f64,
     pub samples: Vec<f64>,
     pub rss: Option<u64>,
+    /// The peak with transparent huge pages off: what it touched.
+    pub touched: Option<u64>,
     pub allocs: Option<u64>,
 }
 
@@ -109,6 +117,7 @@ impl Results {
                     cv: s["cv"].as_f64().unwrap_or(0.0),
                     samples,
                     rss: s["rss_bytes"].as_u64(),
+                    touched: s["touched_bytes"].as_u64(),
                     allocs: if side == "interpreted" { allocs } else { None },
                 };
                 let key = format!("{name} ({side})");
@@ -129,6 +138,7 @@ fn pool(old: &mut Point, new: Point) {
         if new.median > old.median {
             *old = Point {
                 rss: old.rss.max(new.rss),
+                touched: old.touched.max(new.touched),
                 ..new
             };
         }
@@ -143,6 +153,7 @@ fn pool(old: &mut Point, new: Point) {
     old.median = v[((v.len() - 1) as f64 * 0.5).round() as usize];
     old.cv = if mean > 0.0 { var.sqrt() / mean } else { 0.0 };
     old.rss = old.rss.max(new.rss);
+    old.touched = old.touched.max(new.touched);
     old.allocs = old.allocs.or(new.allocs);
 }
 
@@ -167,10 +178,29 @@ pub struct Line {
     /// The Mann-Whitney p-value; `None` when a side has too few samples.
     pub p: Option<f64>,
     pub verdict: Verdict,
-    /// Peak resident set, base then current, and its verdict.
+    /// Peak resident set, base then current: shown, and held to only
+    /// where a side has no `touched`.
     pub rss: Option<(u64, u64)>,
+    /// What it touched (the peak with transparent huge pages off), base
+    /// then current, where both sides have the reading.
+    pub touched: Option<(u64, u64)>,
     pub allocs: Option<(u64, u64)>,
+    /// Its memory (`touched`, else `rss`) or its allocations are over.
     pub memory_slower: bool,
+}
+
+impl Line {
+    /// The memory figures the gate holds this row to, and what they are.
+    fn held(&self) -> Option<((u64, u64), &'static str)> {
+        self.touched
+            .map(|m| (m, "touched"))
+            .or(self.rss.map(|m| (m, "peak resident set")))
+    }
+}
+
+/// Is `c` over `a` by more than the limit, and by more than `floor`?
+fn over(a: u64, c: u64, floor: u64) -> bool {
+    c > a && (c - a) > floor && (c as f64) > (a as f64) * (1.0 + MEMORY_LIMIT)
 }
 
 #[derive(Debug)]
@@ -198,9 +228,21 @@ impl Report {
                     ROW_LIMIT * 100.0
                 ));
             }
-            if l.memory_slower {
+            if let Some(((a, c), what)) = l
+                .held()
+                .filter(|((a, c), _)| over(*a, *c, MEMORY_FLOOR_BYTES))
+            {
                 out.push(format!(
-                    "{} uses more than {:.0}% over main's memory",
+                    "{} uses more than {:.0}% over main's memory ({what}: {:.1} to {:.1} MB)",
+                    l.key,
+                    MEMORY_LIMIT * 100.0,
+                    a as f64 / 1e6,
+                    c as f64 / 1e6
+                ));
+            }
+            if let Some((a, c)) = l.allocs.filter(|(a, c)| over(*a, *c, ALLOC_FLOOR)) {
+                out.push(format!(
+                    "{} makes more than {:.0}% over main's allocations ({a} to {c})",
                     l.key,
                     MEMORY_LIMIT * 100.0
                 ));
@@ -253,12 +295,14 @@ pub fn compare(base: &Results, cur: &Results) -> Report {
                 every_row_has_samples = false;
             }
         }
-        let over = |a: u64, c: u64, floor: u64| {
-            c > a && (c - a) > floor && (c as f64) > (a as f64) * (1.0 + MEMORY_LIMIT)
-        };
         let rss = b.rss.zip(c.rss);
+        // What both sides touched, when both were read that way; the
+        // resident set decides only where one was not.
+        let touched = b.touched.zip(c.touched);
         let allocs = b.allocs.zip(c.allocs);
-        let memory_slower = rss.is_some_and(|(a, c)| over(a, c, MEMORY_FLOOR_BYTES))
+        let memory_slower = touched
+            .or(rss)
+            .is_some_and(|(a, c)| over(a, c, MEMORY_FLOOR_BYTES))
             || allocs.is_some_and(|(a, c)| over(a, c, ALLOC_FLOOR));
         lines.push(Line {
             key: key.clone(),
@@ -269,6 +313,7 @@ pub fn compare(base: &Results, cur: &Results) -> Report {
             p,
             verdict,
             rss,
+            touched,
             allocs,
             memory_slower,
         });
@@ -375,15 +420,16 @@ pub fn render(r: &Report, markdown: bool) -> String {
     let p = |p: Option<f64>| p.map_or("-".to_string(), |p| format!("{p:.3}"));
     if markdown {
         out.push_str("**cigcompile bench against main**\n\n");
-        out.push_str("| benchmark | main ms | this ms | change | p | peak RSS | allocations | verdict |\n|---|---:|---:|---:|---:|---:|---:|---|\n");
+        out.push_str("| benchmark | main ms | this ms | change | p | touched | peak RSS | allocations | verdict |\n|---|---:|---:|---:|---:|---:|---:|---:|---|\n");
         for l in &r.lines {
             out.push_str(&format!(
-                "| `{}` | {:.1} | {:.1} | {} | {} | {} | {} | {} |\n",
+                "| `{}` | {:.1} | {:.1} | {} | {} | {} | {} | {} | {} |\n",
                 l.key,
                 l.base_ms,
                 l.cur_ms,
                 pct(l.change),
                 p(l.p),
+                mem_cell(l.touched, true),
                 mem_cell(l.rss, true),
                 mem_cell(l.allocs, false),
                 verdict_word(l)
@@ -418,6 +464,20 @@ pub fn render(r: &Report, markdown: bool) -> String {
         None => "geometric mean: no non-noisy row to measure".to_string(),
     };
     out.push_str(&format!("\n{}{geo}\n", if markdown { "\n" } else { "" }));
+    if markdown {
+        let held_by_rss = r
+            .lines
+            .iter()
+            .any(|l| l.touched.is_none() && l.rss.is_some());
+        out.push_str(&format!(
+            "\nmemory: held to `touched`, the peak with transparent huge pages off; `peak RSS` is shown, and moves by whole 2 MiB pages{}\n",
+            if held_by_rss {
+                " (a row with no `touched` on a side is held to it)"
+            } else {
+                ""
+            }
+        ));
+    }
     for u in &r.unmatched {
         out.push_str(&format!("not compared: {u}\n"));
     }
@@ -534,6 +594,7 @@ mod tests {
             cv: st.cv,
             samples: s,
             rss: st.rss,
+            touched: None,
             allocs: Some(100_000),
         }
     }
@@ -673,6 +734,67 @@ mod tests {
         let tiny = set(vec![("m", mk(1_000_000, 1_000, &mut g))]);
         let tinier = set(vec![("m", mk(1_300_000, 1_500, &mut g))]);
         assert!(compare(&tiny, &tinier).failures().is_empty());
+    }
+
+    /// What a program touched decides, where both sides have that reading:
+    /// a resident set that moved by whole pages does not fail a row whose
+    /// touched memory did not, and touched memory over the limit fails a
+    /// row whose resident set happened to land level. A side read the old
+    /// way leaves the resident set to decide.
+    #[test]
+    fn the_memory_gate_holds_to_what_was_touched_where_both_sides_have_it() {
+        let mut g = Lcg(9);
+        let mk = |rss: u64, touched: Option<u64>, g: &mut Lcg| {
+            let mut p = point(samples(g, 100.0, 0.02, 10));
+            p.rss = Some(rss);
+            p.touched = touched;
+            p.allocs = None;
+            p
+        };
+        // The row this was written for: 25.4 to 29.3 MB resident, 18.3 to
+        // 17.7 MB touched.
+        let base = set(vec![("s", mk(25_400_000, Some(18_300_000), &mut g))]);
+        let cur = set(vec![("s", mk(29_300_000, Some(17_700_000), &mut g))]);
+        let r = compare(&base, &cur);
+        assert!(!r.lines[0].memory_slower, "{:?}", r.lines[0]);
+        assert!(r.failures().is_empty(), "{:?}", r.failures());
+        assert_eq!(r.lines[0].touched, Some((18_300_000, 17_700_000)));
+        // Touched memory over the limit fails, though the resident set is level.
+        let leak = set(vec![("s", mk(25_400_000, Some(21_000_000), &mut g))]);
+        let r = compare(&base, &leak);
+        assert!(r.lines[0].memory_slower);
+        assert!(
+            r.failures()[0].contains("touched: 18.3 to 21.0 MB"),
+            "{:?}",
+            r.failures()
+        );
+        // main read the old way: the resident set decides, as before.
+        let old_base = set(vec![("s", mk(25_400_000, None, &mut g))]);
+        let r = compare(&old_base, &cur);
+        assert!(r.lines[0].memory_slower);
+        assert_eq!(r.lines[0].touched, None);
+        assert!(
+            r.failures()[0].contains("peak resident set: 25.4 to 29.3 MB"),
+            "{:?}",
+            r.failures()
+        );
+        // Pooled rounds keep the largest reading of each kind.
+        let mut both = Results::default();
+        both.points
+            .push(("s (interpreted)".into(), mk(1, Some(5), &mut g)));
+        pool(&mut both.points[0].1, mk(3, Some(4), &mut g));
+        assert_eq!(
+            (both.points[0].1.rss, both.points[0].1.touched),
+            (Some(3), Some(5))
+        );
+        // The table has both columns, and says which one is held to.
+        let text = render(&compare(&base, &cur), true);
+        assert!(text.contains("| touched | peak RSS |"), "{text}");
+        assert!(
+            text.contains("| 18.3 to 17.7 MB | 25.4 to 29.3 MB |"),
+            "{text}"
+        );
+        assert!(text.contains("memory: held to `touched`"), "{text}");
     }
 
     #[test]

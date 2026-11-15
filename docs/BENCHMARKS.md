@@ -7,6 +7,18 @@
 1. **Output first.** Each implementation runs once, and its output is compared with the benchmark's `.expect` file. One that differs is WRONG, gets no time, and fails the run: a fast wrong answer is a bug, not a result.
 2. **Samples.** Each side then runs until it has `--runs` samples (10 by default), or until it has three and has run for three seconds.
 3. **Statistics.** The report gives the median, the 10th and 90th percentiles, the coefficient of variation, and the peak resident set. A side whose CV is over 5% is marked `~`, noisy. **The peak is the program's own.** It comes from one more run of each side that is not timed. On Linux `wait4` cannot give it: a child made by `fork` has resident what its parent holds of its own until it execs, and the kernel keeps that mark across the `exec`, so the figure is at least what the bench holds when it starts the program (on CI's tables the runtime's size plus 3 MB; a child of a process that holds 96 MiB reads 102.7 MB by `wait4` and 1.4 MB of its own). Before 0.4.1 every row read the bench's peak (24.7 to 28.4 MB); 0.4.1 let go of the runtime's bytes and set the child's mark back before `exec`, which took the bench's earlier peak out and left in what it still held, so every program under 19 MB read 19 MB (a hello 19.3 MB where its own peak is 11.3 MB). Now the run is traced by the bench just long enough to read the program at its exit: the program asks to be traced, the bench has it stop when it exits, reads `VmHWM` from its `/proc/<pid>/status` (the peak of the address space the program got at its `exec`, with nothing of the bench's in it) and lets it go. Where a process cannot be traced by its parent (a locked-down container) the figure is `wait4`'s after the mark is set back, and off Linux it is that run's `wait4`. The timed runs are started as before. `a_benchmarks_peak_memory_is_its_own_not_the_benchs` holds both halves: a buffer the bench still holds, and one it has freed. A program just written by `cigcompile build` can map its code in large page-cache folios on a kernel that has them (Linux 6.17 on ext4: hello 10.9 MB just built, 5.4 MB once the file is rewritten); both sides of a gate run just-built programs, so they compare like with like.
+   **And what it touched.** One more run of each side, not timed, is read the same way with transparent huge pages off for the program (`PR_SET_THP_DISABLE`, set before its `exec`; Linux). A resident set is counted in the pages the kernel gave, and a runtime that asks for 2 MiB pages for its heap, as cig does past the heap's first 8 MiB, has a block there resident 2 MiB at a time from its first byte. So the resident set moves by whole pages with where a program's blocks happen to land, not with how much it uses. On the hosted runner (Linux 7.0, transparent huge pages `madvise`), compiled programs, what is their own:
+
+   | program | touched, cig 1.21.0 → 1.24.0 | resident, cig 1.21.0 → 1.24.0 |
+   |---|---:|---:|
+   | `hello` | 0.6 → 0.6 MB | 6.3 → 0.6 MB |
+   | `strings` | 7.2 → 6.6 | 14.4 → 18.2 |
+   | `lists` | 6.2 → 6.4 | 18.4 → 11.7 |
+   | `maps` | 7.1 → 7.5 | 16.0 → 14.8 |
+   | `words` | 7.5 → 7.9 | 20.2 → 14.0 |
+   | `regex-ish` | 13.2 → 15.1 | 22.2 → 22.7 |
+
+   `strings` touches less on the newer runtime and is resident 3.8 MB more; on one runtime the same script read 13.7 MB interpreted and 18.2 MB compiled, and touched 6.8 and 6.6. With every page 4 KiB the peak is what the program touched, which is the figure a change in the compiler or the runtime can move. `--json` carries it as `touched_bytes` beside `rss_bytes`; the tables' `RSS MB` stays the resident set, what a run on that system really holds. Where the program cannot be read at its exit, or the kernel has no such switch, there is no `touched_bytes`.
 4. **Conditions.** Every report starts with the CPU, cores, kernel, CPU governor, the cig and cigcompile versions, `CIG_SEAL_KEY` and the runtime's sha256.
 5. **References.** `--ref` runs the Python, Node and Rust versions in `bench/ref/` too, where `python3`, `node` and `rustc` are installed (`rustc -O`), and gives cig's ratio to each. Each reference is held to the same `.expect` file.
 
@@ -95,7 +107,7 @@ Both sides of a gate are `--json` results; nothing in a gate runs a program.
 |---|---|---|---|
 | regression, per benchmark (`--against`) | every pull request, the fast set | a non-noisy benchmark's median is more than **5%** slower than `main`'s and a one-sided Mann-Whitney test of the samples says it is real (p under 0.05) | 1 |
 | regression, the set (`--against`) | every pull request | the geometric mean of the ratios, over the non-noisy rows, is more than **2%** slower and the same test over all their samples (each divided by its row's `main` median) says it is real | 1 |
-| memory (`--against`) | every pull request | a benchmark's peak resident set, or its allocation count where both sides have one, is more than **10%** over `main`'s (and over 1 MiB, or 1,000 allocations: a few KB on a tiny program is not a leak) | 1 |
+| memory (`--against`) | every pull request | what a benchmark touched (its peak with transparent huge pages off, "How a benchmark is measured"), or its allocation count where both sides have one, is more than **10%** over `main`'s (and over 1 MiB, or 1,000 allocations: a few KB on a tiny program is not a leak). The peak resident set is in the table beside it and is not held to: it moves by whole 2 MiB pages. Where a side has no touched figure (results from before it was read, a system that cannot give it) the row is held to the resident set, as it was | 1 |
 | trend (`--trend`) | nightly | the set's geometric mean is more than 0.5% slower than the night before, **five nights in a row** | 1 |
 
 A benchmark whose CV is over 5% on either side is **noisy**: it is in the table, marked `noisy, not gated`, and never fails a run. A slowdown the test cannot tell from the samples' own spread is `not significant`, and not gated. A side with fewer than five samples is gated on its medians alone.
@@ -127,6 +139,8 @@ On cig 1.21.0 as released the row is shown and reads `not yet`: a hello peaks at
 | `the_geomean_gate_trips_at_two_percent` | every benchmark 3% slower fails the set, 1% does not |
 | `the_regression_gate_stays_quiet_on_noise` | 200 seeds of the same program measured twice: no failure |
 | `the_memory_gate_trips_over_ten_percent` | peak RSS and allocations |
+| `the_memory_gate_holds_to_what_was_touched_where_both_sides_have_it` | a resident set that moved by whole pages does not fail a row whose touched memory did not; touched memory over the limit does; a side read the old way leaves the resident set to decide |
+| `what_a_program_touched_is_not_rounded_to_huge_pages` | a program that writes one byte in each of sixteen 2 MiB pages holds sixteen small pages with transparent huge pages off (Linux) |
 | `a_benchmarks_peak_memory_is_its_own_not_the_benchs` | a row's peak is the program's, not the bench's (Linux) |
 | `a_compiled_hello_over_its_memory_budget_is_missed` | the compiled hello's memory budget |
 | `the_regression_gate_trips_from_the_command_line` | `--against` and `--current` exit codes, pooling, a file that is not a result |

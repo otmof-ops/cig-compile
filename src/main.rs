@@ -202,7 +202,7 @@ struct BenchArgs {
     /// Only these benchmarks of the set (comma separated): the pull request job's fast set.
     #[arg(long, value_delimiter = ',', value_name = "NAMES")]
     only: Vec<String>,
-    /// The regression gate (#30): compare with a `main` result saved by `bench --json`; repeat to pool interleaved rounds. Exit 1 when a non-noisy benchmark is over 5% slower, the geometric mean over 2%, or peak memory or allocations over 10%, each by a Mann-Whitney test of the samples. With `--current` nothing is run.
+    /// The regression gate (#30): compare with a `main` result saved by `bench --json`; repeat to pool interleaved rounds. Exit 1 when a non-noisy benchmark is over 5% slower or the geometric mean over 2%, each by a Mann-Whitney test of the samples, or when what a benchmark touched or its allocations are over 10%. With `--current` nothing is run.
     #[arg(long, value_name = "JSON")]
     against: Vec<PathBuf>,
     /// This pull request's results, from `bench --json` (repeat to pool rounds), instead of running the set: the gate compares two saved results.

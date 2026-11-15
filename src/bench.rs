@@ -229,6 +229,10 @@ pub struct Stats {
     /// Peak resident set of the largest sample, in bytes, where the system
     /// says it.
     pub rss: Option<u64>,
+    /// What it touched, in bytes: its peak from one more run with
+    /// transparent huge pages off (`touched_peak`), where the system can
+    /// say it. The memory gate holds a benchmark to this.
+    pub touched: Option<u64>,
     /// Every sample, in ms, for the gates' Mann-Whitney test (#30).
     pub raw: Vec<f64>,
 }
@@ -250,8 +254,15 @@ impl Stats {
             cv: if mean > 0.0 { var.sqrt() / mean } else { 0.0 },
             samples: v.len(),
             rss,
+            touched: None,
             raw: ms.to_vec(),
         }
+    }
+
+    /// These statistics with what the side touched.
+    pub fn touching(mut self, touched: Option<u64>) -> Stats {
+        self.touched = touched;
+        self
     }
 
     pub fn noisy(&self) -> bool {
@@ -801,7 +812,9 @@ fn sample(runs: usize, expect: &str, mut make: impl FnMut(usize) -> Command) -> 
     // The peak from one more run of its own (see `peak_rss`), each try in
     // a folder of its own; the timed runs' figure only where it has none.
     let peak = peak_rss(|n| make(runs.max(1) + 1 + n)).or(rss);
-    Side::Timed(Stats::of(&ms, peak))
+    // And what it touched, from one more (see `touched_peak`).
+    let touched = touched_peak(&mut make(runs.max(1) + 3));
+    Side::Timed(Stats::of(&ms, peak).touching(touched))
 }
 
 fn clip(s: &str) -> String {
@@ -846,6 +859,29 @@ fn peak_rss(mut make: impl FnMut(usize) -> Command) -> Option<u64> {
         return Some(m.peak);
     }
     peak_by_wait(&mut make(if cfg!(target_os = "linux") { 1 } else { 0 }))
+}
+
+/// What a command touched: its peak from one more run that is not timed,
+/// with transparent huge pages off for the program.
+///
+/// A resident set is counted in the pages the kernel gave. A runtime that
+/// asks for 2 MiB pages for its heap (cig does, past the heap's first
+/// 8 MiB) has a block there resident 2 MiB at a time from its first byte,
+/// so its resident set moves by whole pages with where its blocks happen
+/// to land, not with how much it uses: on the hosted runner one script
+/// read 13.7 MB of its own interpreted and 18.2 MB compiled on the same
+/// runtime, and touched 6.8 and 6.6; between two runtimes a program read
+/// 3.9 MB more and touched 0.6 MB less. With `PR_SET_THP_DISABLE` set
+/// before its `exec` (the kernel keeps it across the `exec`, and cig's
+/// runtime leaves a switch its parent set alone) every page is 4 KiB and
+/// the peak is what the program touched. That is the figure a change in
+/// the compiler or the runtime can move, so it is the one the memory gate
+/// compares; `rss` stays what a run on this system really holds.
+///
+/// `None` where the program cannot be read at its exit (`memory_at_exit`),
+/// where the kernel has no such switch, and off Linux.
+fn touched_peak(c: &mut Command) -> Option<u64> {
+    read_at_exit(c, true).map(|m| m.peak)
 }
 
 /// `wait4`'s peak for one run of a command, the child's mark set back on
@@ -933,14 +969,26 @@ impl Memory {
 /// stop and lets it go. Signals on the way are passed on. `None` where
 /// the system does not let a process be traced by its parent, where the
 /// run fails, and off Linux.
-#[cfg(target_os = "linux")]
 fn memory_at_exit(c: &mut Command) -> Option<Memory> {
+    read_at_exit(c, false)
+}
+
+/// [`memory_at_exit`], and with `small_pages` the program runs with
+/// transparent huge pages off (`touched_peak`).
+#[cfg(target_os = "linux")]
+fn read_at_exit(c: &mut Command, small_pages: bool) -> Option<Memory> {
     use std::os::unix::process::CommandExt;
     c.stdout(Stdio::null()).stderr(Stdio::null());
     // SAFETY: the closure runs in the forked child before `exec` and makes
-    // one async-signal-safe system call with no pointers.
+    // async-signal-safe system calls with no pointers.
     unsafe {
-        c.pre_exec(|| {
+        c.pre_exec(move || {
+            if small_pages {
+                let (on, zero): (libc::c_ulong, libc::c_ulong) = (1, 0);
+                if libc::prctl(libc::PR_SET_THP_DISABLE, on, zero, zero, zero) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
             let none: libc::c_long = 0;
             if libc::ptrace(libc::PTRACE_TRACEME, none, none, none) == -1 {
                 return Err(std::io::Error::last_os_error());
@@ -986,7 +1034,7 @@ fn memory_at_exit(c: &mut Command) -> Option<Memory> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn memory_at_exit(_c: &mut Command) -> Option<Memory> {
+fn read_at_exit(_c: &mut Command, _small_pages: bool) -> Option<Memory> {
     None
 }
 
@@ -1646,6 +1694,7 @@ fn side_json(s: &Side) -> serde_json::Value {
         Side::Timed(st) => serde_json::json!({
             "median_ms": st.median, "p10_ms": st.p10, "p90_ms": st.p90, "cv": st.cv,
             "samples": st.samples, "noisy": st.noisy(), "rss_bytes": st.rss,
+            "touched_bytes": st.touched,
             "samples_ms": st.raw,
         }),
         Side::Wrong(why) => serde_json::json!({"wrong": why}),
@@ -2217,6 +2266,81 @@ RssAnon:\t     948 kB\nRssFile:\t    6268 kB\nRssShmem:\t       4 kB\nThreads:\t
         .expect("a reading");
         assert!(big.own() >= 24 << 20, "{big:?}");
         assert!(memory_at_exit(Command::new("false").stdin(Stdio::null())).is_none());
+    }
+
+    /// What a program touched is its peak in 4 KiB pages. The program
+    /// here asks for 2 MiB pages and writes one byte in each of sixteen:
+    /// with transparent huge pages off it holds sixteen small pages of
+    /// them, whatever the kernel would have given it, and where the
+    /// kernel does give 2 MiB pages its resident set carries all sixteen.
+    /// The program is this test binary running the probe below.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn what_a_program_touched_is_not_rounded_to_huge_pages() {
+        let program = || {
+            let mut c = Command::new(std::env::current_exe().expect("the test binary"));
+            c.args([
+                "--exact",
+                "bench::tests::a_program_that_touches_sixteen_huge_pages",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .stdin(Stdio::null());
+            c
+        };
+        let Some(as_is) = read_at_exit(&mut program(), false) else {
+            // A system that does not let a process be traced by its parent.
+            eprintln!("skipped: this system gave no reading at a process's exit");
+            return;
+        };
+        let Some(small) = read_at_exit(&mut program(), true) else {
+            eprintln!("skipped: this kernel cannot turn transparent huge pages off for a process");
+            return;
+        };
+        eprintln!(
+            "sixteen bytes, 2 MiB apart: {} bytes of its own as this system pages it, {} touched",
+            as_is.own(),
+            small.own()
+        );
+        // Sixteen 4 KiB pages and the test harness, not sixteen 2 MiB pages.
+        assert!(small.own() < 16 << 20, "{small:?}");
+        assert!(touched_peak(&mut program()).is_some());
+        // Where this kernel gave the 2 MiB pages, the resident set carries
+        // them and the touched figure does not.
+        if as_is.own() >= 32 << 20 {
+            assert!(
+                small.own() + (16 << 20) < as_is.own(),
+                "{small:?} against {as_is:?}"
+            );
+        }
+    }
+
+    /// The program `what_a_program_touched_is_not_rounded_to_huge_pages` runs.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "started by what_a_program_touched_is_not_rounded_to_huge_pages, as its program"]
+    fn a_program_that_touches_sixteen_huge_pages() {
+        const HUGE: usize = 2 << 20;
+        const PAGES: usize = 16;
+        // SAFETY: an anonymous private mapping of our own, written inside
+        // its bounds and kept until the process ends; `madvise` only
+        // changes how it is backed.
+        unsafe {
+            let raw = libc::mmap(
+                std::ptr::null_mut(),
+                (PAGES + 1) * HUGE,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            assert_ne!(raw, libc::MAP_FAILED);
+            let start = (raw as usize).next_multiple_of(HUGE) as *mut u8;
+            libc::madvise(start.cast(), PAGES * HUGE, libc::MADV_HUGEPAGE);
+            for i in 0..PAGES {
+                start.add(i * HUGE).write_volatile(1);
+            }
+        }
     }
 
     #[test]
