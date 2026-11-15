@@ -1,6 +1,6 @@
 [package]
 name = "cigcompile"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.82"
 description = "CigCompile: CigScript scripts as programs that run with nothing installed"

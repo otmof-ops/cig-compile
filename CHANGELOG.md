@@ -5,6 +5,27 @@ project follows semantic versioning.
 
 ## Unreleased
 
+## 0.5.0 — 2026-11-15
+
+Programs for cig 1.24.0, and the first stage B programs. `cigcompile
+build --stage b` makes a program that carries the bytecode its script
+lowers to and runs it on cig's VM, held to the interpreter in output,
+errors and every step budget; a build without `--stage` still makes
+stage `a`. Every program is written in payload format 2, `--args
+direct` makes a program that takes every argument as its own, and
+`verify` reads a program part by part. The lowering from CIR to the
+register bytecode is whole (`orchestrate.cig` lowers). `cigcompile
+bench` reads a program's own peak memory, and its gate holds a
+benchmark to the memory it touched.
+
+- **Programs for cig 1.24.0.** The pinned runtime moves from cig
+  1.21.0's release to cig 1.24.0's (cig-script's notes for 1.22.0,
+  1.23.0 and 1.24.0 say what each gained: the bytecode VM, payload
+  format 2 and a program's own flags first among them). The runtime a
+  compiled program embeds is cig 1.24.0, so its `cigcompile verify`
+  row prints `cig-v1.24.0-<target>`, and the pass, the SBOM and
+  `cigcompile audit` name the same version. A program an older
+  cigcompile built (format 1) still verifies, part by part as before.
 - **A memory difference has to show in every round (#30).** The gate
   pooled a side's rounds into its highest memory reading and compared
   the two, so one reading could fail a row. It did on a pull request that
