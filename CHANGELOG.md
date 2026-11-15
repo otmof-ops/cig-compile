@@ -26,6 +26,21 @@ benchmark to the memory it touched.
   row prints `cig-v1.24.0-<target>`, and the pass, the SBOM and
   `cigcompile audit` name the same version. A program an older
   cigcompile built (format 1) still verifies, part by part as before.
+- **A memory difference has to show in every round (#30).** The gate
+  pooled a side's rounds into its highest memory reading and compared
+  the two, so one reading could fail a row. It did on a pull request that
+  changed version numbers and documents: `strings` interpreted read
+  13.6 MB in each of `main`'s three rounds and 17.6 MB in one of the pull
+  request's, the same pinned runtime (by sha256) running the same script
+  on both sides. On the hosted runner that reading moves between those
+  two values from run to run; on the test machine thirty runs stay within
+  0.5 MB. `--against` now keeps each side's lowest and highest reading
+  and holds the current side's lowest against the baseline's highest, for
+  what a benchmark touched and for its resident set; the table shows
+  those two figures and says so. One result file a side gives what it
+  gave before. The cost: on a row whose reading moves like that, a real
+  change smaller than the movement is not seen (`docs/BENCHMARKS.md`,
+  "Memory, over the rounds").
 - **The memory gate holds a benchmark to what it touched (#30).** A
   resident set is counted in the pages the kernel gave, and cig's runtime
   asks for 2 MiB pages past its heap's first 8 MiB: a block there is

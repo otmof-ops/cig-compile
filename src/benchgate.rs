@@ -19,7 +19,14 @@
 //!   read under 2 MiB pages moves by whole pages with where a program's
 //!   blocks happen to land, so it is shown and not held to: on one
 //!   runtime the same script read 13.7 MB interpreted and 18.2 MB
-//!   compiled, and touched 6.8 and 6.6.
+//!   compiled, and touched 6.8 and 6.6. **A difference has to show in
+//!   every round:** where several result files are pooled for a side,
+//!   the pull request's lowest reading is held against `main`'s highest.
+//!   On the hosted runner a reading can move by 4 MB between two runs of
+//!   one binary on one script (13.6 and 17.6 MB, where thirty runs on the
+//!   test machine stay within 0.5 MB): with each side's highest reading
+//!   compared, one such run failed a row whose two sides were the same
+//!   runtime and the same script.
 //! - **Trend** (nightly): the set's geometric mean slower than the night
 //!   before, by more than 0.5%, five nights in a row.
 //!
@@ -50,15 +57,51 @@ pub const TREND_NIGHTS: usize = 5;
 /// this fraction up: under it is the same night.
 pub const TREND_STEP: f64 = 0.005;
 
+/// A memory reading of one side over the result files pooled for it:
+/// the lowest and the highest. One file gives both the same.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Readings {
+    pub lowest: u64,
+    pub highest: u64,
+}
+
+impl Readings {
+    pub fn one(bytes: u64) -> Readings {
+        Readings {
+            lowest: bytes,
+            highest: bytes,
+        }
+    }
+
+    /// The readings of two files of one side; a file without the reading
+    /// leaves the other's as they are.
+    fn join(a: Option<Readings>, b: Option<Readings>) -> Option<Readings> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(Readings {
+                lowest: a.lowest.min(b.lowest),
+                highest: a.highest.max(b.highest),
+            }),
+            (x, None) | (None, x) => x,
+        }
+    }
+
+    /// The two figures the memory gate compares: the baseline's highest
+    /// reading and the current side's lowest, so a difference counts only
+    /// when it shows in every round.
+    fn held(base: Option<Readings>, cur: Option<Readings>) -> Option<(u64, u64)> {
+        base.zip(cur).map(|(b, c)| (b.highest, c.lowest))
+    }
+}
+
 /// One side of one benchmark, as a `bench --json` file has it.
 #[derive(Clone, Debug, Default)]
 pub struct Point {
     pub median: f64,
     pub cv: f64,
     pub samples: Vec<f64>,
-    pub rss: Option<u64>,
+    pub rss: Option<Readings>,
     /// The peak with transparent huge pages off: what it touched.
-    pub touched: Option<u64>,
+    pub touched: Option<Readings>,
     pub allocs: Option<u64>,
 }
 
@@ -116,8 +159,8 @@ impl Results {
                     median,
                     cv: s["cv"].as_f64().unwrap_or(0.0),
                     samples,
-                    rss: s["rss_bytes"].as_u64(),
-                    touched: s["touched_bytes"].as_u64(),
+                    rss: s["rss_bytes"].as_u64().map(Readings::one),
+                    touched: s["touched_bytes"].as_u64().map(Readings::one),
                     allocs: if side == "interpreted" { allocs } else { None },
                 };
                 let key = format!("{name} ({side})");
@@ -135,13 +178,13 @@ impl Results {
 fn pool(old: &mut Point, new: Point) {
     if old.samples.is_empty() || new.samples.is_empty() {
         // No raw samples to pool: keep the slower median, the safer side.
+        let rss = Readings::join(old.rss, new.rss);
+        let touched = Readings::join(old.touched, new.touched);
         if new.median > old.median {
-            *old = Point {
-                rss: old.rss.max(new.rss),
-                touched: old.touched.max(new.touched),
-                ..new
-            };
+            *old = new;
         }
+        old.rss = rss;
+        old.touched = touched;
         return;
     }
     old.samples.extend(new.samples);
@@ -152,8 +195,8 @@ fn pool(old: &mut Point, new: Point) {
     v.sort_by(|a, b| a.total_cmp(b));
     old.median = v[((v.len() - 1) as f64 * 0.5).round() as usize];
     old.cv = if mean > 0.0 { var.sqrt() / mean } else { 0.0 };
-    old.rss = old.rss.max(new.rss);
-    old.touched = old.touched.max(new.touched);
+    old.rss = Readings::join(old.rss, new.rss);
+    old.touched = Readings::join(old.touched, new.touched);
     old.allocs = old.allocs.or(new.allocs);
 }
 
@@ -178,11 +221,13 @@ pub struct Line {
     /// The Mann-Whitney p-value; `None` when a side has too few samples.
     pub p: Option<f64>,
     pub verdict: Verdict,
-    /// Peak resident set, base then current: shown, and held to only
-    /// where a side has no `touched`.
+    /// Peak resident set, the base's highest reading then the current
+    /// side's lowest (`Readings::held`): shown, and held to only where a
+    /// side has no `touched`.
     pub rss: Option<(u64, u64)>,
-    /// What it touched (the peak with transparent huge pages off), base
-    /// then current, where both sides have the reading.
+    /// What it touched (the peak with transparent huge pages off), the
+    /// base's highest reading then the current side's lowest, where both
+    /// sides have the reading.
     pub touched: Option<(u64, u64)>,
     pub allocs: Option<(u64, u64)>,
     /// Its memory (`touched`, else `rss`) or its allocations are over.
@@ -295,10 +340,10 @@ pub fn compare(base: &Results, cur: &Results) -> Report {
                 every_row_has_samples = false;
             }
         }
-        let rss = b.rss.zip(c.rss);
+        let rss = Readings::held(b.rss, c.rss);
         // What both sides touched, when both were read that way; the
         // resident set decides only where one was not.
-        let touched = b.touched.zip(c.touched);
+        let touched = Readings::held(b.touched, c.touched);
         let allocs = b.allocs.zip(c.allocs);
         let memory_slower = touched
             .or(rss)
@@ -470,7 +515,7 @@ pub fn render(r: &Report, markdown: bool) -> String {
             .iter()
             .any(|l| l.touched.is_none() && l.rss.is_some());
         out.push_str(&format!(
-            "\nmemory: held to `touched`, the peak with transparent huge pages off; `peak RSS` is shown, and moves by whole 2 MiB pages{}\n",
+            "\nmemory: held to `touched`, the peak with transparent huge pages off; `peak RSS` is shown, and moves by whole 2 MiB pages{}. Each cell is main's highest reading and this side's lowest over the rounds: a difference has to show in every round\n",
             if held_by_rss {
                 " (a row with no `touched` on a side is held to it)"
             } else {
@@ -593,7 +638,7 @@ mod tests {
             median: st.median,
             cv: st.cv,
             samples: s,
-            rss: st.rss,
+            rss: st.rss.map(Readings::one),
             touched: None,
             allocs: Some(100_000),
         }
@@ -719,7 +764,7 @@ mod tests {
         let mut g = Lcg(5);
         let mk = |rss: u64, allocs: u64, g: &mut Lcg| {
             let mut p = point(samples(g, 100.0, 0.02, 10));
-            p.rss = Some(rss);
+            p.rss = Some(Readings::one(rss));
             p.allocs = Some(allocs);
             p
         };
@@ -746,8 +791,8 @@ mod tests {
         let mut g = Lcg(9);
         let mk = |rss: u64, touched: Option<u64>, g: &mut Lcg| {
             let mut p = point(samples(g, 100.0, 0.02, 10));
-            p.rss = Some(rss);
-            p.touched = touched;
+            p.rss = Some(Readings::one(rss));
+            p.touched = touched.map(Readings::one);
             p.allocs = None;
             p
         };
@@ -778,14 +823,17 @@ mod tests {
             "{:?}",
             r.failures()
         );
-        // Pooled rounds keep the largest reading of each kind.
+        // Pooled rounds keep the lowest and the highest reading of each
+        // kind; a round without one leaves the others' as they are.
         let mut both = Results::default();
         both.points
             .push(("s (interpreted)".into(), mk(1, Some(5), &mut g)));
         pool(&mut both.points[0].1, mk(3, Some(4), &mut g));
+        pool(&mut both.points[0].1, mk(2, None, &mut g));
+        let at = |lowest, highest| Some(Readings { lowest, highest });
         assert_eq!(
             (both.points[0].1.rss, both.points[0].1.touched),
-            (Some(3), Some(5))
+            (at(1, 3), at(4, 5))
         );
         // The table has both columns, and says which one is held to.
         let text = render(&compare(&base, &cur), true);
@@ -795,6 +843,57 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("memory: held to `touched`"), "{text}");
+    }
+
+    /// A difference in memory has to show in every round. The row this was
+    /// written for ran the same runtime on the same script on both sides,
+    /// three rounds each: 13.6 MB every time on `main`, and 17.6 at least
+    /// once on the pull request. One reading does not fail a row; the same
+    /// reading in every round does, unless `main` reached it too.
+    #[test]
+    fn a_memory_difference_has_to_show_in_every_round() {
+        let mut g = Lcg(11);
+        let side = |rounds: &[u64], g: &mut Lcg| {
+            let mut all = Results::default();
+            for touched in rounds {
+                let mut p = point(samples(g, 100.0, 0.02, 10));
+                p.rss = None;
+                p.touched = Some(Readings::one(*touched));
+                p.allocs = None;
+                match all.points.first_mut() {
+                    None => all.points.push(("strings (interpreted)".into(), p)),
+                    Some((_, old)) => pool(old, p),
+                }
+            }
+            all
+        };
+        let (low, high) = (13_600_000, 17_600_000);
+        let main = side(&[low, low, low], &mut g);
+        // One high reading of three: not a difference.
+        let once = compare(&main, &side(&[low, high, low], &mut g));
+        assert!(!once.lines[0].memory_slower, "{:?}", once.lines[0]);
+        assert!(once.failures().is_empty(), "{:?}", once.failures());
+        assert_eq!(once.lines[0].touched, Some((low, low)));
+        // High in every round: the row fails, and names the two figures.
+        let every = compare(&main, &side(&[high, high, high], &mut g));
+        assert!(every.lines[0].memory_slower);
+        assert!(
+            every.failures()[0].contains("touched: 13.6 to 17.6 MB"),
+            "{:?}",
+            every.failures()
+        );
+        // `main` read that high once too: not a difference.
+        let both = compare(
+            &side(&[low, high, low], &mut g),
+            &side(&[high, high, high], &mut g),
+        );
+        assert!(!both.lines[0].memory_slower, "{:?}", both.lines[0]);
+        // The table says what its cells are.
+        let text = render(&once, true);
+        assert!(
+            text.contains("a difference has to show in every round"),
+            "{text}"
+        );
     }
 
     #[test]
