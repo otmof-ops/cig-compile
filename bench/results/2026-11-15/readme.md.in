@@ -1,6 +1,6 @@
 ## How fast a program runs
 
-The 25 programs of the benchmark set, built on cig 1.24.0 and timed on one machine beside `cig run` and the same programs written in Lua, Python, JavaScript and Rust, every run's output checked. Every number here is made from the run's raw samples by a script and made again by a second one written apart from it ([the paper](docs/BENCHMARKS-2026-11-15.md)). A cell is the program's time divided by the other's over the {{programs.compute}} compute programs, so under 1 means faster; in brackets, how many programs it was faster, level and slower on:
+25 of the benchmark set's 29 programs, built on cig 1.24.0 and timed on one machine beside `cig run` and the same programs written in Python (all 25), JavaScript (24), Lua (21) and Rust (8), every run's output checked. Every number here is made from the run's raw samples by a script and made again by a second one written apart from it ([the paper](docs/BENCHMARKS-2026-11-15.md)). A cell is the geometric mean, over the compute programs both have ({{programs.compute}} at most), of the program's median time divided by the other's, so under 1 means faster; in brackets, how many of those programs it was faster, level and slower on:
 
 {{table:ratios-compute}}
 

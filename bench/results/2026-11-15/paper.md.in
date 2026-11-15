@@ -2,9 +2,9 @@
 
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
-What a program cigcompile 0.5.0 builds runs at: the 25 programs of the benchmark set, built at stage `a` and at stage `b` on cig 1.24.0 as released, timed on one machine beside `cig run` and beside the same programs written in Lua, Python, JavaScript and Rust. This is the compiled side of a run CigScript's paper reports in full, [cig-script's `docs/BENCHMARKS-2026-11-15.md`](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCHMARKS-2026-11-15.md): the programs in the other languages, the rule they are held to and the harness are there. This run's raw samples are in [`bench/results/2026-11-15/`](../bench/results/2026-11-15/).
+What a program cigcompile 0.5.0 builds runs at: 25 of the benchmark set's 29 programs (all but `files`, `burn-big`, `burn-mixed` and `orchestrate`), built at stage `a` and at stage `b` on cig 1.24.0 as released, timed on one machine beside `cig run` and beside the same programs written in Python (all 25), JavaScript (24), Lua (21) and Rust (8). This is the compiled side of a run CigScript's paper reports in full, [cig-script's `docs/BENCHMARKS-2026-11-15.md`](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCHMARKS-2026-11-15.md): the programs in the other languages, the rule they are held to and the harness are there. This run's raw samples are in [`bench/results/2026-11-15/`](../bench/results/2026-11-15/).
 
-Every measured number below is made from those samples by CigScript's `bench/compare/report.py` and made again by its `bench/compare/check.py`, a second program written apart from the first to the same definitions. The two agree on every number and every character of this file: none was typed by hand.
+Every number of the comparison is made from those samples by CigScript's `bench/compare/report.py` and made again by its `bench/compare/check.py`, a second program written apart from the first to the same definitions; the two agree on every number and every character of this file, and none was typed by hand. The one other table, cigcompile's own suite, is `cigcompile bench`'s own output, which `check.py` confirms this file quotes exactly.
 
 ## In short
 
@@ -35,13 +35,13 @@ The median time of each program, in milliseconds, over {{rounds.pass1}} rounds i
 
 {{table:medians-cig}}
 
-What the run record costs, over the programs that have both:
+What a run costs over its dry run, over the programs that have both: the run's record, and for `cig run` (not a dry run, not a compiled program) a second read of the whole run index, for the script's last good version, which grows with the history ([cig-script#252](https://github.com/otmof-ops/cig-script/issues/252)). Since cig 1.24.0 a run that burns nothing, as 24 of these 25 programs do, writes its record without syncing it.
 
 {{table:record}}
 
 ## Memory
 
-The peak resident memory of each program, in MB, read as it exits (the median of every reading, three in each pass). It counts the pages of the program's own file with its allocations: a compiled program carries the whole cig runtime in its file (about 16 MB), the same binary `cig run` is.
+The peak resident memory of each program, in MB, read as it exits (the median of every reading, three in each pass). It counts the pages of the program's own file with its allocations: a compiled program carries the whole cig runtime in its file, the same binary `cig run` is. cig's peak also grew between the passes, as its run history did: it reads the whole run index into memory at start-up ([cig-script#252](https://github.com/otmof-ops/cig-script/issues/252)).
 
 {{table:memory}}
 
@@ -97,7 +97,7 @@ The peak resident memory of each program, in MB, read as it exits (the median of
 
 ## What this does not show
 
-- **One machine.** A 2018 laptop processor, on battery and on its everyday settings. Another processor, another operating system or another power setting moves every number; the ratios move less than the times.
-- **Small programs, timed whole.** Most of these programs run for tens of milliseconds, so start-up is a large part of every time; it is the time a program's user waits, not the speed of a long-running program.
-- **cig as it ships today**: cig 1.24.0 and cigcompile 0.5.0, both released. The work merged since and in progress on the VM ([cig-script#243](https://github.com/otmof-ops/cig-script/issues/243)) is not in these numbers.
+- **One machine.** A 2018 laptop processor, on battery and on its everyday settings. Another processor, another operating system or another power setting moves every number, the ratios with them.
+- **Small programs, timed whole.** Most of these programs run for tens of milliseconds, so start-up is a large part of most of these times; it is the time a program's user waits, not the speed of a long-running program.
+- **cig as it ships today**: cig 1.24.0 and cigcompile 0.5.0, both released. The work merged since ([cig-script#251](https://github.com/otmof-ops/cig-script/pull/251), the static build's own copy routines) and in progress on the VM ([cig-script#243](https://github.com/otmof-ops/cig-script/issues/243)) is not in these numbers.
 - **Not every program in every language.** Rust has eight of the 25 programs; Lua has no `json`, `json-deep`, `csv` or `startup-10`; Node has no `csv`. The three counts beside each geometric mean add up to the programs it covers.

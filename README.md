@@ -73,7 +73,7 @@ and puts everything back, with no cig on the machine:
 
 ## How fast a program runs
 
-The 25 programs of the benchmark set, built on cig 1.24.0 and timed on one machine beside `cig run` and the same programs written in Lua, Python, JavaScript and Rust, every run's output checked. Every number here is made from the run's raw samples by a script and made again by a second one written apart from it ([the paper](docs/BENCHMARKS-2026-11-15.md)). A cell is the program's time divided by the other's over the 21 compute programs, so under 1 means faster; in brackets, how many programs it was faster, level and slower on:
+25 of the benchmark set's 29 programs, built on cig 1.24.0 and timed on one machine beside `cig run` and the same programs written in Python (all 25), JavaScript (24), Lua (21) and Rust (8), every run's output checked. Every number here is made from the run's raw samples by a script and made again by a second one written apart from it ([the paper](docs/BENCHMARKS-2026-11-15.md)). A cell is the geometric mean, over the compute programs both have (21 at most), of the program's median time divided by the other's, so under 1 means faster; in brackets, how many of those programs it was faster, level and slower on:
 
 | time ÷ theirs | Lua | LuaJIT `-joff` | LuaJIT | CPython | Node | Rust |
 |---|---:|---:|---:|---:|---:|---:|
@@ -170,8 +170,8 @@ not run. The compiler itself is released for the same machines.
 
 ## Limits, honestly
 
-- **A program carries cig whole.** A compiled hello is about 13 MB and
-  starts in about 8 ms here, as cig does. A runtime that is only what a
+- **A program carries cig whole.** A compiled hello is the size of cig
+  itself ([measured](docs/BENCHMARKS-2026-11-15.md#cigcompiles-own-suite)). A runtime that is only what a
   program uses waits on the crate split ([#1](https://github.com/otmof-ops/cig-compile/issues/1),
   [#4](https://github.com/otmof-ops/cig-compile/issues/4)).
 - **A program runs at the interpreter's speed unless it is built at stage `b`.**
