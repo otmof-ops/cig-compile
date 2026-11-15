@@ -69,7 +69,23 @@ and puts everything back, with no cig on the machine:
 | all or nothing | a build that signs, writes an SBOM or a package stages every output beside `--out` and moves them into place together, or leaves what was there |
 | quick rebuilds | a rebuild that changes nothing touches nothing, in about a millisecond; `--watch` builds again on every save |
 | a look inside | `--emit cir` prints the verified IR, `--remarks` says what each pass did, and `--timings` where the build's time went |
-| the numbers | `cigcompile bench` runs 29 programs interpreted and compiled, beside Python, Node and Rust ([BENCHMARKS.md](docs/BENCHMARKS.md)) |
+| the numbers | `cigcompile bench` runs 29 programs interpreted and compiled, beside Python, Node and Rust ([BENCHMARKS.md](docs/BENCHMARKS.md)); a stage `b` program against `cig run` and five other languages is [how fast a program runs](#how-fast-a-program-runs) |
+
+## How fast a program runs
+
+25 of the benchmark set's 29 programs, built on cig 1.24.0 and timed on one machine beside `cig run` and the same programs written in Python (all 25), JavaScript (24), Lua (21) and Rust (8), every run's output checked. Every number here is made from the run's raw samples by a script and made again by a second one written apart from it ([the paper](docs/BENCHMARKS-2026-11-15.md)). A cell is the geometric mean, over the compute programs both have (21 at most), of the program's median time divided by the other's, so under 1 means faster; in brackets, how many of those programs it was faster, level and slower on:
+
+| time ÷ theirs | Lua | LuaJIT `-joff` | LuaJIT | CPython | Node | Rust |
+|---|---:|---:|---:|---:|---:|---:|
+| `cig run` | 4.03 (1/2/15) | 5.66 (1/0/17) | 10.6 (1/0/17) | 1.56 (4/0/17) | 1.65 (9/0/11) | 67.5 (0/0/6) |
+| stage a | 3.77 (3/1/14) | 5.30 (2/1/15) | 9.95 (2/0/16) | 1.44 (4/1/16) | 1.53 (9/0/11) | 63.4 (0/0/6) |
+| stage b | 1.97 (4/0/14) | 2.77 (3/0/15) | 5.20 (2/0/16) | 0.82 (12/2/7) | 0.84 (10/1/9) | 26.2 (0/0/6) |
+
+- **A stage `b` program** (`cigcompile build --stage b`, the script's bytecode on cig's VM) takes 0.52 of `cig run`'s time, faster on all 21, and 0.82 of CPython 3.13's; it starts in 3.7 ms, where CPython takes 13.5 ms.
+- **A stage `a` program**, the default, runs on the interpreter as `cig run` does (0.93 of its time).
+- **Lua is faster**: a stage `b` program takes 1.97 times Lua 5.4's time and 5.20 times LuaJIT's.
+
+Whole processes, start-up included, on a 2018 laptop on battery.
 
 ## Measuring
 
@@ -154,14 +170,16 @@ not run. The compiler itself is released for the same machines.
 
 ## Limits, honestly
 
-- **A program carries cig whole.** A compiled hello is about 13 MB and
-  starts in about 8 ms here, as cig does. A runtime that is only what a
+- **A program carries cig whole.** A compiled hello is the size of cig
+  itself ([measured](docs/BENCHMARKS-2026-11-15.md#cigcompiles-own-suite)). A runtime that is only what a
   program uses waits on the crate split ([#1](https://github.com/otmof-ops/cig-compile/issues/1),
   [#4](https://github.com/otmof-ops/cig-compile/issues/4)).
-- **A program runs at the interpreter's speed.** Stage A is the bundle; the
-  speed comes with the bytecode VM and native code
-  ([#31](https://github.com/otmof-ops/cig-compile/issues/31),
-  [#32](https://github.com/otmof-ops/cig-compile/issues/32)).
+- **A program runs at the interpreter's speed unless it is built at stage `b`.**
+  Stage `a`, the default, is the bundle; `--stage b` runs the script's
+  bytecode on cig's VM ([how fast](#how-fast-a-program-runs)), and becomes
+  the default once it passes its speed gates
+  ([#31](https://github.com/otmof-ops/cig-compile/issues/31)); native code
+  comes after it ([#32](https://github.com/otmof-ops/cig-compile/issues/32)).
 - **The box is Linux's.** A program's boxed hop is refused or falls back
   elsewhere, as `cig`'s is (`E777`, `E763`).
 - **Signing is SSH's.** Apple Developer ID and Windows Authenticode need

@@ -5,6 +5,19 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **Benchmarks against other languages, and the references rewritten.**
+  `docs/BENCHMARKS-2026-11-15.md` measures the programs cigcompile 0.5.0
+  builds, at stage `a` and at stage `b`, beside `cig run` and the same 25
+  programs in Lua, Python, JavaScript and Rust, every output checked; its
+  raw data is `bench/results/2026-11-15/`, and the README has a new section,
+  "How fast a program runs". Every number in both is made from the run's
+  samples by CigScript's `bench/compare/report.py` and made again by its
+  `check.py`, written apart from it. The references in `bench/ref/` are
+  the rewritten set the run used, each the same program as its CigScript
+  twin, statement for statement. `docs/commands.md` no longer says stage
+  `b` is not yet faster than the tree-walker: it was faster on all 25
+  programs measured.
+
 ## 0.5.0 — 2026-11-15
 
 Programs for cig 1.24.0, and the first stage B programs. `cigcompile

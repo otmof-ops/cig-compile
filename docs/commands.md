@@ -528,9 +528,10 @@ its **stage**:
 - **stage `a`** — the program carries the script alone, and the
   tree-walker runs it.
 
-Without `--stage`, a build makes stage `a`: stage `b` is not yet faster
-than the tree-walker, and it becomes the default once it passes its
-speed gates ([#31](https://github.com/otmof-ops/cig-compile/issues/31)). `--stage b` opts in: the script must lower whole
+Without `--stage`, a build makes stage `a`. Stage `b` is faster than the
+tree-walker on every one of the 25 programs it was measured on
+([BENCHMARKS-2026-11-15.md](BENCHMARKS-2026-11-15.md)), and it becomes the
+default once it passes its speed gates ([#31](https://github.com/otmof-ops/cig-compile/issues/31)). `--stage b` opts in: the script must lower whole
 (only a `pack` root that runs a pull or a function does not, today),
 verify, and load in this cig's VM, or the build is refused (`E1010`,
 naming the construct and its line):

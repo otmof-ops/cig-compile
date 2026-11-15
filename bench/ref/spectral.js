@@ -1,2 +1,46 @@
-const a=(i,j)=>1/((i+j)*(i+j+1)/2+i+1);const mav=(v,n)=>{const o=[];for(let i=0;i<n;i++){let s=0;for(let j=0;j<n;j++)s+=a(i,j)*v[j];o.push(s)}return o};const matv=(v,n)=>{const o=[];for(let i=0;i<n;i++){let s=0;for(let j=0;j<n;j++)s+=a(j,i)*v[j];o.push(s)}return o};
-const n=100;let u=Array(n).fill(1),v;for(let k=0;k<10;k++){v=matv(mav(u,n),n);u=matv(mav(v,n),n)}let a1=0,b1=0;for(let i=0;i<n;i++){a1+=u[i]*v[i];b1+=v[i]*v[i]}console.log(Math.round(Math.sqrt(a1/b1)*1e9)/1e9);
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Mirrors bench/spectral.cig: spectral norm, float loops and calls.
+function a(i, j) {
+  return 1.0 / (((i + j) * (i + j + 1)) / 2 + i + 1);
+}
+function mulav(v, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    let s = 0.0;
+    for (let j = 0; j < n; j++) {
+      s += a(i, j) * v[j];
+    }
+    out.push(s);
+  }
+  return out;
+}
+function mulatv(v, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    let s = 0.0;
+    for (let j = 0; j < n; j++) {
+      s += a(j, i) * v[j];
+    }
+    out.push(s);
+  }
+  return out;
+}
+const n = 100;
+let u = [];
+for (let i = 0; i < n; i++) {
+  u.push(1.0);
+}
+let v = [];
+for (let k = 0; k < 10; k++) {
+  v = mulatv(mulav(u, n), n);
+  u = mulatv(mulav(v, n), n);
+}
+let vbv = 0.0;
+let vv = 0.0;
+for (let i = 0; i < n; i++) {
+  vbv += u[i] * v[i];
+  vv += v[i] * v[i];
+}
+// math.round(x, 9): JavaScript's Math.round takes no number of places.
+console.log(Math.round(Math.sqrt(vbv / vv) * 1e9) / 1e9);

@@ -1,1 +1,30 @@
-const n=300000,s=Array(n+1).fill(true);s[0]=s[1]=false;for(let p=2;p*p<=n;p++)if(s[p])for(let m=p*p;m<=n;m+=p)s[m]=false;let c=0;for(const b of s)if(b)c++;console.log(c);
+// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+// SPDX-License-Identifier: FSL-1.1-ALv2
+// Mirrors bench/sieve.cig: sieve of Eratosthenes, index writes into a big list.
+// The list is built in a loop, as the cig program does; the idiomatic variant in
+// CigScript's bench/ref/idiom/sieve.js makes it with Array.fill.
+const n = 300000;
+const flags = [];
+for (let i = 0; i < n + 1; i++) {
+  flags.push(true);
+}
+flags[0] = false;
+flags[1] = false;
+let p = 2;
+while (p * p <= n) {
+  if (flags[p]) {
+    let m = p * p;
+    while (m <= n) {
+      flags[m] = false;
+      m += p;
+    }
+  }
+  p += 1;
+}
+let c = 0;
+for (const b of flags) {
+  if (b) {
+    c += 1;
+  }
+}
+console.log(c);
