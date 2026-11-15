@@ -503,7 +503,7 @@ dependencies = [
 
 [[package]]
 name = "cigcompile"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cigarscript",
  "cigscript 1.24.0",

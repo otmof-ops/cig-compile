@@ -41,10 +41,10 @@ cigcompile build hello.cig
 The first build on a machine prints the fetch, once:
 
 ```
-fetching cig-v1.21.0-linux-x86_64 from otmof-ops/cig-script (sha256 46bf00f607c6...)
-kept /home/you/.cigscript/cigcompile/runtimes/1.21.0/linux-x86_64/cig (sha256 matches the pin)
-compiled hello.cig -> hello (15.8 MB, cig 1.21.0 for x86_64-unknown-linux-musl)
-  sha256 d8376feb1c9f51a577067fd57065b89084f3b00eaa67ce467cadb244924f3d95
+fetching cig-v1.24.0-linux-x86_64 from otmof-ops/cig-script (sha256 957ddff2c27c...)
+kept /home/you/.cigscript/cigcompile/runtimes/1.24.0/linux-x86_64/cig (sha256 matches the pin)
+compiled hello.cig -> hello (16.3 MB, cig 1.24.0 for x86_64-unknown-linux-musl, stage a)
+  sha256 445143184b39c480f0934ce7339909d61fed286ed7a7f1ff0d6dab4285406af0
 ```
 
 A second `cigcompile build` with nothing changed reads neither the
@@ -52,8 +52,8 @@ runtime nor the program, writes nothing, and takes about a
 millisecond:
 
 ```
-up to date: hello (13.0 MB)
-  sha256 1e05c279d4a35f7c0398c5619450b86903d9836e65eb29c0aa33eb3d38f13e4b
+up to date: hello (16.3 MB)
+  sha256 445143184b39c480f0934ce7339909d61fed286ed7a7f1ff0d6dab4285406af0
 ```
 
 That's the build index at work; see [how it works](how-it-works.md).
@@ -77,8 +77,13 @@ program (`--dry-run`, `--no-rollback`, `--unburn`, and so on), and
 ```
 hello  a CigScript program
   compiled from  hello.cig  (sha256 de4c85156932095faef8c6bb02e3d49759b4f41f0a6bb71f41d94396ebcb49e8)
-  compiled by    cigcompile 0.4.0
-  runs on        cig 1.21.0 (this binary)
+  compiled by    cigcompile 0.5.0
+  runs on        cig 1.24.0 (this binary)
+  format         2, stage a
+  built          opt 1 for x86_64-unknown-linux-musl
+  runtime        sha256 957ddff2c27c9baa38b5aa43361e165e209ebb3d6a3c82cfa28d7b7777e91b3f
+  sections
+    source           39 bytes         39 decoded  stored   required  sha256 de4c85156932095faef8c6bb02e3d49759b4f41f0a6bb71f41d94396ebcb49e8
 ```
 
 ## 4. Check the program does what the script does
@@ -91,8 +96,8 @@ build didn't go wrong in between:
 
 ```
 $ cigcompile test hello.cig
-up to date: hello (13.0 MB)
-  sha256 1e05c279d4a35f7c0398c5619450b86903d9836e65eb29c0aa33eb3d38f13e4b
+up to date: hello (16.3 MB)
+  sha256 445143184b39c480f0934ce7339909d61fed286ed7a7f1ff0d6dab4285406af0
 same     hello.cig (dry run: the same plan, output and exit)
 ```
 
@@ -107,7 +112,7 @@ machine. `cigcompile targets` lists them:
 
 ```
 $ cigcompile targets
-x86_64-unknown-linux-musl        linux-x86_64     stage A  run on its own runner                        this machine; runtime /home/you/.cigscript/cigcompile/runtimes/1.21.0/linux-x86_64/cig
+x86_64-unknown-linux-musl        linux-x86_64     stage A  run on its own runner                        this machine; runtime /home/you/.cigscript/cigcompile/runtimes/1.24.0/linux-x86_64/cig
 aarch64-unknown-linux-musl       linux-aarch64    stage A  run on its own runner
 armv7-unknown-linux-musleabihf   linux-arm        stage A  built, not run
 aarch64-apple-darwin             macos-aarch64    stage A  run on its own runner  no box (E777, E763)
@@ -123,10 +128,10 @@ there lacks (the box is Linux's). To build a hello for Apple Silicon:
 
 ```
 $ cigcompile build hello.cig -o bin-mac/hello --target aarch64-apple-darwin
-fetching cig-v1.21.0-macos-aarch64 from otmof-ops/cig-script (sha256 24904f03ae2e...)
-kept /home/you/.cigscript/cigcompile/runtimes/1.21.0/macos-aarch64/cig (sha256 matches the pin)
-compiled hello.cig -> bin-mac/hello (10.1 MB, cig 1.21.0 for aarch64-apple-darwin)
-  sha256 81bc990a90defefab055010800a496d3c56e358996a1f81b6bc16ae4ac297f23
+fetching cig-v1.24.0-macos-aarch64 from otmof-ops/cig-script (sha256 15b92e1549a7...)
+kept /home/you/.cigscript/cigcompile/runtimes/1.24.0/macos-aarch64/cig (sha256 matches the pin)
+compiled hello.cig -> bin-mac/hello (10.5 MB, cig 1.24.0 for aarch64-apple-darwin, stage a)
+  sha256 7a85c97fc18489313398c507a50f508928ea4b4bb578eeaf56202730ca289cb6
 ```
 
 The runtime for another machine is cig's own release asset for it, of
@@ -142,24 +147,25 @@ time, for a build that will run offline later.
 
 `cigcompile verify` checks a program is what a build makes, part by
 part, and runs nothing: the runtime against cig's release pin, the
-payload against the sha256 its record carries, and the whole file
-against the bytes a build of those parts writes.
+record, each section against the sha256 the section table carries for
+it, and the padding and the trailer against what a build writes.
 
 ```
 $ cigcompile verify hello --script hello.cig
 hello
-  runtime  ok        cig's release asset cig-v1.21.0-linux-x86_64 (sha256 46bf00f607c63dc5)
-  payload  ok        hello.cig (1 lines, sha256 7ffcba146cc9481d), built by cigcompile 0.4.0 for cig 1.21.0
-  script   ok        hello.cig is the script it was built from
-  whole    ok        byte for byte what a build of these parts writes
+  runtime          ok        cig's release asset cig-v1.24.0-linux-x86_64 (sha256 957ddff2c27c9baa)
+  record           ok        hello: hello.cig for cig 1.24.0, built by cigcompile 0.5.0, stage a, -O1, x86_64-unknown-linux-musl
+  section source   ok        hello.cig is the script it was built from (1 lines, sha256 de4c85156932095f)
+  section table    ok        1 sections: source
+  padding          ok        zeros, as the alignment needs
+  trailer          ok        CIGPROG2, the head sha256 holds
 ```
 
 Each part is `ok`, `DIFFERS` or `unchecked`. Any `DIFFERS` and the exit
 is `1`; the first part that differs is named. See
 [shipping a program](shipping.md) for signatures,
 [commands](commands.md) for the full surface, and
-[how it works](how-it-works.md) for what `payload` and `whole` are
-reading.
+[how it works](how-it-works.md) for what each part is.
 
 ## Next
 
