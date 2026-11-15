@@ -1,0 +1,19 @@
+# A one-off measurement on a hosted runner. Not part of the product: the
+# branch carries only this workflow and is deleted when the numbers are read.
+name: probe
+on:
+  push:
+    branches: ["probe/**"]
+permissions:
+  contents: read
+concurrency:
+  group: probe-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build-gap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+      - name: Four flavors of cig 1.24.0 from one tree, timed against each other
+        run: bash ci/probe/run.sh
