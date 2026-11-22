@@ -5,6 +5,24 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **The memory gate holds a benchmark to what it holds of its own.**
+  `bench --against` compared what a program touched: its peak with
+  transparent huge pages off, the pages of files it had mapped included.
+  For a small program nearly all of that is its own file, and how many of
+  those pages the kernel maps follows how the file lies in the page cache,
+  not what the program uses: one compiled hello, the same bytes, peaked at
+  12.8 MB as `build` wrote it and at 6.0 MB written again 4 KiB at a time,
+  with 0.5 MB of its own both times. On cig 1.25.0, whose code is 0.6 MB
+  larger than 1.24.0's, every compiled program of the fast set read 1.5 to
+  2.0 MB more and held nothing more, and the gate failed each row. `bench
+  --json` now also gives `own_bytes` (the peak less the pages of files; the
+  bench already read it for the budget of a compiled hello), and the gate
+  holds a row to that where both sides have it, to what both touched where
+  one does not, and to the resident set where one has neither. The table
+  shows all three. What the gate gives up: a program that maps more of its
+  files' pages no longer fails a row, so a runtime that grows shows in the
+  size budget and in the table's `touched` column, not in this gate.
+
 - **One lowering, cig's.** The lowering (source to CIR to bytecode:
   `src/cir`, `src/bc` and their tests, about 13,900 lines) is no longer
   here. cigcompile calls `cigscript::lower`, the copy `cig run --engine vm`

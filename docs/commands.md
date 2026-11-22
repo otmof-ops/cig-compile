@@ -263,8 +263,8 @@ exit `1`.
 The gates are in [benchmarks](BENCHMARKS.md#the-gates): `--against`
 exits `1` when a non-noisy benchmark is more than 5% slower than
 `main`'s or the set's geometric mean more than 2% (each by a
-Mann-Whitney test of the samples), or what a benchmark touched or its
-allocations more than 10% over (in every round, where several result
+Mann-Whitney test of the samples), or what a benchmark held of its own
+or its allocations more than 10% over (in every round, where several result
 files are given for a side), and `--trend` when the set has been
 slower five nights in a row. A result file that is not `--json` output is a usage error (`3`),
 never a pass.
