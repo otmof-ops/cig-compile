@@ -433,10 +433,15 @@ dependencies = [
 [[package]]
 name = "cig-bytecode"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.24.0#de47ec66afef4a7ad93de4d00ea0cd1138dc7466"
+source = "git+https://github.com/otmof-ops/cig-script?rev=618857133c7c7ea48a115b0701569e22ab7b9e55#618857133c7c7ea48a115b0701569e22ab7b9e55"
 dependencies = [
  "blake3",
 ]
+
+[[package]]
+name = "cig-copy"
+version = "0.1.0"
+source = "git+https://github.com/otmof-ops/cig-script?rev=618857133c7c7ea48a115b0701569e22ab7b9e55#618857133c7c7ea48a115b0701569e22ab7b9e55"
 
 [[package]]
 name = "cig-pass"
@@ -458,7 +463,7 @@ dependencies = [
 [[package]]
 name = "cig-pass"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.24.0#de47ec66afef4a7ad93de4d00ea0cd1138dc7466"
+source = "git+https://github.com/otmof-ops/cig-script?rev=618857133c7c7ea48a115b0701569e22ab7b9e55#618857133c7c7ea48a115b0701569e22ab7b9e55"
 dependencies = [
  "base64",
  "blake3",
@@ -475,7 +480,7 @@ dependencies = [
 [[package]]
 name = "cig-vault"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.24.0#de47ec66afef4a7ad93de4d00ea0cd1138dc7466"
+source = "git+https://github.com/otmof-ops/cig-script?rev=618857133c7c7ea48a115b0701569e22ab7b9e55#618857133c7c7ea48a115b0701569e22ab7b9e55"
 dependencies = [
  "getrandom 0.2.17",
  "hex",
@@ -551,14 +556,15 @@ dependencies = [
 [[package]]
 name = "cigscript"
 version = "1.24.0"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.24.0#de47ec66afef4a7ad93de4d00ea0cd1138dc7466"
+source = "git+https://github.com/otmof-ops/cig-script?rev=618857133c7c7ea48a115b0701569e22ab7b9e55#618857133c7c7ea48a115b0701569e22ab7b9e55"
 dependencies = [
  "argon2",
  "blake3",
  "chacha20poly1305",
  "chrono",
  "cig-bytecode",
- "cig-pass 0.1.0 (git+https://github.com/otmof-ops/cig-script?tag=v1.24.0)",
+ "cig-copy",
+ "cig-pass 0.1.0 (git+https://github.com/otmof-ops/cig-script?rev=618857133c7c7ea48a115b0701569e22ab7b9e55)",
  "cig-vault",
  "clap",
  "fastcdc",

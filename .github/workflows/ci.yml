@@ -91,7 +91,7 @@ jobs:
       # the compiler pins: one source, Cargo.toml.
       - name: the pinned CigScript
         shell: bash
-        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
+        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch|rev) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           repository: otmof-ops/cig-script
@@ -197,7 +197,7 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - name: the pinned CigScript
         shell: bash
-        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
+        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch|rev) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           repository: otmof-ops/cig-script
@@ -291,7 +291,7 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
       - name: the pinned CigScript
         shell: bash
-        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
+        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch|rev) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           repository: otmof-ops/cig-script
@@ -370,7 +370,7 @@ jobs:
           rustup show active-toolchain || rustup toolchain install
           rustup target add x86_64-unknown-linux-musl
       - name: the pinned CigScript
-        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
+        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch|rev) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           repository: otmof-ops/cig-script
@@ -425,7 +425,7 @@ jobs:
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - name: the pinned CigScript
-        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
+        run: echo "CIGSCRIPT_REF=$(sed -nE 's/^cigscript = \{ git = "[^"]+", (tag|branch|rev) = "([^"]+)".*/\2/p' Cargo.toml)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           repository: otmof-ops/cig-script

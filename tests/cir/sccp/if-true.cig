@@ -1,7 +1,0 @@
-roll n = 0
-if true {
-  n = 1
-} else {
-  n = 2
-}
-exhale n

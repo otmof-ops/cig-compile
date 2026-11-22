@@ -89,7 +89,7 @@ impl Default for Options {
             sbom: false,
             strength: None,
             stage: None,
-            opt: 1,
+            opt: cigscript::lower::DEFAULT_LEVEL,
             args_direct: false,
         }
     }
@@ -118,83 +118,33 @@ impl NotB {
 /// this cig's VM (its builtins, prelude names and burn-op kinds), with no
 /// instruction the VM lists as not built. `Err` names the first thing that
 /// stops it. The bytes are the module as `serialize_module` writes it.
+///
+/// The lowering is `cigscript::lower::module_bytes_at`, the function
+/// `cig run` reaches through `module_bytes`; this parses and checks the
+/// script first and words what it returns.
 pub fn bytecode_of(source: &str, file: &str, opt: u8) -> Result<Vec<u8>, NotB> {
-    use cigcompile::bc::{compile, CompileError, Error};
-    use cigcompile::cir::LowerError;
-    use cigscript::cig_bytecode as bc;
-    let passes = cigcompile::cir::pass::level(opt);
-    let m = compile(source, file, &passes).map_err(|e| match e {
-        CompileError::Lower(LowerError::Diagnostic(d)) => NotB {
-            what: d.message,
-            span: d.span,
-        },
-        CompileError::Lower(LowerError::Internal(e)) => NotB {
-            what: format!("the lowering to IR failed ({e}), a cigcompile bug"),
-            span: None,
-        },
-        CompileError::Verify(e) => NotB {
-            what: format!(
-                "the IR broke a rule after {} ({}), a cigcompile bug",
-                e.pass,
-                e.errors
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ),
-            span: None,
-        },
-        CompileError::Bytecode(Error::Refused { construct, span }) => NotB {
-            what: format!("{construct} is not lowered to bytecode"),
-            span: Some(span),
-        },
-        CompileError::Bytecode(Error::Limit { what, span }) => NotB {
-            what,
-            span: Some(span),
-        },
-        CompileError::Bytecode(Error::Internal(e)) => NotB {
-            what: format!("{e}, a cigcompile bug"),
-            span: None,
-        },
-    })?;
-    if let Some(n) = not_built(&m.main) {
-        return Err(n);
-    }
-    let verified = bc::verify_module(&m).map_err(|e| NotB {
-        what: format!("the bytecode does not verify: {e}, a cigcompile bug"),
-        span: None,
-    })?;
-    cigscript::vm::load(verified).map_err(|d| NotB {
-        what: format!("this cig's VM does not load it: {}", d.message),
+    let program = cigscript::syntax::parse(source).map_err(|d| NotB {
+        what: d.message,
         span: d.span,
     })?;
-    Ok(bc::serialize_module(&m))
-}
-
-/// The first instruction, in pre-order, that this cig's VM lists as not
-/// built (`vm::NOT_BUILT`), with its line from the function's line table.
-fn not_built(f: &cigscript::cig_bytecode::Function) -> Option<NotB> {
-    use cigscript::cig_bytecode::decode;
-    let mut pc = 0u32;
-    while (pc as usize) < f.instrs.len() {
-        let Ok(d) = decode(&f.instrs, pc) else {
-            break;
-        };
-        if cigscript::vm::NOT_BUILT.contains(&d.op) {
-            let row = f.lines.iter().take_while(|r| r.pc <= pc).last();
-            let span =
-                row.map(|r| Span::new(0, 0, f.span_base.line.saturating_add(r.line_off), r.col));
-            return Some(NotB {
-                what: format!(
-                    "it needs the instruction `{:?}`, which this cig's VM does not run",
-                    d.op
-                ),
-                span,
-            });
-        }
-        pc = d.pc + d.width;
+    if let Some(d) = cigscript::check::check(&program, &[])
+        .errors
+        .into_iter()
+        .next()
+    {
+        return Err(NotB {
+            what: d.message,
+            span: d.span,
+        });
     }
-    f.children.iter().find_map(not_built)
+    cigscript::lower::module_bytes_at(&program, file, opt).map_err(|s| NotB {
+        what: if s.bug {
+            format!("{}, a cigcompile bug", s.what)
+        } else {
+            s.what
+        },
+        span: s.span,
+    })
 }
 
 /// The stage a build makes and, at stage `b`, its bytecode; with the note

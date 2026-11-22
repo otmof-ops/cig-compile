@@ -263,6 +263,26 @@ fn all_cases(src: &Path) -> Vec<Case> {
             ..Case::default()
         });
     }
+    // The scripts cig's own suite holds its tree-walker to: the ones
+    // written to fail, and the ones that read a name the hard way (declared
+    // later, declared again further in, named again by an alias). The
+    // lowering takes some and declines others; a declined one is refused at
+    // stage b, which is a skip here, and still compared at stage a.
+    for s in cig_files(&src.join("tests/walker")) {
+        let mut env = BTreeMap::new();
+        // One of them never ends: the step budget stops it.
+        env.insert("CIG_MAX_STEPS".to_string(), "5000".to_string());
+        cases.push(Case {
+            script: format!("tests/walker/{}", s.file_name().unwrap().to_string_lossy()),
+            expect_stdout: std::fs::read_to_string(s.with_extension("out")).ok(),
+            env,
+            runs: vec![Run {
+                steps: vec![Step::default()],
+                modes: words(&["run", "json", "plain"]),
+            }],
+            ..Case::default()
+        });
+    }
     let mut docs: Vec<PathBuf> = std::fs::read_dir(src.join("docs"))
         .map(|d| {
             d.flatten()
@@ -481,7 +501,7 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
         for mode in &r.modes {
             let name = format!("{} run {} {mode}", case.script, i + 1);
             let json = mode.split_whitespace().any(|w| w == "json");
-            let side = |program: Option<&Path>| -> (Vec<Outcome>, String, String) {
+            let side = |program: Option<&Path>| -> (Vec<Outcome>, String, String, Vec<String>) {
                 lay_out();
                 let home = sb.path().join("home");
                 let mut outs = Vec::new();
@@ -516,12 +536,17 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
                         }
                     }
                 }
-                (outs, tree(&work), journals(&home, &order))
+                (
+                    outs,
+                    tree(&work),
+                    journals(&home, &order),
+                    engines(&home, &order),
+                )
             };
-            let (a, ta, ja) = side(None);
+            let (a, ta, ja, ea) = side(None);
             if !controlled.contains(mode) {
                 controlled.push(mode.clone());
-                let (a2, ta2, ja2) = side(None);
+                let (a2, ta2, ja2, _) = side(None);
                 if canon(&a, false, json) != canon(&a2, false, json) || ta != ta2 || ja != ja2 {
                     report(
                         tally,
@@ -540,9 +565,17 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
                 } else {
                     name.clone()
                 };
-                let (b, tb, jb) = side(Some(at));
+                let (b, tb, jb, eb) = side(Some(at));
                 let (ca, cb) = (canon(&a, true, json), canon(&b, false, json));
                 let mut same = ca == cb && ta == tb && ja == jb;
+                // Each record names the engine that ran it, and each side
+                // has one right answer: `cig run` here and a stage a
+                // program run on the tree-walker, a stage b program on the
+                // VM. (The value is left out of the records compared
+                // above: it is the one field that differs by design.)
+                let want = if *stage == "b" { "vm" } else { "tree" };
+                let engines_right = ea.iter().all(|e| e == "tree") && eb.iter().all(|e| e == want);
+                same &= engines_right;
                 // The .out files are written with Unix paths (CigScript's own
                 // tests skip the path-printing ones on Windows too).
                 if let Some(want) = case
@@ -564,6 +597,11 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
                     }
                     if ja != jb {
                         s += &format!("journals differ:\ninterpreter:\n{ja}\nprogram:\n{jb}\n");
+                    }
+                    if !engines_right {
+                        s += &format!(
+                            "the records name the wrong engine: the interpreter's say {ea:?} (tree is right), the program's {eb:?} ({want} is right)\n"
+                        );
                     }
                     if s.is_empty() {
                         s = "stdout differs from the .out file".to_string();
@@ -906,13 +944,30 @@ fn json_normal(s: &str) -> String {
         .collect()
 }
 
-/// A run record's fields that each process has its own of.
+/// A run record's fields that each process has its own of. `engine` is
+/// one: which engine ran is the side's own, and [`engines`] reads it.
 fn drop_own(run: &mut serde_json::Value) {
     if let Some(m) = run.as_object_mut() {
-        for k in ["pid", "pid_started", "journal_head"] {
+        for k in ["pid", "pid_started", "journal_head", "engine"] {
             m.remove(k);
         }
     }
+}
+
+/// The engine each run's record names, in the order the runs were made:
+/// `tree`, `vm`, or what the record holds when it is neither.
+fn engines(home: &Path, order: &[String]) -> Vec<String> {
+    order
+        .iter()
+        .filter_map(|name| {
+            std::fs::read_to_string(home.join("runs").join(name).join("run.json")).ok()
+        })
+        .filter_map(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .map(|record| match record["engine"]["engine"].as_str() {
+            Some(engine) => engine.to_string(),
+            None => record["engine"].to_string(),
+        })
+        .collect()
 }
 
 /// A program's run record names the program as its `script` and carries

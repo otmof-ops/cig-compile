@@ -5,6 +5,39 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **One lowering, cig's.** The lowering (source to CIR to bytecode:
+  `src/cir`, `src/bc` and their tests, about 13,900 lines) is no longer
+  here. cigcompile calls `cigscript::lower`, the copy `cig run --engine vm`
+  uses (cig-script#254), so a program built at stage `b` and a script run
+  on the VM are lowered by one piece of code and cannot drift. cigscript
+  is pinned to the cig-script commit that has it until cig's next release.
+  `--emit cir`, `--emit bc`, `--passes`, `--passes-diff` and `--remarks`
+  work as before, through `src/emit.rs`. For the 25 benchmark programs,
+  the language tour and the examples, at `-O0` and `-O1`, the bytecode is
+  what 0.5.0 emits, byte for byte.
+
+- **Fixed: a function given a second name after it is called** (from
+  cig-script). In a program built at stage `b`, a `pull` that was called
+  and then named again (`roll g = f`) had its calls read the new name's
+  slot: `cannot call null` (E404), or, where the new name was assigned
+  again, the wrong function called without an error. Stage `a` never had
+  it. **A stage `b` program built by 0.5.0 from a script that does this
+  should be built again.**
+
+- **Stage `b` refuses a script that reads a name before its declaration
+  has run** (from cig-script). The interpreter looks a name up as the
+  script runs; a lowered function reads a slot, which printed `null` or
+  wrote the wrong variable there. `cigcompile build --stage b` now refuses
+  such a script and names the declaration (E1010); stage `a` builds it as
+  before. `docs/LOWERING.md` in cig-script has the rule.
+
+- **The differential suite checks more.** Each run's record names the
+  engine that ran it, and the suite holds every side to the right one: the
+  tree-walker for `cig run` and for a stage `a` program, the VM for a
+  stage `b` program. It also runs cig's own `tests/walker` scripts (the
+  ones written to fail, and the ones that read a name the hard way), which
+  is where both defects above would have shown.
+
 - **Benchmarks against other languages, and the references rewritten.**
   `docs/BENCHMARKS-2026-11-15.md` measures the programs cigcompile 0.5.0
   builds, at stage `a` and at stage `b`, beside `cig run` and the same 25
