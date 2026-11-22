@@ -230,9 +230,14 @@ pub struct Stats {
     /// says it.
     pub rss: Option<u64>,
     /// What it touched, in bytes: its peak from one more run with
-    /// transparent huge pages off (`touched_peak`), where the system can
-    /// say it. The memory gate holds a benchmark to this.
+    /// transparent huge pages off (`touched_memory`), where the system can
+    /// say it. The pages of files it had mapped are in it, its own
+    /// program's among them.
     pub touched: Option<u64>,
+    /// What it held of its own in that run, in bytes: the peak less the
+    /// pages of files (`Memory::own`). The memory gate holds a benchmark
+    /// to this.
+    pub own: Option<u64>,
     /// Every sample, in ms, for the gates' Mann-Whitney test (#30).
     pub raw: Vec<f64>,
 }
@@ -255,13 +260,16 @@ impl Stats {
             samples: v.len(),
             rss,
             touched: None,
+            own: None,
             raw: ms.to_vec(),
         }
     }
 
-    /// These statistics with what the side touched.
-    pub fn touching(mut self, touched: Option<u64>) -> Stats {
+    /// These statistics with what the side touched, and how much of that
+    /// was its own.
+    pub fn touching(mut self, touched: Option<u64>, own: Option<u64>) -> Stats {
         self.touched = touched;
+        self.own = own;
         self
     }
 
@@ -812,9 +820,9 @@ fn sample(runs: usize, expect: &str, mut make: impl FnMut(usize) -> Command) -> 
     // The peak from one more run of its own (see `peak_rss`), each try in
     // a folder of its own; the timed runs' figure only where it has none.
     let peak = peak_rss(|n| make(runs.max(1) + 1 + n)).or(rss);
-    // And what it touched, from one more (see `touched_peak`).
-    let touched = touched_peak(&mut make(runs.max(1) + 3));
-    Side::Timed(Stats::of(&ms, peak).touching(touched))
+    // And what it touched, from one more (see `touched_memory`).
+    let touched = touched_memory(&mut make(runs.max(1) + 3));
+    Side::Timed(Stats::of(&ms, peak).touching(touched.map(|m| m.peak), touched.map(|m| m.own())))
 }
 
 fn clip(s: &str) -> String {
@@ -874,14 +882,30 @@ fn peak_rss(mut make: impl FnMut(usize) -> Command) -> Option<u64> {
 /// 3.9 MB more and touched 0.6 MB less. With `PR_SET_THP_DISABLE` set
 /// before its `exec` (the kernel keeps it across the `exec`, and cig's
 /// runtime leaves a switch its parent set alone) every page is 4 KiB and
-/// the peak is what the program touched. That is the figure a change in
-/// the compiler or the runtime can move, so it is the one the memory gate
-/// compares; `rss` stays what a run on this system really holds.
+/// the peak is what the program touched; `rss` stays what a run on this
+/// system really holds.
+///
+/// What it touched is still not what it holds of its own. Most of a small
+/// program's peak is pages of its own file, and how many of those are
+/// mapped is the kernel's choice, by how the file lies in the page cache:
+/// one compiled hello, the same bytes, peaked at 12.8 MB as `build` wrote
+/// it and at 6.0 MB written again 4 KiB at a time, with 0.5 MB of its own
+/// both times, and on a runtime whose code is 0.6 MB larger the first
+/// figure was 1.7 MB more and the second 0.3 MB less. So the reading
+/// carries both: the peak, and `Memory::own`, the peak less the pages of
+/// files, which is the figure a change in the compiler or the runtime
+/// moves and the one the memory gate compares.
 ///
 /// `None` where the program cannot be read at its exit (`memory_at_exit`),
 /// where the kernel has no such switch, and off Linux.
+fn touched_memory(c: &mut Command) -> Option<Memory> {
+    read_at_exit(c, true)
+}
+
+/// The peak of [`touched_memory`].
+#[cfg(all(test, target_os = "linux"))]
 fn touched_peak(c: &mut Command) -> Option<u64> {
-    read_at_exit(c, true).map(|m| m.peak)
+    touched_memory(c).map(|m| m.peak)
 }
 
 /// `wait4`'s peak for one run of a command, the child's mark set back on
@@ -1695,6 +1719,7 @@ fn side_json(s: &Side) -> serde_json::Value {
             "median_ms": st.median, "p10_ms": st.p10, "p90_ms": st.p90, "cv": st.cv,
             "samples": st.samples, "noisy": st.noisy(), "rss_bytes": st.rss,
             "touched_bytes": st.touched,
+            "own_bytes": st.own,
             "samples_ms": st.raw,
         }),
         Side::Wrong(why) => serde_json::json!({"wrong": why}),
