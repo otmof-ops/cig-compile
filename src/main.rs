@@ -1287,15 +1287,20 @@ fn options_of(a: &BuildArgs, strength: Option<cigarscript::features::Strength>) 
     }
 }
 
-/// `-O`'s level, 1 when it is not given.
+/// `-O`'s level, `cigscript::lower::DEFAULT_LEVEL` (1) when it is not given.
 fn level_of(a: &BuildArgs) -> u8 {
-    a.opt.as_deref().unwrap_or("1").parse::<u8>().unwrap_or(1)
+    let default = cigscript::lower::DEFAULT_LEVEL;
+    a.opt
+        .as_deref()
+        .and_then(|l| l.parse::<u8>().ok())
+        .unwrap_or(default)
 }
 
 fn passes_of(
     a: &BuildArgs,
-) -> Result<Vec<&'static dyn cigcompile::cir::pass::Pass>, cigscript::diagnostics::Diagnostic> {
-    use cigcompile::cir::pass;
+) -> Result<Vec<&'static dyn cigscript::lower::cir::pass::Pass>, cigscript::diagnostics::Diagnostic>
+{
+    use cigscript::lower::cir::pass;
     if let Some(names) = &a.passes {
         let mut out = Vec::new();
         for n in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
@@ -1322,12 +1327,13 @@ fn passes_of(
 fn emit_cir(
     ctx: &Ctx,
     jobs: &[project::Job],
-    passes: &[&'static dyn cigcompile::cir::pass::Pass],
+    passes: &[&'static dyn cigscript::lower::cir::pass::Pass],
     diffs: bool,
     remarks: bool,
     strength: Option<cigarscript::features::Strength>,
 ) -> Result<(), i32> {
-    use cigcompile::cir::{emit_with, EmitError, LowerError};
+    use cigcompile::emit::emit_with;
+    use cigscript::lower::cir::{EmitError, LowerError};
     for job in jobs {
         let source = build::read_for_ir(ctx, job, strength)?;
         match emit_with(&source, &job.file, passes, diffs, remarks) {
@@ -1361,6 +1367,9 @@ fn emit_cir(
                 eprintln!("{}", installer::please_report());
                 return Err(70);
             }
+            Err(EmitError::Lower(LowerError::Refused { what, span })) => {
+                return Err(not_lowered(ctx, &job.file, &source, what, span));
+            }
             Err(EmitError::Verify(e)) => {
                 let lines: Vec<String> = e.errors.iter().map(|x| x.to_string()).collect();
                 let d = cigscript::diagnostics::internal(format!(
@@ -1385,11 +1394,11 @@ fn emit_cir(
 fn emit_bc(
     ctx: &Ctx,
     jobs: &[project::Job],
-    passes: &[&'static dyn cigcompile::cir::pass::Pass],
+    passes: &[&'static dyn cigscript::lower::cir::pass::Pass],
     strength: Option<cigarscript::features::Strength>,
 ) -> Result<(), i32> {
-    use cigcompile::bc::{compile, disassemble, CompileError, Error};
-    use cigcompile::cir::LowerError;
+    use cigscript::lower::bc::{compile, disassemble, CompileError, Error};
+    use cigscript::lower::cir::LowerError;
     for job in jobs {
         let source = build::read_for_ir(ctx, job, strength)?;
         let internal = |what: String| {
@@ -1405,6 +1414,9 @@ fn emit_bc(
                 return Err(exit::CHECK);
             }
             Err(CompileError::Lower(LowerError::Internal(e))) => return Err(internal(e)),
+            Err(CompileError::Lower(LowerError::Refused { what, span })) => {
+                return Err(not_lowered(ctx, &job.file, &source, what, span));
+            }
             Err(CompileError::Verify(e)) => {
                 let lines: Vec<String> = e.errors.iter().map(|x| x.to_string()).collect();
                 return Err(internal(format!(
@@ -1432,6 +1444,24 @@ fn emit_bc(
     Ok(())
 }
 
+/// A script the lowering does not take (it reads a name where only the
+/// tree-walker finds it: `docs/LOWERING.md` in cig-script), said where the
+/// name is declared. Not a bug and not a failed check: stage `a` builds
+/// the script.
+fn not_lowered(
+    ctx: &Ctx,
+    file: &str,
+    source: &str,
+    what: String,
+    span: cigscript::syntax::span::Span,
+) -> i32 {
+    let d = cigscript::diagnostics::usage(what)
+        .at(span)
+        .with_hint("stage a builds this script, and `cig run` runs it, on the tree-walker");
+    cigscript::cli::report(ctx, &d, Some(file), Some(source));
+    exit::USAGE
+}
+
 /// `--remarks` on a plain build: lower each script and run the passes to
 /// collect remarks; nothing else is kept. The IR is thrown away: the
 /// build that follows is unchanged. A script that does not check or lower
@@ -1439,11 +1469,11 @@ fn emit_bc(
 fn remark_only(
     ctx: &Ctx,
     jobs: &[project::Job],
-    passes: &[&'static dyn cigcompile::cir::pass::Pass],
+    passes: &[&'static dyn cigscript::lower::cir::pass::Pass],
     strength: Option<cigarscript::features::Strength>,
 ) -> Result<(), i32> {
-    use cigcompile::cir::pass::run_passes_with_remarks;
-    use cigcompile::cir::{lower_source, LowerError};
+    use cigscript::lower::cir::pass::run_passes_with_remarks;
+    use cigscript::lower::cir::{lower_source, LowerError};
     for job in jobs {
         let source = build::read_for_ir(ctx, job, strength)?;
         match lower_source(&source, &job.file) {
@@ -1472,6 +1502,9 @@ fn remark_only(
                 eprintln!("{}", installer::please_report());
                 return Err(70);
             }
+            Err(LowerError::Refused { what, span }) => {
+                return Err(not_lowered(ctx, &job.file, &source, what, span));
+            }
         }
     }
     Ok(())
@@ -1479,7 +1512,7 @@ fn remark_only(
 
 /// Print the remarks a pass pipeline produced, prefixed with the file;
 /// `--json` writes them as one JSON object a line, plain text otherwise.
-fn print_remarks(ctx: &Ctx, file: &str, remarks: &[cigcompile::cir::pass::Remark]) {
+fn print_remarks(ctx: &Ctx, file: &str, remarks: &[cigscript::lower::cir::pass::Remark]) {
     for r in remarks {
         if ctx.json {
             let line = if r.span.line > 0 {

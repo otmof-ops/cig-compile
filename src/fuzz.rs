@@ -53,22 +53,28 @@ pub fn lower(data: &[u8]) {
     let Ok(s) = std::str::from_utf8(data) else {
         return;
     };
-    on_cigs_stack(|| match crate::cir::lower_source(s, "fuzz.cig") {
-        Ok(mut m) => {
-            if let Err(e) =
-                crate::cir::pass::run_passes(&mut m, &crate::cir::pass::default_passes())
-            {
-                panic!(
-                    "{} broke a rule on a checked program: {:?}\n{s}",
-                    e.pass, e.errors
-                );
+    on_cigs_stack(
+        || match cigscript::lower::cir::lower_source(s, "fuzz.cig") {
+            Ok(mut m) => {
+                if let Err(e) = cigscript::lower::cir::pass::run_passes(
+                    &mut m,
+                    &cigscript::lower::cir::pass::default_passes(),
+                ) {
+                    panic!(
+                        "{} broke a rule on a checked program: {:?}\n{s}",
+                        e.pass, e.errors
+                    );
+                }
             }
-        }
-        Err(crate::cir::LowerError::Diagnostic(_)) => {}
-        Err(crate::cir::LowerError::Internal(e)) => {
-            panic!("lowering failed on a checked program: {e}\n{s}")
-        }
-    });
+            Err(cigscript::lower::cir::LowerError::Diagnostic(_)) => {}
+            // A program that reads a name before its declaration has run:
+            // the lowering declines it, and the tree-walker runs it.
+            Err(cigscript::lower::cir::LowerError::Refused { .. }) => {}
+            Err(cigscript::lower::cir::LowerError::Internal(e)) => {
+                panic!("lowering failed on a checked program: {e}\n{s}")
+            }
+        },
+    );
 }
 
 /// Any bytes as the end of a program's binary: a program, none, or a

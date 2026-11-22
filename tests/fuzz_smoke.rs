@@ -189,7 +189,7 @@ fn a_programs_trailer_holds_on_any_bytes() {
         &program::Program::new("p", "p.cig", "exhale 1\n", "t"),
     );
     // Format 2 at stage b: a record, `source` and `bytecode`, a table.
-    let module = cigcompile::bc::compile("exhale 1\n", "p.cig", &[]).expect("hello lowers");
+    let module = cigscript::lower::bc::compile("exhale 1\n", "p.cig", &[]).expect("hello lowers");
     let mut b2 = program::Build::new("p", "p.cig", "exhale 1\n", "t", "x86_64-unknown-linux-gnu");
     b2.stage = program::Stage::B;
     b2.sections.push(program::Section {
