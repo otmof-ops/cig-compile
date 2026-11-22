@@ -903,7 +903,7 @@ fn touched_memory(c: &mut Command) -> Option<Memory> {
 }
 
 /// The peak of [`touched_memory`].
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 fn touched_peak(c: &mut Command) -> Option<u64> {
     touched_memory(c).map(|m| m.peak)
 }
