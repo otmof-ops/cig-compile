@@ -1,5 +1,12 @@
+# The compiler (this manifest's package, a member as the root is) and the
+# code generator. The root is not listed as `"."`: cargo would then take
+# every folder under it for a member, and `exclude` would exclude nothing.
 [workspace]
-members = [".", "crates/cig-codegen"]
+members = ["crates/cig-codegen"]
+# CI checks other trees out inside this one (main for the bench gate,
+# cig-script and cigo for the suites that read them), and `fuzz` is a
+# workspace of its own: none of them is a member.
+exclude = ["main-src", "cigscript-src", "cigo-src", "fuzz"]
 
 # CigScript, pinned once for the workspace (`fuzz/Cargo.toml` names it
 # again: its own workspace). Between cig's releases the pin is a commit
