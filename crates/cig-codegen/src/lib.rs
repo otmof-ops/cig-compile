@@ -42,10 +42,12 @@ use cig_native::{Arch, Section};
 use cigscript::lower::cir::infer::{Inference, Row};
 use cigscript::lower::cir::ir::{FuncId, Module};
 
+pub mod flow;
 mod isa;
 mod link;
 mod lower;
 mod qualify;
+pub mod types;
 
 pub use isa::{target as target_isa, triple_of, IsaError};
 pub use qualify::{fixed_point, qualifies, Scalar, SpecKey};
