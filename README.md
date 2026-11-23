@@ -118,6 +118,7 @@ A pull request fails on a non-noisy benchmark more than 5% slower than `main`'s 
 | [What goes native first](docs/decisions/0005-what-goes-native-first.md) | see how stages C and D start: typed specializations compiled ahead of time, entered from the VM |
 | [Native code in a program](docs/decisions/0006-native-code-in-a-program.md) | see where native code lives in a program, how it is loaded and called, and how it leaves |
 | [Where the pieces live](docs/decisions/0007-where-the-pieces-live.md) | see which crate holds the inference, the code generator and the loader |
+| [Native code on the VM's frame](docs/decisions/0008-native-code-on-the-vms-frame.md) | see how every function gets native code: it runs on the VM's frame, and the bytecode goes on wherever it stops |
 | [Research notes](docs/research/README.md) | read what 17 studies of other compilers propose for cigcompile, and what cig's own VM was measured doing |
 
 ## Get help, ask for things, pitch in
