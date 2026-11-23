@@ -1,0 +1,539 @@
+diff --git a/src/vm/census.rs b/src/vm/census.rs
+new file mode 100644
+index 0000000..c02d04a
+--- /dev/null
++++ b/src/vm/census.rs
+@@ -0,0 +1,409 @@
++// SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-script)
++// SPDX-License-Identifier: FSL-1.1-ALv2
++//! A census of what the VM executes: a research instrument, never part of a
++//! release. Built only with the `bench-stats` feature and on only when
++//! `CIG_VM_CENSUS` names a file. For every instruction that completes, at
++//! its site (function, pc): how often it ran and what it ran on, read
++//! before it ran (the types of its operands; for a field, the map's shape
++//! and the key's position; for a call, which function and the types of its
++//! arguments). Written as JSON lines when the script ends.
++//!
++//! It changes nothing a script can see: it only reads registers.
++
++use super::{CompiledFn, Program, Proto};
++use crate::value::{FnBody, Value};
++use cig_bytecode::{DecodedInstr, Op};
++use std::cell::RefCell;
++use std::collections::HashMap;
++
++/// Distinct observations kept per site before the rest are only counted.
++const KEEP: usize = 8;
++/// Distinct argument-type rows kept per called function.
++const KEEP_ARGS: usize = 16;
++/// A map with more keys than this is a dictionary, not a record: its shape
++/// is its size class, not its keys.
++const RECORD_KEYS: usize = 16;
++
++#[derive(Default)]
++struct Seen {
++    rows: Vec<(u64, u64)>,
++    over: u64,
++}
++
++impl Seen {
++    fn add(&mut self, what: u64, keep: usize) {
++        if let Some(r) = self.rows.iter_mut().find(|r| r.0 == what) {
++            r.1 += 1;
++        } else if self.rows.len() < keep {
++            self.rows.push((what, 1));
++        } else {
++            self.over += 1;
++        }
++    }
++}
++
++struct Site {
++    op: u8,
++    n: u64,
++    /// What the instruction names that is not a register: a field, a
++    /// method, a builtin.
++    label: String,
++    sig: Seen,
++    aux: Seen,
++}
++
++#[derive(Default)]
++struct Table {
++    sites: HashMap<(u32, u32), Site>,
++    /// Per called function of the module: the rows of argument types.
++    callees: HashMap<u64, Seen>,
++    /// Values made, by what made them: lists, maps, closures, strings from
++    /// an interpolation.
++    made: [u64; 4],
++}
++
++thread_local! {
++    static TABLE: RefCell<Table> = RefCell::new(Table::default());
++}
++
++fn path() -> Option<&'static str> {
++    static ON: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
++    ON.get_or_init(|| {
++        std::env::var("CIG_VM_CENSUS")
++            .ok()
++            .filter(|p| !p.is_empty())
++    })
++    .as_deref()
++}
++
++/// One observation, taken before the instruction runs.
++pub(super) struct Obs {
++    key: (u32, u32),
++    op: u8,
++    sig: Option<u64>,
++    aux: Option<u64>,
++    callee: Option<(u64, u64)>,
++    made: Option<usize>,
++    label: Option<String>,
++}
++
++/// A value's type, in four bits.
++fn tag(v: &Value) -> u64 {
++    match v {
++        Value::Null => 0,
++        Value::Bool(_) => 1,
++        Value::Int(_) => 2,
++        Value::Float(_) => 3,
++        Value::Str(_) => 4,
++        Value::List(_) => 5,
++        Value::Map(_) => 6,
++        Value::Func(_) => 7,
++        Value::Builtin(_) => 8,
++        Value::Module(_) => 9,
++        Value::Chain(_) => 10,
++    }
++}
++
++/// No register there.
++const NONE: u64 = 15;
++
++fn fnv(h: &mut u64, bytes: &[u8]) {
++    for b in bytes {
++        *h ^= u64::from(*b);
++        *h = h.wrapping_mul(0x0000_0100_0000_01b3);
++    }
++}
++
++/// A map's shape: its keys in order when it is a record, its size class
++/// when it is a dictionary. The top bit marks a dictionary.
++fn shape(v: &Value) -> u64 {
++    let Value::Map(m) = v else {
++        return tag(v);
++    };
++    let m = m.borrow();
++    if m.len() > RECORD_KEYS {
++        return (1 << 63) | u64::from(usize::BITS - m.len().leading_zeros());
++    }
++    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
++    for k in m.keys() {
++        fnv(&mut h, k.as_bytes());
++        fnv(&mut h, &[0xff]);
++    }
++    // Never a bare type tag, never a dictionary.
++    (h & !(1 << 63)) | 0x10
++}
++
++/// Which function a value is: a function of this module by its index, a
++/// builtin by its name's hash (bit 62 set), anything else by its type.
++fn callee_id(v: &Value) -> u64 {
++    match v {
++        Value::Func(f) => match &f.body {
++            FnBody::Compiled(CompiledFn { index, .. }) => *index as u64,
++            _ => (1 << 61) | 7,
++        },
++        Value::Builtin(b) => {
++            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
++            fnv(&mut h, b.name.as_bytes());
++            (1 << 62) | (h >> 2)
++        }
++        other => (1 << 61) | tag(other),
++    }
++}
++
++type Peek<'a> = &'a dyn Fn(u32, &mut dyn FnMut(&Value));
++
++fn tag_at(peek: Peek<'_>, x: u32) -> u64 {
++    let mut t = NONE;
++    peek(x, &mut |v| t = tag(v));
++    t
++}
++
++/// The types of `n` registers from `first`, four bits each, the count on
++/// top. More than fourteen are cut there.
++fn row(peek: Peek<'_>, first: u32, n: u32) -> u64 {
++    let mut r: u64 = 0;
++    for i in 0..n.min(14) {
++        r |= tag_at(peek, first + i) << (4 * i);
++    }
++    r | (u64::from(n.min(15)) << 56)
++}
++
++fn const_tag(proto: &Proto, i: u32) -> u64 {
++    proto.consts.get(i as usize).map_or(NONE, tag)
++}
++
++fn const_text(proto: &Proto, i: u32) -> Option<String> {
++    match proto.consts.get(i as usize) {
++        Some(Value::Str(s)) => Some(s.to_string()),
++        _ => None,
++    }
++}
++
++/// Before an instruction runs: what it is about to run on. `None` when the
++/// census is off.
++pub(super) fn start(func: usize, proto: &Proto, d: &DecodedInstr, peek: Peek<'_>) -> Option<Obs> {
++    path()?;
++    let mut o = Obs {
++        key: (func as u32, d.pc),
++        op: d.op.as_byte(),
++        sig: None,
++        aux: None,
++        callee: None,
++        made: None,
++        label: None,
++    };
++    let pair = |x: u32, y: u32| (tag_at(peek, x) << 4) | tag_at(peek, y);
++    match d.op {
++        Op::ADD | Op::SUB | Op::MUL | Op::DIV | Op::MOD | Op::POW | Op::EQ | Op::LT | Op::LE => {
++            o.sig = Some(pair(d.b_u, d.c));
++        }
++        Op::ADDK
++        | Op::SUBK
++        | Op::MULK
++        | Op::DIVK
++        | Op::MODK
++        | Op::POWK
++        | Op::EQK
++        | Op::LTK
++        | Op::LEK => {
++            o.sig = Some((tag_at(peek, d.b_u) << 4) | const_tag(proto, d.c));
++        }
++        Op::EQJ | Op::LTJ | Op::LEJ | Op::NEJ => o.sig = Some(pair(d.a, d.b_u)),
++        Op::NEG | Op::NOT | Op::MOV | Op::TESTSET | Op::APPENDLIST => {
++            o.sig = Some(tag_at(peek, d.b_u));
++        }
++        Op::TEST | Op::TESTN | Op::RET | Op::ITERPREP | Op::THROW => {
++            o.sig = Some(tag_at(peek, d.a));
++        }
++        Op::LOADK => o.sig = Some(const_tag(proto, d.b_u)),
++        Op::GETFIELD => {
++            // R(A) = R(B).K[C]
++            o.label = const_text(proto, d.c);
++            let key = o.label.clone();
++            peek(d.b_u, &mut |v| {
++                o.sig = Some(shape(v));
++                if let (Value::Map(m), Some(k)) = (v, key.as_deref()) {
++                    o.aux = Some(m.borrow().get_index_of(k).map_or(u64::MAX, |p| p as u64));
++                }
++            });
++        }
++        Op::SETFIELD => {
++            // R(A).K[B] = R(C)
++            o.label = const_text(proto, d.b_u);
++            let key = o.label.clone();
++            peek(d.a, &mut |v| {
++                o.sig = Some(shape(v));
++                if let (Value::Map(m), Some(k)) = (v, key.as_deref()) {
++                    o.aux = Some(m.borrow().get_index_of(k).map_or(u64::MAX, |p| p as u64));
++                }
++            });
++        }
++        Op::GETINDEX => o.sig = Some(pair(d.b_u, d.c)),
++        Op::SETINDEX | Op::INSERTMAP => {
++            o.sig = Some(pair(d.a, d.b_u));
++            o.aux = Some(tag_at(peek, d.c));
++        }
++        Op::CALL | Op::TAILCALL => {
++            // R(A)(R(A+1..A+1+B))
++            let args = row(peek, d.a + 1, d.b_u);
++            peek(d.a, &mut |v| {
++                let id = callee_id(v);
++                o.sig = Some(id);
++                o.callee = Some((id, args));
++                if let Value::Builtin(b) = v {
++                    o.label = Some(b.name.to_string());
++                }
++            });
++            o.aux = Some(args);
++        }
++        Op::CALLB => {
++            // builtin B with C arguments from R(A+1)
++            o.sig = Some(u64::from(d.b_u));
++            o.aux = Some(row(peek, d.a + 1, d.c));
++            o.label = crate::stdlib::builtin_catalogue()
++                .get(d.b_u as usize)
++                .map(|b| b.name.to_string());
++        }
++        Op::CALLM => {
++            // method K[B] on R(A) with C arguments
++            o.sig = Some(tag_at(peek, d.a));
++            o.aux = Some(row(peek, d.a + 1, d.c));
++            o.label = const_text(proto, d.b_u);
++        }
++        Op::INTERP => {
++            // from R(B..B+C+1)
++            o.sig = Some(row(peek, d.b_u, d.c + 1));
++            o.made = Some(3);
++        }
++        Op::NEWLIST => {
++            o.sig = Some(u64::from(d.b_u));
++            o.made = Some(0);
++        }
++        Op::NEWMAP => {
++            o.sig = Some(u64::from(d.b_u));
++            o.made = Some(1);
++        }
++        Op::CLOSURE => {
++            o.sig = Some(u64::from(d.b_u));
++            o.made = Some(2);
++        }
++        _ => {}
++    }
++    Some(o)
++}
++
++/// The instruction `start` looked at completed here.
++pub(super) fn stop(obs: Option<Obs>) {
++    let Some(o) = obs else { return };
++    TABLE.with(|t| {
++        let mut t = t.borrow_mut();
++        let site = t.sites.entry(o.key).or_insert_with(|| Site {
++            op: o.op,
++            n: 0,
++            label: String::new(),
++            sig: Seen::default(),
++            aux: Seen::default(),
++        });
++        site.n += 1;
++        if site.label.is_empty() {
++            if let Some(l) = o.label {
++                site.label = l;
++            }
++        }
++        if let Some(s) = o.sig {
++            site.sig.add(s, KEEP);
++        }
++        if let Some(a) = o.aux {
++            site.aux.add(a, KEEP);
++        }
++        if let Some((id, args)) = o.callee {
++            t.callees.entry(id).or_default().add(args, KEEP_ARGS);
++        }
++        if let Some(m) = o.made {
++            if let Some(c) = t.made.get_mut(m) {
++                *c += 1;
++            }
++        }
++    });
++}
++
++fn esc(s: &str) -> String {
++    let mut out = String::with_capacity(s.len() + 2);
++    for c in s.chars() {
++        match c {
++            '"' => out.push_str("\\\""),
++            '\\' => out.push_str("\\\\"),
++            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
++            c => out.push(c),
++        }
++    }
++    out
++}
++
++fn rows(s: &Seen) -> String {
++    let mut r: Vec<&(u64, u64)> = s.rows.iter().collect();
++    r.sort_by_key(|x| std::cmp::Reverse(x.1));
++    let body: Vec<String> = r.iter().map(|(w, n)| format!("[\"{w:x}\",{n}]")).collect();
++    format!("[{}]", body.join(","))
++}
++
++/// Write the table to the file `CIG_VM_CENSUS` names and start a new one.
++pub(super) fn report(program: &Program) {
++    use std::io::Write as _;
++    let Some(p) = path() else { return };
++    let t = TABLE.with(|t| std::mem::take(&mut *t.borrow_mut()));
++    let mut out = String::new();
++    for (i, h) in program.heads.iter().enumerate() {
++        // A function is read from the module at its first entry: one never
++        // entered was never loaded, and has no code here to count.
++        let code = program
++            .funcs
++            .get(i)
++            .map(|p| p.code.iter().flatten().count());
++        out.push_str(&format!(
++            "{{\"kind\":\"func\",\"f\":{i},\"label\":\"{}\",\"arity\":{},\"loaded\":{},\"code\":{}}}\n",
++            esc(h.label.as_deref().unwrap_or("")),
++            h.arity,
++            code.is_some(),
++            code.unwrap_or(0)
++        ));
++    }
++    let mut keys: Vec<&(u32, u32)> = t.sites.keys().collect();
++    keys.sort();
++    for k in keys {
++        let Some(s) = t.sites.get(k) else { continue };
++        out.push_str(&format!(
++            "{{\"kind\":\"site\",\"f\":{},\"pc\":{},\"op\":\"{}\",\"n\":{},\"label\":\"{}\",\"sig\":{},\"sig_over\":{},\"aux\":{},\"aux_over\":{}}}\n",
++            k.0,
++            k.1,
++            Op::from_byte(s.op).map_or("?", Op::mnemonic),
++            s.n,
++            esc(&s.label),
++            rows(&s.sig),
++            s.sig.over,
++            rows(&s.aux),
++            s.aux.over
++        ));
++    }
++    let mut ids: Vec<&u64> = t.callees.keys().collect();
++    ids.sort();
++    for id in ids {
++        let Some(s) = t.callees.get(id) else { continue };
++        out.push_str(&format!(
++            "{{\"kind\":\"callee\",\"id\":\"{id:x}\",\"args\":{},\"args_over\":{}}}\n",
++            rows(s),
++            s.over
++        ));
++    }
++    out.push_str(&format!(
++        "{{\"kind\":\"made\",\"lists\":{},\"maps\":{},\"closures\":{},\"interpolated\":{}}}\n",
++        t.made[0], t.made[1], t.made[2], t.made[3]
++    ));
++    if let Ok(mut f) = std::fs::OpenOptions::new()
++        .create(true)
++        .append(true)
++        .open(p)
++    {
++        let _ = f.write_all(out.as_bytes());
++    }
++}
+diff --git a/src/vm/mod.rs b/src/vm/mod.rs
+index bbe4e26..983de8a 100644
+--- a/src/vm/mod.rs
++++ b/src/vm/mod.rs
+@@ -103,6 +103,9 @@ mod tests;
+ /// the run's error stream when a script ends. Built only with the
+ /// `bench-stats` feature, which a release never has: without it the VM does
+ /// not read the variable at all.
++#[cfg(feature = "bench-stats")]
++mod census;
++
+ #[cfg(feature = "bench-stats")]
+ mod stats {
+     use super::{Interp, Op};
+@@ -740,6 +743,8 @@ pub fn run_script(interp: &mut Interp, program: &Rc<Program>) -> Result<(), Diag
+     let result = run(interp, program);
+     #[cfg(feature = "bench-stats")]
+     stats::report(interp);
++    #[cfg(feature = "bench-stats")]
++    census::report(program);
+     interp.out.flush().ok();
+     match result {
+         Ok(Value::Map(names)) => {
+@@ -1140,6 +1145,21 @@ impl Machine<'_> {
+         }
+     }
+ 
++    /// What the census sees of the instruction about to run in the general
++    /// path: its operands, read through a register's cell when it has one.
++    #[cfg(feature = "bench-stats")]
++    fn census_start(&self, proto: &Proto, d: &DecodedInstr, base: usize) -> Option<census::Obs> {
++        let func = self.frames.last().map_or(0, |f| f.func);
++        census::start(func, proto, d, &|x, f| {
++            let i = base.saturating_add(x as usize);
++            if let Some(Some(cell)) = self.cells.get(i) {
++                f(&cell.borrow());
++            } else if let Some(v) = self.stack.get(i) {
++                f(v);
++            }
++        })
++    }
++
+     /// `R(r)`: the register's value, or its cell's when it carries one.
+     fn get(&self, base: usize, r: u32, span: Span) -> Result<Value, Fault> {
+         self.get_abs(base.saturating_add(r as usize), span)
+@@ -1270,6 +1290,12 @@ impl Machine<'_> {
+             #[cfg(feature = "bench-stats")]
+             let timer =
+                 matches!(d.op, Op::CALL | Op::RET | Op::TAILCALL).then(|| stats::start(d.op));
++            #[cfg(feature = "bench-stats")]
++            let seen = if matches!(d.op, Op::CALL | Op::RET | Op::TAILCALL) {
++                self.census_start(proto, d, base)
++            } else {
++                None
++            };
+             let switched = match d.op {
+                 Op::CALL => self
+                     .call_here(program, proto, d, base)
+@@ -1285,6 +1311,10 @@ impl Machine<'_> {
+             if let (Some(timer), false) = (timer, matches!(switched, Ok(None))) {
+                 stats::stop(timer);
+             }
++            #[cfg(feature = "bench-stats")]
++            if !matches!(switched, Ok(None)) {
++                census::stop(seen);
++            }
+             match switched {
+                 Ok(None) => {}
+                 Ok(Some(Some(v))) => return Ok(Some(v)),
+@@ -1305,6 +1335,8 @@ impl Machine<'_> {
+             }
+             #[cfg(feature = "bench-stats")]
+             let timer = stats::start(d.op);
++            #[cfg(feature = "bench-stats")]
++            let seen = self.census_start(proto, d, base);
+             // The general path: the frame's pc is where an error from this
+             // instruction is offered to the tries.
+             if let Some(f) = self.frames.last_mut() {
+@@ -1314,6 +1346,8 @@ impl Machine<'_> {
+             let flow = self.step(program, proto, d, base, span);
+             #[cfg(feature = "bench-stats")]
+             stats::stop(timer);
++            #[cfg(feature = "bench-stats")]
++            census::stop(seen);
+             match flow? {
+                 Flow::Next(next) => {
+                     pc = next;
+@@ -1407,10 +1441,17 @@ impl Machine<'_> {
+                     };
+                     #[cfg(feature = "bench-stats")]
+                     let timer = stats::start(d.op);
++                    #[cfg(feature = "bench-stats")]
++                    let seen = census::start(frame.func, proto, d, &|x, f| {
++                        if let Some(v) = FrameRegs::reg(&*regs, x) {
++                            f(v);
++                        }
++                    });
+                     let done = fast_one(regs, interp, frame, proto, d, upvals);
+                     #[cfg(feature = "bench-stats")]
+                     if done.is_some() {
+                         stats::stop(timer);
++                        census::stop(seen);
+                     }
+                     match done {
+                         Some(Ok(next)) => pc = next,
+@@ -3066,11 +3107,18 @@ fn fast_run<R: FrameRegs + ?Sized>(
+         }
+         #[cfg(feature = "bench-stats")]
+         let timer = stats::start(d.op);
++        #[cfg(feature = "bench-stats")]
++        let seen = census::start(frame.func, proto, d, &|x, f| {
++            if let Some(v) = regs.reg(x) {
++                f(v);
++            }
++        });
+         let done = fast_one(regs, interp, frame, proto, d, upvals);
+         // An instruction left to the general path is counted there, once.
+         #[cfg(feature = "bench-stats")]
+         if done.is_some() {
+             stats::stop(timer);
++            census::stop(seen);
+         }
+         match done {
+             Some(Ok(next)) => pc = next,

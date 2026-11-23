@@ -5,6 +5,19 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **Stages C and D are designed.** Three decision records say how they
+  start: typed specializations compiled ahead of time and entered from
+  the VM (`docs/decisions/0005`), native code as a section of the program
+  that the program maps from its own file, with every error still made by
+  the interpreter's own operators and the step budget exact (`0006`), and
+  which crate holds the inference, the generator and the loader (`0007`).
+  Nothing in a program changes yet.
+- **The compiler study is in the repository** (#98): `docs/research/` holds
+  17 studies of other compilers read from pinned source (308 mechanisms,
+  each with a proposed take, adapt or reject for cig), indexes by issue
+  and by decision, a census of what cig 1.25.0's VM executes, and what
+  the released runtime's code is made of.
+
 ## 0.5.1 — 2026-11-23
 
 Programs for cig 1.25.0, and two defects of stage `b` fixed. In a program

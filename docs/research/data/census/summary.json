@@ -1,0 +1,6062 @@
+{
+ "cigo-audit-one": {
+  "arith": {
+   "n": 148,
+   "pairs": {
+    "int, int": 5,
+    "other": 87,
+    "str, str": 56
+   }
+  },
+  "by_op": {
+   "add": 134,
+   "addk": 14,
+   "appendlist": 9483,
+   "burn.enter": 1,
+   "burn.leave": 1,
+   "burn.op": 1,
+   "call": 893,
+   "callb": 1325,
+   "callm": 1829,
+   "cellnew": 1000,
+   "closure": 973,
+   "eq": 12,
+   "eqj": 93,
+   "eqk": 156,
+   "exhale": 1,
+   "getfield": 212,
+   "getindex": 539,
+   "getup": 1834,
+   "insertmap": 4862,
+   "interp": 3,
+   "iternext": 1662,
+   "iterprep": 589,
+   "jmp": 60,
+   "lej": 2,
+   "loadbool": 91,
+   "loadg": 2,
+   "loadint": 116,
+   "loadk": 16202,
+   "loadnull": 1636,
+   "loop": 1073,
+   "lt": 2,
+   "ltj": 4,
+   "ltk": 4,
+   "mov": 8165,
+   "neg": 1,
+   "nej": 581,
+   "newlist": 2972,
+   "newmap": 1029,
+   "nop": 1,
+   "not": 116,
+   "pack": 1,
+   "ret": 1006,
+   "setfield": 210,
+   "setindex": 339,
+   "setup": 2,
+   "steps": 6336,
+   "test": 43,
+   "testn": 1143,
+   "try.enter": 5,
+   "try.leave": 5
+  },
+  "callb": {
+   "n": 1325,
+   "one_kind": 1325,
+   "top": [
+    [
+     "type_of",
+     384
+    ],
+    [
+     "str",
+     373
+    ],
+    [
+     "text.find_all",
+     158
+    ],
+    [
+     "path.join",
+     157
+    ],
+    [
+     "fs.is_file",
+     121
+    ],
+    [
+     "env.get",
+     54
+    ]
+   ]
+  },
+  "callm": {
+   "n": 1829,
+   "one_kind": 1829,
+   "top": [
+    [
+     "get",
+     460
+    ],
+    [
+     "has",
+     397
+    ],
+    [
+     "replace",
+     330
+    ],
+    [
+     "map",
+     282
+    ],
+    [
+     "push",
+     164
+    ],
+    [
+     "ends_with",
+     72
+    ]
+   ]
+  },
+  "calls": {
+   "n": 893,
+   "one_callee": 893,
+   "sites": 125,
+   "sites_one_callee": 125,
+   "to_builtin": 0,
+   "to_function": 893,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 854,
+   "pairs": {
+    "int, int": 16,
+    "other": 236,
+    "str, str": 602
+   }
+  },
+  "copies": {
+   "loadk_str": 16157,
+   "mov": 8165,
+   "mov_counted": 7479
+  },
+  "fields": {
+   "n": 422,
+   "not_a_map": 0,
+   "on_dictionary": 6,
+   "one_position": 305,
+   "one_shape": 83,
+   "over_8": 0,
+   "sites": 52,
+   "sites_one_shape": 44,
+   "two_shapes": 339,
+   "up_to_8": 0
+  },
+  "functions": 1038,
+  "functions_called": {
+   "calls": 893,
+   "calls_one_row": 644,
+   "functions": 71,
+   "functions_one_row": 68,
+   "most_rows": 3
+  },
+  "functions_entered": 80,
+  "groups": {
+   "arithmetic": 149,
+   "calls and returns": 5053,
+   "closures and cells": 3809,
+   "comparison and logic": 970,
+   "control": 4570,
+   "data": 19649,
+   "everything else": 15,
+   "moves and constants": 26213,
+   "step marks": 6336
+  },
+  "hot": {
+   "sites_for_90_percent": 30951,
+   "top_10_sites": 2147,
+   "top_tenth_of_sites": 32899
+  },
+  "index": {
+   "by": {
+    "list[int]": 7,
+    "map[str]": 871
+   },
+   "n": 878,
+   "one_kind": 878
+  },
+  "instructions": 66764,
+  "made": {
+   "closures": 973,
+   "interpolated": 3,
+   "lists": 2972,
+   "maps": 1029
+  },
+  "module_instructions": 115268,
+  "returns": {
+   "n": 1006,
+   "one_kind": 974
+  },
+  "sites": 37627,
+  "top_level": {
+   "by_op": [
+    [
+     "loadk",
+     13893
+    ],
+    [
+     "appendlist",
+     8795
+    ],
+    [
+     "insertmap",
+     4517
+    ],
+    [
+     "newlist",
+     2323
+    ],
+    [
+     "mov",
+     1137
+    ],
+    [
+     "loadnull",
+     938
+    ],
+    [
+     "cellnew",
+     920
+    ],
+    [
+     "newmap",
+     804
+    ]
+   ],
+   "n": 34876
+  },
+  "typed_sites": {
+   "n": 1002,
+   "one_kind": 785,
+   "sites": 177,
+   "sites_one_kind": 175
+  }
+ },
+ "cigo-guard-line": {
+  "arith": {
+   "n": 161,
+   "pairs": {
+    "int, int": 29,
+    "other": 79,
+    "str, str": 53
+   }
+  },
+  "by_op": {
+   "add": 126,
+   "addk": 35,
+   "appendlist": 9235,
+   "call": 1598,
+   "callb": 3382,
+   "callm": 1585,
+   "cellnew": 926,
+   "closure": 674,
+   "eq": 8,
+   "eqj": 39,
+   "eqk": 142,
+   "exhale": 1,
+   "getfield": 179,
+   "getindex": 589,
+   "getup": 1829,
+   "insertmap": 4854,
+   "interp": 1,
+   "iternext": 2016,
+   "iterprep": 122,
+   "jmp": 43,
+   "loadbool": 102,
+   "loadg": 2,
+   "loadint": 112,
+   "loadk": 17622,
+   "loadnull": 991,
+   "loop": 1906,
+   "lt": 2,
+   "ltj": 18,
+   "ltk": 4,
+   "mov": 9090,
+   "nej": 3233,
+   "newlist": 2583,
+   "newmap": 1040,
+   "nop": 1,
+   "not": 78,
+   "pack": 1,
+   "ret": 1609,
+   "setfield": 2,
+   "setindex": 551,
+   "setup": 2,
+   "steps": 9821,
+   "test": 38,
+   "testn": 324,
+   "try.enter": 3,
+   "try.leave": 3
+  },
+  "callb": {
+   "n": 3382,
+   "one_kind": 3382,
+   "top": [
+    [
+     "type_of",
+     3147
+    ],
+    [
+     "str",
+     64
+    ],
+    [
+     "env.get",
+     56
+    ],
+    [
+     "path.join",
+     38
+    ],
+    [
+     "text.matches",
+     38
+    ],
+    [
+     "fs.is_file",
+     8
+    ]
+   ]
+  },
+  "callm": {
+   "n": 1585,
+   "one_kind": 1585,
+   "top": [
+    [
+     "push",
+     1281
+    ],
+    [
+     "sort",
+     82
+    ],
+    [
+     "keys",
+     79
+    ],
+    [
+     "has",
+     38
+    ],
+    [
+     "upper",
+     32
+    ],
+    [
+     "get",
+     30
+    ]
+   ]
+  },
+  "calls": {
+   "n": 1598,
+   "one_callee": 1598,
+   "sites": 91,
+   "sites_one_callee": 91,
+   "to_builtin": 0,
+   "to_function": 1598,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 3446,
+   "pairs": {
+    "int, int": 24,
+    "other": 20,
+    "str, str": 3402
+   }
+  },
+  "copies": {
+   "loadk_str": 17577,
+   "mov": 9090,
+   "mov_counted": 8922
+  },
+  "fields": {
+   "n": 181,
+   "not_a_map": 0,
+   "on_dictionary": 3,
+   "one_position": 116,
+   "one_shape": 50,
+   "over_8": 0,
+   "sites": 21,
+   "sites_one_shape": 17,
+   "two_shapes": 131,
+   "up_to_8": 0
+  },
+  "functions": 1038,
+  "functions_called": {
+   "calls": 1598,
+   "calls_one_row": 79,
+   "functions": 50,
+   "functions_one_row": 47,
+   "most_rows": 3
+  },
+  "functions_entered": 55,
+  "groups": {
+   "arithmetic": 161,
+   "calls and returns": 8174,
+   "closures and cells": 3431,
+   "comparison and logic": 3524,
+   "control": 4449,
+   "data": 19034,
+   "everything else": 8,
+   "moves and constants": 27920,
+   "step marks": 9821
+  },
+  "hot": {
+   "sites_for_90_percent": 28887,
+   "top_10_sites": 14730,
+   "top_tenth_of_sites": 43636
+  },
+  "index": {
+   "by": {
+    "list[int]": 7,
+    "map[str]": 1133
+   },
+   "n": 1140,
+   "one_kind": 1140
+  },
+  "instructions": 76522,
+  "made": {
+   "closures": 674,
+   "interpolated": 1,
+   "lists": 2583,
+   "maps": 1040
+  },
+  "module_instructions": 115268,
+  "returns": {
+   "n": 1609,
+   "one_kind": 1591
+  },
+  "sites": 36539,
+  "top_level": {
+   "by_op": [
+    [
+     "loadk",
+     13893
+    ],
+    [
+     "appendlist",
+     8795
+    ],
+    [
+     "insertmap",
+     4517
+    ],
+    [
+     "newlist",
+     2323
+    ],
+    [
+     "mov",
+     1137
+    ],
+    [
+     "loadnull",
+     938
+    ],
+    [
+     "cellnew",
+     920
+    ],
+    [
+     "newmap",
+     804
+    ]
+   ],
+   "n": 34876
+  },
+  "typed_sites": {
+   "n": 3607,
+   "one_kind": 3603,
+   "sites": 144,
+   "sites_one_kind": 143
+  }
+ },
+ "cigo-help": {
+  "arith": {
+   "n": 81,
+   "pairs": {
+    "other": 78,
+    "str, str": 3
+   }
+  },
+  "by_op": {
+   "add": 81,
+   "appendlist": 9222,
+   "call": 30,
+   "callb": 74,
+   "callm": 17,
+   "cellnew": 921,
+   "closure": 662,
+   "eq": 3,
+   "eqj": 1,
+   "eqk": 15,
+   "exhale": 70,
+   "getfield": 66,
+   "getindex": 73,
+   "getup": 101,
+   "insertmap": 4810,
+   "interp": 3,
+   "iternext": 35,
+   "iterprep": 2,
+   "jmp": 3,
+   "loadbool": 64,
+   "loadg": 2,
+   "loadint": 87,
+   "loadk": 14545,
+   "loadnull": 949,
+   "loop": 33,
+   "mov": 1221,
+   "nej": 4,
+   "newlist": 2569,
+   "newmap": 917,
+   "nop": 1,
+   "not": 2,
+   "pack": 1,
+   "ret": 38,
+   "setindex": 33,
+   "steps": 490,
+   "test": 7,
+   "testn": 15,
+   "try.enter": 2,
+   "try.leave": 2
+  },
+  "callb": {
+   "n": 74,
+   "one_kind": 74,
+   "top": [
+    [
+     "path.join",
+     38
+    ],
+    [
+     "env.get",
+     18
+    ],
+    [
+     "cig.os",
+     4
+    ],
+    [
+     "path.normalize",
+     2
+    ],
+    [
+     "fs.home",
+     2
+    ],
+    [
+     "type_of",
+     2
+    ]
+   ]
+  },
+  "callm": {
+   "n": 17,
+   "one_kind": 17,
+   "top": [
+    [
+     "merge",
+     9
+    ],
+    [
+     "get",
+     2
+    ],
+    [
+     "filter",
+     2
+    ],
+    [
+     "join",
+     2
+    ],
+    [
+     "slice",
+     1
+    ],
+    [
+     "map",
+     1
+    ]
+   ]
+  },
+  "calls": {
+   "n": 30,
+   "one_callee": 30,
+   "sites": 27,
+   "sites_one_callee": 27,
+   "to_builtin": 0,
+   "to_function": 30,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 23,
+   "pairs": {
+    "other": 3,
+    "str, str": 20
+   }
+  },
+  "copies": {
+   "loadk_str": 14500,
+   "mov": 1221,
+   "mov_counted": 1187
+  },
+  "fields": {
+   "n": 66,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 33,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 2,
+   "sites_one_shape": 0,
+   "two_shapes": 66,
+   "up_to_8": 0
+  },
+  "functions": 1038,
+  "functions_called": {
+   "calls": 30,
+   "calls_one_row": 15,
+   "functions": 11,
+   "functions_one_row": 9,
+   "most_rows": 2
+  },
+  "functions_entered": 13,
+  "groups": {
+   "arithmetic": 81,
+   "calls and returns": 159,
+   "closures and cells": 1684,
+   "comparison and logic": 25,
+   "control": 95,
+   "data": 17693,
+   "everything else": 75,
+   "moves and constants": 16869,
+   "step marks": 490
+  },
+  "hot": {
+   "sites_for_90_percent": 31500,
+   "top_10_sites": 331,
+   "top_tenth_of_sites": 5475
+  },
+  "index": {
+   "by": {
+    "list[int]": 7,
+    "map[str]": 99
+   },
+   "n": 106,
+   "one_kind": 106
+  },
+  "instructions": 37171,
+  "made": {
+   "closures": 662,
+   "interpolated": 3,
+   "lists": 2569,
+   "maps": 917
+  },
+  "module_instructions": 115268,
+  "returns": {
+   "n": 38,
+   "one_kind": 28
+  },
+  "sites": 35217,
+  "top_level": {
+   "by_op": [
+    [
+     "loadk",
+     13890
+    ],
+    [
+     "appendlist",
+     8795
+    ],
+    [
+     "insertmap",
+     4517
+    ],
+    [
+     "newlist",
+     2323
+    ],
+    [
+     "mov",
+     1132
+    ],
+    [
+     "loadnull",
+     938
+    ],
+    [
+     "cellnew",
+     920
+    ],
+    [
+     "newmap",
+     804
+    ]
+   ],
+   "n": 34841
+  },
+  "typed_sites": {
+   "n": 104,
+   "one_kind": 100,
+   "sites": 38,
+   "sites_one_kind": 37
+  }
+ },
+ "cigo-hook-benign": {
+  "arith": {
+   "n": 175,
+   "pairs": {
+    "int, int": 29,
+    "other": 79,
+    "str, str": 67
+   }
+  },
+  "by_op": {
+   "add": 132,
+   "addk": 43,
+   "appendlist": 9237,
+   "call": 1619,
+   "callb": 3404,
+   "callm": 1608,
+   "cellnew": 929,
+   "closure": 677,
+   "eq": 13,
+   "eqj": 41,
+   "eqk": 160,
+   "exhale": 1,
+   "getfield": 180,
+   "getindex": 591,
+   "getup": 1861,
+   "insertmap": 4858,
+   "iternext": 2016,
+   "iterprep": 121,
+   "jmp": 44,
+   "le": 2,
+   "lek": 2,
+   "loadbool": 102,
+   "loadg": 2,
+   "loadint": 117,
+   "loadk": 17669,
+   "loadnull": 998,
+   "loop": 1907,
+   "lt": 2,
+   "ltj": 18,
+   "ltk": 4,
+   "mov": 9174,
+   "nej": 3232,
+   "newlist": 2584,
+   "newmap": 1043,
+   "nop": 1,
+   "not": 94,
+   "pack": 1,
+   "ret": 1632,
+   "setfield": 2,
+   "setindex": 552,
+   "setup": 2,
+   "steps": 9885,
+   "test": 43,
+   "testn": 370,
+   "try.enter": 4,
+   "try.leave": 4
+  },
+  "callb": {
+   "n": 3404,
+   "one_kind": 3404,
+   "top": [
+    [
+     "type_of",
+     3149
+    ],
+    [
+     "str",
+     69
+    ],
+    [
+     "env.get",
+     59
+    ],
+    [
+     "text.matches",
+     43
+    ],
+    [
+     "path.join",
+     38
+    ],
+    [
+     "text.replace",
+     8
+    ]
+   ]
+  },
+  "callm": {
+   "n": 1608,
+   "one_kind": 1608,
+   "top": [
+    [
+     "push",
+     1282
+    ],
+    [
+     "sort",
+     82
+    ],
+    [
+     "keys",
+     79
+    ],
+    [
+     "has",
+     41
+    ],
+    [
+     "get",
+     37
+    ],
+    [
+     "upper",
+     32
+    ]
+   ]
+  },
+  "calls": {
+   "n": 1619,
+   "one_callee": 1617,
+   "sites": 105,
+   "sites_one_callee": 104,
+   "to_builtin": 0,
+   "to_function": 1619,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 3474,
+   "pairs": {
+    "int, int": 28,
+    "other": 23,
+    "str, str": 3423
+   }
+  },
+  "copies": {
+   "loadk_str": 17624,
+   "mov": 9174,
+   "mov_counted": 8994
+  },
+  "fields": {
+   "n": 182,
+   "not_a_map": 0,
+   "on_dictionary": 3,
+   "one_position": 117,
+   "one_shape": 51,
+   "over_8": 0,
+   "sites": 22,
+   "sites_one_shape": 18,
+   "two_shapes": 131,
+   "up_to_8": 0
+  },
+  "functions": 1038,
+  "functions_called": {
+   "calls": 1619,
+   "calls_one_row": 100,
+   "functions": 57,
+   "functions_one_row": 54,
+   "most_rows": 3
+  },
+  "functions_entered": 62,
+  "groups": {
+   "arithmetic": 175,
+   "calls and returns": 8263,
+   "closures and cells": 3469,
+   "comparison and logic": 3568,
+   "control": 4501,
+   "data": 19047,
+   "everything else": 10,
+   "moves and constants": 28063,
+   "step marks": 9885
+  },
+  "hot": {
+   "sites_for_90_percent": 29101,
+   "top_10_sites": 14730,
+   "top_tenth_of_sites": 43861
+  },
+  "index": {
+   "by": {
+    "list[int]": 7,
+    "map[str]": 1136
+   },
+   "n": 1143,
+   "one_kind": 1143
+  },
+  "instructions": 76981,
+  "made": {
+   "closures": 677,
+   "interpolated": 0,
+   "lists": 2584,
+   "maps": 1043
+  },
+  "module_instructions": 115268,
+  "returns": {
+   "n": 1632,
+   "one_kind": 1612
+  },
+  "sites": 36799,
+  "top_level": {
+   "by_op": [
+    [
+     "loadk",
+     13896
+    ],
+    [
+     "appendlist",
+     8795
+    ],
+    [
+     "insertmap",
+     4517
+    ],
+    [
+     "newlist",
+     2323
+    ],
+    [
+     "mov",
+     1142
+    ],
+    [
+     "loadnull",
+     938
+    ],
+    [
+     "cellnew",
+     920
+    ],
+    [
+     "newmap",
+     804
+    ]
+   ],
+   "n": 34911
+  },
+  "typed_sites": {
+   "n": 3649,
+   "one_kind": 3645,
+   "sites": 167,
+   "sites_one_kind": 166
+  }
+ },
+ "cigo-hook-curl-sh": {
+  "arith": {
+   "n": 409,
+   "pairs": {
+    "int, int": 181,
+    "other": 81,
+    "str, str": 147
+   }
+  },
+  "by_op": {
+   "add": 206,
+   "addk": 203,
+   "appendlist": 9243,
+   "burn.enter": 1,
+   "burn.leave": 1,
+   "burn.op": 1,
+   "call": 1633,
+   "callb": 3421,
+   "callm": 1708,
+   "cellnew": 930,
+   "closure": 682,
+   "eq": 14,
+   "eqj": 42,
+   "eqk": 540,
+   "exhale": 1,
+   "getfield": 196,
+   "getindex": 592,
+   "getup": 1891,
+   "insertmap": 4874,
+   "iternext": 2025,
+   "iterprep": 126,
+   "jmp": 44,
+   "le": 2,
+   "lej": 3,
+   "lek": 2,
+   "loadbool": 181,
+   "loadg": 2,
+   "loadint": 129,
+   "loadk": 17726,
+   "loadnull": 1003,
+   "loop": 1987,
+   "lt": 2,
+   "ltj": 98,
+   "ltk": 4,
+   "mov": 9495,
+   "neg": 1,
+   "nej": 3238,
+   "newlist": 2589,
+   "newmap": 1050,
+   "nop": 1,
+   "not": 247,
+   "pack": 1,
+   "ret": 1651,
+   "setfield": 2,
+   "setindex": 552,
+   "setup": 3,
+   "steps": 10663,
+   "test": 135,
+   "testn": 1139,
+   "try.enter": 5,
+   "try.leave": 5
+  },
+  "callb": {
+   "n": 3421,
+   "one_kind": 3421,
+   "top": [
+    [
+     "type_of",
+     3149
+    ],
+    [
+     "str",
+     73
+    ],
+    [
+     "env.get",
+     59
+    ],
+    [
+     "text.matches",
+     44
+    ],
+    [
+     "path.join",
+     41
+    ],
+    [
+     "fs.is_file",
+     11
+    ]
+   ]
+  },
+  "callm": {
+   "n": 1708,
+   "one_kind": 1708,
+   "top": [
+    [
+     "push",
+     1284
+    ],
+    [
+     "slice",
+     93
+    ],
+    [
+     "sort",
+     82
+    ],
+    [
+     "keys",
+     79
+    ],
+    [
+     "get",
+     42
+    ],
+    [
+     "has",
+     41
+    ]
+   ]
+  },
+  "calls": {
+   "n": 1633,
+   "one_callee": 1631,
+   "sites": 119,
+   "sites_one_callee": 118,
+   "to_builtin": 0,
+   "to_function": 1633,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 3945,
+   "pairs": {
+    "float, float": 6,
+    "int, int": 108,
+    "other": 25,
+    "str, str": 3806
+   }
+  },
+  "copies": {
+   "loadk_str": 17673,
+   "mov": 9495,
+   "mov_counted": 9225
+  },
+  "fields": {
+   "n": 198,
+   "not_a_map": 0,
+   "on_dictionary": 3,
+   "one_position": 133,
+   "one_shape": 67,
+   "over_8": 0,
+   "sites": 38,
+   "sites_one_shape": 34,
+   "two_shapes": 131,
+   "up_to_8": 0
+  },
+  "functions": 1038,
+  "functions_called": {
+   "calls": 1633,
+   "calls_one_row": 114,
+   "functions": 70,
+   "functions_one_row": 67,
+   "most_rows": 3
+  },
+  "functions_entered": 80,
+  "groups": {
+   "arithmetic": 410,
+   "calls and returns": 8413,
+   "closures and cells": 3506,
+   "comparison and logic": 4192,
+   "control": 5456,
+   "data": 19098,
+   "everything else": 15,
+   "moves and constants": 28537,
+   "step marks": 10663
+  },
+  "hot": {
+   "sites_for_90_percent": 29244,
+   "top_10_sites": 14730,
+   "top_tenth_of_sites": 46744
+  },
+  "index": {
+   "by": {
+    "list[int]": 8,
+    "map[str]": 1136
+   },
+   "n": 1144,
+   "one_kind": 1144
+  },
+  "instructions": 80290,
+  "made": {
+   "closures": 682,
+   "interpolated": 0,
+   "lists": 2589,
+   "maps": 1050
+  },
+  "module_instructions": 115268,
+  "returns": {
+   "n": 1651,
+   "one_kind": 1631
+  },
+  "sites": 37273,
+  "top_level": {
+   "by_op": [
+    [
+     "loadk",
+     13896
+    ],
+    [
+     "appendlist",
+     8795
+    ],
+    [
+     "insertmap",
+     4517
+    ],
+    [
+     "newlist",
+     2323
+    ],
+    [
+     "mov",
+     1142
+    ],
+    [
+     "loadnull",
+     938
+    ],
+    [
+     "cellnew",
+     920
+    ],
+    [
+     "newmap",
+     804
+    ]
+   ],
+   "n": 34911
+  },
+  "typed_sites": {
+   "n": 4354,
+   "one_kind": 4350,
+   "sites": 194,
+   "sites_one_kind": 193
+  }
+ },
+ "cigo-list": {
+  "arith": {
+   "n": 457,
+   "pairs": {
+    "int, int": 208,
+    "other": 78,
+    "str, str": 171
+   }
+  },
+  "by_op": {
+   "add": 301,
+   "addk": 52,
+   "appendlist": 9549,
+   "call": 1192,
+   "callb": 2046,
+   "callm": 4019,
+   "cellnew": 988,
+   "closure": 1262,
+   "eq": 165,
+   "eqj": 158,
+   "eqk": 282,
+   "exhale": 105,
+   "getfield": 333,
+   "getindex": 1036,
+   "getup": 2358,
+   "insertmap": 4814,
+   "interp": 221,
+   "iternext": 1483,
+   "iterprep": 538,
+   "jmp": 58,
+   "le": 1,
+   "lej": 52,
+   "lek": 1,
+   "loadbool": 342,
+   "loadg": 2,
+   "loadint": 311,
+   "loadk": 18112,
+   "loadnull": 1909,
+   "loop": 945,
+   "ltk": 156,
+   "mov": 12033,
+   "mulk": 104,
+   "nej": 767,
+   "newlist": 3048,
+   "newmap": 976,
+   "nop": 1,
+   "not": 435,
+   "pack": 1,
+   "ret": 2213,
+   "setfield": 208,
+   "setindex": 260,
+   "setup": 1,
+   "steps": 7891,
+   "test": 283,
+   "testn": 1972,
+   "try.enter": 3,
+   "try.leave": 3
+  },
+  "callb": {
+   "n": 2046,
+   "one_kind": 2046,
+   "top": [
+    [
+     "str",
+     962
+    ],
+    [
+     "type_of",
+     632
+    ],
+    [
+     "text.find_all",
+     156
+    ],
+    [
+     "path.base",
+     106
+    ],
+    [
+     "text.matches",
+     106
+    ],
+    [
+     "path.join",
+     38
+    ]
+   ]
+  },
+  "callm": {
+   "n": 4019,
+   "one_kind": 4019,
+   "top": [
+    [
+     "get",
+     1112
+    ],
+    [
+     "has",
+     786
+    ],
+    [
+     "map",
+     636
+    ],
+    [
+     "replace",
+     364
+    ],
+    [
+     "len",
+     264
+    ],
+    [
+     "push",
+     208
+    ]
+   ]
+  },
+  "calls": {
+   "n": 1192,
+   "one_callee": 1192,
+   "sites": 63,
+   "sites_one_callee": 63,
+   "to_builtin": 0,
+   "to_function": 1192,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 1582,
+   "pairs": {
+    "int, int": 212,
+    "other": 376,
+    "str, str": 994
+   }
+  },
+  "copies": {
+   "loadk_str": 18067,
+   "mov": 12033,
+   "mov_counted": 10627
+  },
+  "fields": {
+   "n": 541,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 456,
+   "one_shape": 111,
+   "over_8": 0,
+   "sites": 18,
+   "sites_one_shape": 9,
+   "two_shapes": 430,
+   "up_to_8": 0
+  },
+  "functions": 1038,
+  "functions_called": {
+   "calls": 1192,
+   "calls_one_row": 863,
+   "functions": 34,
+   "functions_one_row": 31,
+   "most_rows": 3
+  },
+  "functions_entered": 49,
+  "groups": {
+   "arithmetic": 457,
+   "calls and returns": 9470,
+   "closures and cells": 4609,
+   "comparison and logic": 2017,
+   "control": 5279,
+   "data": 20445,
+   "everything else": 112,
+   "moves and constants": 32710,
+   "step marks": 7891
+  },
+  "hot": {
+   "sites_for_90_percent": 28002,
+   "top_10_sites": 2444,
+   "top_tenth_of_sites": 50319
+  },
+  "index": {
+   "by": {
+    "list[int]": 223,
+    "map[str]": 1073
+   },
+   "n": 1296,
+   "one_kind": 1296
+  },
+  "instructions": 82990,
+  "made": {
+   "closures": 1262,
+   "interpolated": 221,
+   "lists": 3048,
+   "maps": 976
+  },
+  "module_instructions": 115268,
+  "returns": {
+   "n": 2213,
+   "one_kind": 2096
+  },
+  "sites": 36301,
+  "top_level": {
+   "by_op": [
+    [
+     "loadk",
+     13890
+    ],
+    [
+     "appendlist",
+     8795
+    ],
+    [
+     "insertmap",
+     4517
+    ],
+    [
+     "newlist",
+     2323
+    ],
+    [
+     "mov",
+     1132
+    ],
+    [
+     "loadnull",
+     938
+    ],
+    [
+     "cellnew",
+     920
+    ],
+    [
+     "newmap",
+     804
+    ]
+   ],
+   "n": 34841
+  },
+  "typed_sites": {
+   "n": 2039,
+   "one_kind": 1827,
+   "sites": 116,
+   "sites_one_kind": 114
+  }
+ },
+ "cigo-version": {
+  "arith": {
+   "n": 81,
+   "pairs": {
+    "other": 78,
+    "str, str": 3
+   }
+  },
+  "by_op": {
+   "add": 81,
+   "appendlist": 9223,
+   "call": 32,
+   "callb": 76,
+   "callm": 18,
+   "cellnew": 921,
+   "closure": 662,
+   "eq": 3,
+   "eqj": 1,
+   "eqk": 18,
+   "exhale": 1,
+   "getfield": 66,
+   "getindex": 73,
+   "getup": 107,
+   "insertmap": 4810,
+   "interp": 2,
+   "iternext": 36,
+   "iterprep": 3,
+   "jmp": 3,
+   "loadbool": 64,
+   "loadg": 2,
+   "loadint": 87,
+   "loadk": 14479,
+   "loadnull": 951,
+   "loop": 33,
+   "mov": 1154,
+   "nej": 4,
+   "newlist": 2570,
+   "newmap": 917,
+   "nop": 1,
+   "not": 2,
+   "pack": 1,
+   "ret": 40,
+   "setindex": 33,
+   "steps": 429,
+   "test": 9,
+   "testn": 17,
+   "try.enter": 2,
+   "try.leave": 2
+  },
+  "callb": {
+   "n": 76,
+   "one_kind": 76,
+   "top": [
+    [
+     "path.join",
+     38
+    ],
+    [
+     "env.get",
+     19
+    ],
+    [
+     "cig.os",
+     4
+    ],
+    [
+     "path.normalize",
+     2
+    ],
+    [
+     "fs.home",
+     2
+    ],
+    [
+     "type_of",
+     2
+    ]
+   ]
+  },
+  "callm": {
+   "n": 18,
+   "one_kind": 18,
+   "top": [
+    [
+     "merge",
+     9
+    ],
+    [
+     "get",
+     2
+    ],
+    [
+     "filter",
+     2
+    ],
+    [
+     "slice",
+     1
+    ],
+    [
+     "map",
+     1
+    ],
+    [
+     "join",
+     1
+    ]
+   ]
+  },
+  "calls": {
+   "n": 32,
+   "one_callee": 32,
+   "sites": 29,
+   "sites_one_callee": 29,
+   "to_builtin": 0,
+   "to_function": 32,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 26,
+   "pairs": {
+    "other": 3,
+    "str, str": 23
+   }
+  },
+  "copies": {
+   "loadk_str": 14434,
+   "mov": 1154,
+   "mov_counted": 1120
+  },
+  "fields": {
+   "n": 66,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 33,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 2,
+   "sites_one_shape": 0,
+   "two_shapes": 66,
+   "up_to_8": 0
+  },
+  "functions": 1038,
+  "functions_called": {
+   "calls": 32,
+   "calls_one_row": 17,
+   "functions": 13,
+   "functions_one_row": 11,
+   "most_rows": 2
+  },
+  "functions_entered": 15,
+  "groups": {
+   "arithmetic": 81,
+   "calls and returns": 166,
+   "closures and cells": 1690,
+   "comparison and logic": 28,
+   "control": 101,
+   "data": 17694,
+   "everything else": 6,
+   "moves and constants": 16738,
+   "step marks": 429
+  },
+  "hot": {
+   "sites_for_90_percent": 31286,
+   "top_10_sites": 331,
+   "top_tenth_of_sites": 5451
+  },
+  "index": {
+   "by": {
+    "list[int]": 7,
+    "map[str]": 99
+   },
+   "n": 106,
+   "one_kind": 106
+  },
+  "instructions": 36933,
+  "made": {
+   "closures": 662,
+   "interpolated": 2,
+   "lists": 2570,
+   "maps": 917
+  },
+  "module_instructions": 115268,
+  "returns": {
+   "n": 40,
+   "one_kind": 30
+  },
+  "sites": 34979,
+  "top_level": {
+   "by_op": [
+    [
+     "loadk",
+     13890
+    ],
+    [
+     "appendlist",
+     8795
+    ],
+    [
+     "insertmap",
+     4517
+    ],
+    [
+     "newlist",
+     2323
+    ],
+    [
+     "mov",
+     1132
+    ],
+    [
+     "loadnull",
+     938
+    ],
+    [
+     "cellnew",
+     920
+    ],
+    [
+     "newmap",
+     804
+    ]
+   ],
+   "n": 34841
+  },
+  "typed_sites": {
+   "n": 107,
+   "one_kind": 103,
+   "sites": 41,
+   "sites_one_kind": 40
+  }
+ },
+ "closures": {
+  "arith": {
+   "n": 200000,
+   "pairs": {
+    "int, int": 200000
+   }
+  },
+  "by_op": {
+   "add": 100000,
+   "addk": 100000,
+   "call": 200000,
+   "cellnew": 100000,
+   "closure": 100001,
+   "exhale": 1,
+   "forloop": 100000,
+   "forprep": 1,
+   "getup": 100000,
+   "insertmap": 2,
+   "loadint": 3,
+   "loadk": 3,
+   "loadnull": 100000,
+   "mov": 500004,
+   "newmap": 1,
+   "ret": 200001,
+   "steps": 500004
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "calls": {
+   "n": 200000,
+   "one_callee": 200000,
+   "sites": 2,
+   "sites_one_callee": 2,
+   "to_builtin": 0,
+   "to_function": 200000,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 2,
+   "mov": 500004,
+   "mov_counted": 300001
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 3,
+  "functions_called": {
+   "calls": 200000,
+   "calls_one_row": 200000,
+   "functions": 2,
+   "functions_one_row": 2,
+   "most_rows": 1
+  },
+  "functions_entered": 3,
+  "groups": {
+   "arithmetic": 200000,
+   "calls and returns": 400001,
+   "closures and cells": 300001,
+   "comparison and logic": 0,
+   "control": 100001,
+   "data": 3,
+   "everything else": 1,
+   "moves and constants": 600010,
+   "step marks": 500004
+  },
+  "hot": {
+   "sites_for_90_percent": 19,
+   "top_10_sites": 1000000,
+   "top_tenth_of_sites": 400000
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 2100021,
+  "made": {
+   "closures": 100001,
+   "interpolated": 0,
+   "lists": 0,
+   "maps": 1
+  },
+  "module_instructions": 42,
+  "returns": {
+   "n": 200001,
+   "one_kind": 200001
+  },
+  "sites": 42,
+  "top_level": {
+   "by_op": [
+    [
+     "mov",
+     400004
+    ],
+    [
+     "steps",
+     300004
+    ],
+    [
+     "call",
+     200000
+    ],
+    [
+     "add",
+     100000
+    ],
+    [
+     "forloop",
+     100000
+    ],
+    [
+     "loadint",
+     3
+    ],
+    [
+     "loadk",
+     3
+    ],
+    [
+     "insertmap",
+     2
+    ]
+   ],
+   "n": 1100021
+  },
+  "typed_sites": {
+   "n": 200000,
+   "one_kind": 200000,
+   "sites": 2,
+   "sites_one_kind": 2
+  }
+ },
+ "csv": {
+  "arith": {
+   "n": 60000,
+   "pairs": {
+    "float, float": 20000,
+    "int and float": 20000,
+    "int, int": 20000
+   }
+  },
+  "by_op": {
+   "add": 20000,
+   "burn.enter": 1,
+   "burn.leave": 1,
+   "burn.op": 1,
+   "callb": 20001,
+   "callm": 20001,
+   "exhale": 1,
+   "forloop": 20000,
+   "forprep": 1,
+   "getfield": 20000,
+   "insertmap": 40004,
+   "interp": 20001,
+   "iternext": 20001,
+   "iterprep": 1,
+   "loadbool": 1,
+   "loadint": 3,
+   "loadk": 60007,
+   "loop": 20000,
+   "modk": 20000,
+   "mov": 40009,
+   "mulk": 20000,
+   "newlist": 1,
+   "newmap": 20002,
+   "ret": 1,
+   "steps": 80010
+  },
+  "callb": {
+   "n": 20001,
+   "one_kind": 20001,
+   "top": [
+    [
+     "float",
+     20000
+    ],
+    [
+     "csv.read",
+     1
+    ]
+   ]
+  },
+  "callm": {
+   "n": 20001,
+   "one_kind": 20001,
+   "top": [
+    [
+     "push",
+     20000
+    ],
+    [
+     "len",
+     1
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 60006,
+   "mov": 40009,
+   "mov_counted": 20006
+  },
+  "fields": {
+   "n": 20000,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 20000,
+   "one_shape": 20000,
+   "over_8": 0,
+   "sites": 1,
+   "sites_one_shape": 1,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 60000,
+   "calls and returns": 40003,
+   "closures and cells": 0,
+   "comparison and logic": 0,
+   "control": 60003,
+   "data": 100008,
+   "everything else": 4,
+   "moves and constants": 100020,
+   "step marks": 80010
+  },
+  "hot": {
+   "sites_for_90_percent": 20,
+   "top_10_sites": 200001,
+   "top_tenth_of_sites": 120001
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 440048,
+  "made": {
+   "closures": 0,
+   "interpolated": 20001,
+   "lists": 1,
+   "maps": 20002
+  },
+  "module_instructions": 69,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 69,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     80010
+    ],
+    [
+     "loadk",
+     60007
+    ],
+    [
+     "mov",
+     40009
+    ],
+    [
+     "insertmap",
+     40004
+    ],
+    [
+     "newmap",
+     20002
+    ],
+    [
+     "interp",
+     20001
+    ],
+    [
+     "callm",
+     20001
+    ],
+    [
+     "callb",
+     20001
+    ]
+   ],
+   "n": 440048
+  },
+  "typed_sites": {
+   "n": 60000,
+   "one_kind": 60000,
+   "sites": 3,
+   "sites_one_kind": 3
+  }
+ },
+ "deltablue": {
+  "arith": {
+   "n": 66541,
+   "pairs": {
+    "int, int": 66541
+   }
+  },
+  "by_op": {
+   "add": 9520,
+   "addk": 19000,
+   "callb": 1,
+   "callm": 21,
+   "eqj": 9500,
+   "exhale": 1,
+   "forloop": 10020,
+   "forprep": 502,
+   "getindex": 19000,
+   "insertmap": 7,
+   "interp": 1,
+   "iternext": 21,
+   "iterprep": 1,
+   "loadg": 1,
+   "loadint": 531,
+   "loadk": 9,
+   "loop": 20,
+   "modk": 9520,
+   "mov": 1030,
+   "mul": 1,
+   "mulk": 19000,
+   "newlist": 1,
+   "newmap": 1,
+   "ret": 1,
+   "setindex": 10000,
+   "steps": 59594,
+   "subk": 9500
+  },
+  "callb": {
+   "n": 1,
+   "one_kind": 1,
+   "top": [
+    [
+     "int",
+     1
+    ]
+   ]
+  },
+  "callm": {
+   "n": 21,
+   "one_kind": 21,
+   "top": [
+    [
+     "push",
+     20
+    ],
+    [
+     "get",
+     1
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 9500,
+   "pairs": {
+    "int, int": 9500
+   }
+  },
+  "copies": {
+   "loadk_str": 8,
+   "mov": 1030,
+   "mov_counted": 24
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 66541,
+   "calls and returns": 23,
+   "closures and cells": 0,
+   "comparison and logic": 9500,
+   "control": 10564,
+   "data": 29010,
+   "everything else": 1,
+   "moves and constants": 1571,
+   "step marks": 59594
+  },
+  "hot": {
+   "sites_for_90_percent": 17,
+   "top_10_sites": 95000,
+   "top_tenth_of_sites": 95000
+  },
+  "index": {
+   "by": {
+    "list[int]": 29000
+   },
+   "n": 29000,
+   "one_kind": 29000
+  },
+  "instructions": 176804,
+  "made": {
+   "closures": 0,
+   "interpolated": 1,
+   "lists": 1,
+   "maps": 1
+  },
+  "module_instructions": 110,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 104,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     59594
+    ],
+    [
+     "getindex",
+     19000
+    ],
+    [
+     "mulk",
+     19000
+    ],
+    [
+     "addk",
+     19000
+    ],
+    [
+     "forloop",
+     10020
+    ],
+    [
+     "setindex",
+     10000
+    ],
+    [
+     "add",
+     9520
+    ],
+    [
+     "modk",
+     9520
+    ]
+   ],
+   "n": 176804
+  },
+  "typed_sites": {
+   "n": 76041,
+   "one_kind": 76041,
+   "sites": 11,
+   "sites_one_kind": 11
+  }
+ },
+ "dispatch": {
+  "arith": {
+   "n": 800000,
+   "pairs": {
+    "int, int": 800000
+   }
+  },
+  "by_op": {
+   "add": 50000,
+   "addk": 150000,
+   "appendlist": 3,
+   "call": 150000,
+   "closure": 3,
+   "exhale": 1,
+   "forloop": 150000,
+   "forprep": 1,
+   "getindex": 300000,
+   "insertmap": 6,
+   "loadint": 3,
+   "loadk": 10,
+   "modk": 500000,
+   "mov": 450005,
+   "mul": 50000,
+   "newlist": 1,
+   "newmap": 2,
+   "ret": 150001,
+   "steps": 450006,
+   "sub": 50000
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "calls": {
+   "n": 150000,
+   "one_callee": 0,
+   "sites": 1,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 150000,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 9,
+   "mov": 450005,
+   "mov_counted": 150002
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 4,
+  "functions_called": {
+   "calls": 150000,
+   "calls_one_row": 150000,
+   "functions": 3,
+   "functions_one_row": 3,
+   "most_rows": 1
+  },
+  "functions_entered": 4,
+  "groups": {
+   "arithmetic": 800000,
+   "calls and returns": 300001,
+   "closures and cells": 3,
+   "comparison and logic": 0,
+   "control": 150001,
+   "data": 300012,
+   "everything else": 1,
+   "moves and constants": 450018,
+   "step marks": 450006
+  },
+  "hot": {
+   "sites_for_90_percent": 17,
+   "top_10_sites": 1500000,
+   "top_tenth_of_sites": 900000
+  },
+  "index": {
+   "by": {
+    "list[int]": 150000,
+    "map[str]": 150000
+   },
+   "n": 300000,
+   "one_kind": 300000
+  },
+  "instructions": 2450042,
+  "made": {
+   "closures": 3,
+   "interpolated": 0,
+   "lists": 1,
+   "maps": 2
+  },
+  "module_instructions": 65,
+  "returns": {
+   "n": 150001,
+   "one_kind": 150001
+  },
+  "sites": 63,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     450006
+    ],
+    [
+     "mov",
+     450005
+    ],
+    [
+     "modk",
+     450000
+    ],
+    [
+     "getindex",
+     300000
+    ],
+    [
+     "call",
+     150000
+    ],
+    [
+     "addk",
+     150000
+    ],
+    [
+     "forloop",
+     150000
+    ],
+    [
+     "loadk",
+     10
+    ]
+   ],
+   "n": 2100042
+  },
+  "typed_sites": {
+   "n": 800000,
+   "one_kind": 800000,
+   "sites": 8,
+   "sites_one_kind": 8
+  }
+ },
+ "fannkuch": {
+  "arith": {
+   "n": 1459617,
+   "pairs": {
+    "int, int": 1459617
+   }
+  },
+  "by_op": {
+   "add": 20160,
+   "addk": 860250,
+   "callm": 40336,
+   "eqj": 289861,
+   "exhale": 1,
+   "forloop": 16,
+   "forprep": 2,
+   "getindex": 1321062,
+   "insertmap": 8,
+   "interp": 1,
+   "jmp": 310020,
+   "lej": 109600,
+   "loadbool": 80642,
+   "loadint": 330198,
+   "loadk": 8,
+   "loop": 819939,
+   "ltj": 750657,
+   "modk": 40320,
+   "mov": 260949,
+   "nej": 109601,
+   "newlist": 2,
+   "newmap": 1,
+   "ret": 1,
+   "setindex": 1060163,
+   "steps": 5324296,
+   "sub": 20160,
+   "subk": 518727,
+   "test": 40321,
+   "testn": 109601
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 40336,
+   "one_kind": 40336,
+   "top": [
+    [
+     "slice",
+     40320
+    ],
+    [
+     "push",
+     16
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 1259719,
+   "pairs": {
+    "int, int": 1259719
+   }
+  },
+  "copies": {
+   "loadk_str": 8,
+   "mov": 260949,
+   "mov_counted": 80659
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 1459617,
+   "calls and returns": 40337,
+   "closures and cells": 0,
+   "comparison and logic": 1259719,
+   "control": 1279899,
+   "data": 2381237,
+   "everything else": 1,
+   "moves and constants": 671797,
+   "step marks": 5324296
+  },
+  "hot": {
+   "sites_for_90_percent": 68,
+   "top_10_sites": 4095510,
+   "top_tenth_of_sites": 6422970
+  },
+  "index": {
+   "by": {
+    "list[int]": 2381225
+   },
+   "n": 2381225,
+   "one_kind": 2381225
+  },
+  "instructions": 12416903,
+  "made": {
+   "closures": 0,
+   "interpolated": 1,
+   "lists": 2,
+   "maps": 1
+  },
+  "module_instructions": 201,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 181,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     5324296
+    ],
+    [
+     "getindex",
+     1321062
+    ],
+    [
+     "setindex",
+     1060163
+    ],
+    [
+     "addk",
+     860250
+    ],
+    [
+     "loop",
+     819939
+    ],
+    [
+     "ltj",
+     750657
+    ],
+    [
+     "subk",
+     518727
+    ],
+    [
+     "loadint",
+     330198
+    ]
+   ],
+   "n": 12416903
+  },
+  "typed_sites": {
+   "n": 2719336,
+   "one_kind": 2719336,
+   "sites": 21,
+   "sites_one_kind": 21
+  }
+ },
+ "fib": {
+  "arith": {
+   "n": 364176,
+   "pairs": {
+    "int, int": 364176
+   }
+  },
+  "by_op": {
+   "add": 121392,
+   "call": 242785,
+   "cellnew": 1,
+   "closure": 1,
+   "exhale": 1,
+   "getup": 242784,
+   "insertmap": 1,
+   "jmp": 121392,
+   "loadint": 242786,
+   "loadk": 1,
+   "loadnull": 1,
+   "ltj": 242785,
+   "mov": 3,
+   "newmap": 1,
+   "ret": 242786,
+   "steps": 485571,
+   "subk": 242784
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "calls": {
+   "n": 242785,
+   "one_callee": 242785,
+   "sites": 3,
+   "sites_one_callee": 3,
+   "to_builtin": 0,
+   "to_function": 242785,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 242785,
+   "pairs": {
+    "int, int": 242785
+   }
+  },
+  "copies": {
+   "loadk_str": 1,
+   "mov": 3,
+   "mov_counted": 2
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 2,
+  "functions_called": {
+   "calls": 242785,
+   "calls_one_row": 242785,
+   "functions": 1,
+   "functions_one_row": 1,
+   "most_rows": 1
+  },
+  "functions_entered": 2,
+  "groups": {
+   "arithmetic": 364176,
+   "calls and returns": 485571,
+   "closures and cells": 242786,
+   "comparison and logic": 242785,
+   "control": 121392,
+   "data": 2,
+   "everything else": 1,
+   "moves and constants": 242791,
+   "step marks": 485571
+  },
+  "hot": {
+   "sites_for_90_percent": 14,
+   "top_10_sites": 1578101,
+   "top_tenth_of_sites": 485570
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 2185075,
+  "made": {
+   "closures": 1,
+   "interpolated": 0,
+   "lists": 0,
+   "maps": 1
+  },
+  "module_instructions": 29,
+  "returns": {
+   "n": 242786,
+   "one_kind": 242786
+  },
+  "sites": 29,
+  "top_level": {
+   "by_op": [
+    [
+     "mov",
+     3
+    ],
+    [
+     "cellnew",
+     1
+    ],
+    [
+     "loadnull",
+     1
+    ],
+    [
+     "closure",
+     1
+    ],
+    [
+     "steps",
+     1
+    ],
+    [
+     "loadint",
+     1
+    ],
+    [
+     "call",
+     1
+    ],
+    [
+     "exhale",
+     1
+    ]
+   ],
+   "n": 14
+  },
+  "typed_sites": {
+   "n": 606961,
+   "one_kind": 606961,
+   "sites": 4,
+   "sites_one_kind": 4
+  }
+ },
+ "hello": {
+  "arith": {
+   "n": 0,
+   "pairs": {}
+  },
+  "by_op": {
+   "exhale": 1,
+   "loadk": 1,
+   "loadnull": 1,
+   "mov": 1,
+   "ret": 1,
+   "steps": 1
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 1,
+   "mov": 1,
+   "mov_counted": 1
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 0,
+   "calls and returns": 1,
+   "closures and cells": 0,
+   "comparison and logic": 0,
+   "control": 0,
+   "data": 0,
+   "everything else": 1,
+   "moves and constants": 3,
+   "step marks": 1
+  },
+  "hot": {
+   "sites_for_90_percent": 6,
+   "top_10_sites": 6,
+   "top_tenth_of_sites": 1
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 6,
+  "made": {
+   "closures": 0,
+   "interpolated": 0,
+   "lists": 0,
+   "maps": 0
+  },
+  "module_instructions": 6,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 6,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     1
+    ],
+    [
+     "loadk",
+     1
+    ],
+    [
+     "mov",
+     1
+    ],
+    [
+     "exhale",
+     1
+    ],
+    [
+     "loadnull",
+     1
+    ],
+    [
+     "ret",
+     1
+    ]
+   ],
+   "n": 6
+  },
+  "typed_sites": {
+   "n": 0,
+   "one_kind": 0,
+   "sites": 0,
+   "sites_one_kind": 0
+  }
+ },
+ "json": {
+  "arith": {
+   "n": 20000,
+   "pairs": {
+    "int, int": 20000
+   }
+  },
+  "by_op": {
+   "appendlist": 40000,
+   "callb": 2,
+   "callm": 20002,
+   "eqk": 20000,
+   "exhale": 1,
+   "forloop": 20000,
+   "forprep": 1,
+   "insertmap": 80003,
+   "interp": 20001,
+   "loadint": 3,
+   "loadk": 100005,
+   "modk": 20000,
+   "mov": 40011,
+   "newlist": 20001,
+   "newmap": 20001,
+   "ret": 1,
+   "steps": 40006
+  },
+  "callb": {
+   "n": 2,
+   "one_kind": 2,
+   "top": [
+    [
+     "json.stringify",
+     1
+    ],
+    [
+     "json.parse",
+     1
+    ]
+   ]
+  },
+  "callm": {
+   "n": 20002,
+   "one_kind": 20002,
+   "top": [
+    [
+     "push",
+     20000
+    ],
+    [
+     "len",
+     2
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 20000,
+   "pairs": {
+    "int, int": 20000
+   }
+  },
+  "copies": {
+   "loadk_str": 100005,
+   "mov": 40011,
+   "mov_counted": 20008
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 20000,
+   "calls and returns": 20005,
+   "closures and cells": 0,
+   "comparison and logic": 20000,
+   "control": 20001,
+   "data": 180006,
+   "everything else": 1,
+   "moves and constants": 140019,
+   "step marks": 40006
+  },
+  "hot": {
+   "sites_for_90_percent": 20,
+   "top_10_sites": 200000,
+   "top_tenth_of_sites": 120000
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 440038,
+  "made": {
+   "closures": 0,
+   "interpolated": 20001,
+   "lists": 20001,
+   "maps": 20001
+  },
+  "module_instructions": 60,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 60,
+  "top_level": {
+   "by_op": [
+    [
+     "loadk",
+     100005
+    ],
+    [
+     "insertmap",
+     80003
+    ],
+    [
+     "mov",
+     40011
+    ],
+    [
+     "steps",
+     40006
+    ],
+    [
+     "appendlist",
+     40000
+    ],
+    [
+     "callm",
+     20002
+    ],
+    [
+     "newlist",
+     20001
+    ],
+    [
+     "interp",
+     20001
+    ]
+   ],
+   "n": 440038
+  },
+  "typed_sites": {
+   "n": 40000,
+   "one_kind": 40000,
+   "sites": 2,
+   "sites_one_kind": 2
+  }
+ },
+ "json-deep": {
+  "arith": {
+   "n": 2549,
+   "pairs": {
+    "int, int": 2549
+   }
+  },
+  "by_op": {
+   "add": 1457,
+   "call": 2186,
+   "callb": 3,
+   "callm": 2187,
+   "cellnew": 2,
+   "closure": 2,
+   "exhale": 1,
+   "forloop": 1093,
+   "forprep": 365,
+   "getfield": 1457,
+   "getup": 2184,
+   "insertmap": 1463,
+   "interp": 1,
+   "iternext": 1456,
+   "iterprep": 364,
+   "loadg": 1,
+   "loadint": 2191,
+   "loadk": 2557,
+   "loadnull": 2,
+   "loop": 1092,
+   "mov": 6934,
+   "nej": 1093,
+   "newlist": 364,
+   "newmap": 1094,
+   "ret": 2187,
+   "steps": 10934,
+   "subk": 1092,
+   "testn": 1093
+  },
+  "callb": {
+   "n": 3,
+   "one_kind": 3,
+   "top": [
+    [
+     "int",
+     1
+    ],
+    [
+     "json.stringify",
+     1
+    ],
+    [
+     "json.parse",
+     1
+    ]
+   ]
+  },
+  "callm": {
+   "n": 2187,
+   "one_kind": 2187,
+   "top": [
+    [
+     "has",
+     1093
+    ],
+    [
+     "push",
+     1092
+    ],
+    [
+     "get",
+     1
+    ],
+    [
+     "len",
+     1
+    ]
+   ]
+  },
+  "calls": {
+   "n": 2186,
+   "one_callee": 2186,
+   "sites": 4,
+   "sites_one_callee": 4,
+   "to_builtin": 0,
+   "to_function": 2186,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 1093,
+   "pairs": {
+    "int, int": 1093
+   }
+  },
+  "copies": {
+   "loadk_str": 2557,
+   "mov": 6934,
+   "mov_counted": 5110
+  },
+  "fields": {
+   "n": 1457,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 1457,
+   "one_shape": 1457,
+   "over_8": 0,
+   "sites": 3,
+   "sites_one_shape": 3,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 3,
+  "functions_called": {
+   "calls": 2186,
+   "calls_one_row": 2186,
+   "functions": 2,
+   "functions_one_row": 2,
+   "most_rows": 1
+  },
+  "functions_entered": 3,
+  "groups": {
+   "arithmetic": 2549,
+   "calls and returns": 6563,
+   "closures and cells": 2188,
+   "comparison and logic": 1093,
+   "control": 5463,
+   "data": 4379,
+   "everything else": 1,
+   "moves and constants": 11685,
+   "step marks": 10934
+  },
+  "hot": {
+   "sites_for_90_percent": 50,
+   "top_10_sites": 11292,
+   "top_tenth_of_sites": 13476
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 44855,
+  "made": {
+   "closures": 2,
+   "interpolated": 1,
+   "lists": 364,
+   "maps": 1094
+  },
+  "module_instructions": 129,
+  "returns": {
+   "n": 2187,
+   "one_kind": 2187
+  },
+  "sites": 129,
+  "top_level": {
+   "by_op": [
+    [
+     "mov",
+     17
+    ],
+    [
+     "steps",
+     10
+    ],
+    [
+     "loadk",
+     7
+    ],
+    [
+     "loadint",
+     6
+    ],
+    [
+     "insertmap",
+     6
+    ],
+    [
+     "callb",
+     3
+    ],
+    [
+     "cellnew",
+     2
+    ],
+    [
+     "loadnull",
+     2
+    ]
+   ],
+   "n": 67
+  },
+  "typed_sites": {
+   "n": 3642,
+   "one_kind": 3642,
+   "sites": 5,
+   "sites_one_kind": 5
+  }
+ },
+ "lines-500": {
+  "arith": {
+   "n": 417,
+   "pairs": {
+    "int, int": 417
+   }
+  },
+  "by_op": {
+   "add": 119,
+   "addk": 133,
+   "call": 41,
+   "callb": 41,
+   "callm": 102,
+   "closure": 41,
+   "exhale": 2,
+   "getindex": 39,
+   "insertmap": 42,
+   "interp": 133,
+   "iternext": 296,
+   "iterprep": 54,
+   "jmp": 39,
+   "lej": 14,
+   "loadint": 106,
+   "loadk": 190,
+   "loop": 242,
+   "modk": 134,
+   "mov": 455,
+   "nej": 70,
+   "newlist": 14,
+   "newmap": 14,
+   "ret": 42,
+   "setindex": 64,
+   "steps": 829,
+   "subk": 31
+  },
+  "callb": {
+   "n": 41,
+   "one_kind": 41,
+   "top": [
+    [
+     "range",
+     41
+    ]
+   ]
+  },
+  "callm": {
+   "n": 102,
+   "one_kind": 102,
+   "top": [
+    [
+     "push",
+     69
+    ],
+    [
+     "len",
+     19
+    ],
+    [
+     "join",
+     14
+    ]
+   ]
+  },
+  "calls": {
+   "n": 41,
+   "one_callee": 41,
+   "sites": 41,
+   "sites_one_callee": 41,
+   "to_builtin": 0,
+   "to_function": 41,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 84,
+   "pairs": {
+    "int, int": 84
+   }
+  },
+  "copies": {
+   "loadk_str": 190,
+   "mov": 455,
+   "mov_counted": 280
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 42,
+  "functions_called": {
+   "calls": 41,
+   "calls_one_row": 41,
+   "functions": 41,
+   "functions_one_row": 41,
+   "most_rows": 1
+  },
+  "functions_entered": 42,
+  "groups": {
+   "arithmetic": 417,
+   "calls and returns": 226,
+   "closures and cells": 41,
+   "comparison and logic": 84,
+   "control": 631,
+   "data": 306,
+   "everything else": 2,
+   "moves and constants": 751,
+   "step marks": 829
+  },
+  "hot": {
+   "sites_for_90_percent": 1244,
+   "top_10_sites": 78,
+   "top_tenth_of_sites": 1013
+  },
+  "index": {
+   "by": {
+    "map[str]": 103
+   },
+   "n": 103,
+   "one_kind": 103
+  },
+  "instructions": 3287,
+  "made": {
+   "closures": 41,
+   "interpolated": 133,
+   "lists": 14,
+   "maps": 14
+  },
+  "module_instructions": 1662,
+  "returns": {
+   "n": 42,
+   "one_kind": 42
+  },
+  "sites": 1572,
+  "top_level": {
+   "by_op": [
+    [
+     "mov",
+     84
+    ],
+    [
+     "steps",
+     44
+    ],
+    [
+     "loadk",
+     43
+    ],
+    [
+     "loadint",
+     42
+    ],
+    [
+     "insertmap",
+     42
+    ],
+    [
+     "closure",
+     41
+    ],
+    [
+     "call",
+     41
+    ],
+    [
+     "add",
+     41
+    ]
+   ],
+   "n": 382
+  },
+  "typed_sites": {
+   "n": 501,
+   "one_kind": 501,
+   "sites": 164,
+   "sites_one_kind": 164
+  }
+ },
+ "lists": {
+  "arith": {
+   "n": 210003,
+   "pairs": {
+    "int, int": 210003
+   }
+  },
+  "by_op": {
+   "callm": 60005,
+   "closure": 2,
+   "eqk": 60000,
+   "exhale": 1,
+   "forloop": 60000,
+   "forprep": 1,
+   "getindex": 2,
+   "insertmap": 4,
+   "interp": 2,
+   "loadint": 3,
+   "loadk": 5,
+   "modk": 120000,
+   "mov": 60014,
+   "mulk": 90002,
+   "newlist": 1,
+   "newmap": 1,
+   "ret": 90003,
+   "steps": 120007,
+   "subk": 1
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 60005,
+   "one_kind": 60005,
+   "top": [
+    [
+     "push",
+     60000
+    ],
+    [
+     "len",
+     2
+    ],
+    [
+     "sort",
+     1
+    ],
+    [
+     "filter",
+     1
+    ],
+    [
+     "map",
+     1
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 60000,
+   "pairs": {
+    "int, int": 60000
+   }
+  },
+  "copies": {
+   "loadk_str": 4,
+   "mov": 60014,
+   "mov_counted": 60011
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 3,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 3,
+  "groups": {
+   "arithmetic": 210003,
+   "calls and returns": 150008,
+   "closures and cells": 2,
+   "comparison and logic": 60000,
+   "control": 60001,
+   "data": 10,
+   "everything else": 1,
+   "moves and constants": 60022,
+   "step marks": 120007
+  },
+  "hot": {
+   "sites_for_90_percent": 10,
+   "top_10_sites": 600000,
+   "top_tenth_of_sites": 360000
+  },
+  "index": {
+   "by": {
+    "list[int]": 2
+   },
+   "n": 2,
+   "one_kind": 2
+  },
+  "instructions": 660054,
+  "made": {
+   "closures": 2,
+   "interpolated": 2,
+   "lists": 1,
+   "maps": 1
+  },
+  "module_instructions": 64,
+  "returns": {
+   "n": 90003,
+   "one_kind": 90003
+  },
+  "sites": 62,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     120007
+    ],
+    [
+     "mov",
+     60014
+    ],
+    [
+     "callm",
+     60005
+    ],
+    [
+     "mulk",
+     60000
+    ],
+    [
+     "modk",
+     60000
+    ],
+    [
+     "forloop",
+     60000
+    ],
+    [
+     "loadk",
+     5
+    ],
+    [
+     "insertmap",
+     4
+    ]
+   ],
+   "n": 420050
+  },
+  "typed_sites": {
+   "n": 270003,
+   "one_kind": 270003,
+   "sites": 6,
+   "sites_one_kind": 6
+  }
+ },
+ "loop": {
+  "arith": {
+   "n": 1200000,
+   "pairs": {
+    "int, int": 1200000
+   }
+  },
+  "by_op": {
+   "add": 400000,
+   "exhale": 1,
+   "forloop": 400000,
+   "forprep": 1,
+   "insertmap": 1,
+   "loadint": 3,
+   "loadk": 2,
+   "modk": 400000,
+   "mov": 3,
+   "mul": 400000,
+   "newmap": 1,
+   "ret": 1,
+   "steps": 800004
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 1,
+   "mov": 3,
+   "mov_counted": 0
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 1200000,
+   "calls and returns": 1,
+   "closures and cells": 0,
+   "comparison and logic": 0,
+   "control": 400001,
+   "data": 2,
+   "everything else": 1,
+   "moves and constants": 8,
+   "step marks": 800004
+  },
+  "hot": {
+   "sites_for_90_percent": 6,
+   "top_10_sites": 2400004,
+   "top_tenth_of_sites": 800000
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 2400017,
+  "made": {
+   "closures": 0,
+   "interpolated": 0,
+   "lists": 0,
+   "maps": 1
+  },
+  "module_instructions": 23,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 23,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     800004
+    ],
+    [
+     "mul",
+     400000
+    ],
+    [
+     "modk",
+     400000
+    ],
+    [
+     "add",
+     400000
+    ],
+    [
+     "forloop",
+     400000
+    ],
+    [
+     "loadint",
+     3
+    ],
+    [
+     "mov",
+     3
+    ],
+    [
+     "loadk",
+     2
+    ]
+   ],
+   "n": 2400017
+  },
+  "typed_sites": {
+   "n": 1200000,
+   "one_kind": 1200000,
+   "sites": 3,
+   "sites_one_kind": 3
+  }
+ },
+ "mandel": {
+  "arith": {
+   "n": 7048527,
+   "pairs": {
+    "float, float": 6310050,
+    "int and float": 102400,
+    "int, int": 636077
+   }
+  },
+  "by_op": {
+   "add": 1877655,
+   "addk": 636077,
+   "divk": 51200,
+   "exhale": 1,
+   "forloop": 25760,
+   "forprep": 161,
+   "insertmap": 3,
+   "lej": 625885,
+   "loadbool": 41008,
+   "loadint": 25766,
+   "loadk": 51205,
+   "loop": 625885,
+   "ltk": 651485,
+   "mov": 626208,
+   "mul": 3806510,
+   "newmap": 1,
+   "not": 641279,
+   "ret": 1,
+   "steps": 4037556,
+   "sub": 625885,
+   "subk": 51200,
+   "test": 25600,
+   "testn": 1302970
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 1277370,
+   "pairs": {
+    "float, float": 625885,
+    "int, int": 651485
+   }
+  },
+  "copies": {
+   "loadk_str": 3,
+   "mov": 626208,
+   "mov_counted": 0
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 7048527,
+   "calls and returns": 1,
+   "closures and cells": 0,
+   "comparison and logic": 1918649,
+   "control": 1980376,
+   "data": 4,
+   "everything else": 1,
+   "moves and constants": 744187,
+   "step marks": 4037556
+  },
+  "hot": {
+   "sites_for_90_percent": 23,
+   "top_10_sites": 6351044,
+   "top_tenth_of_sites": 5099274
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 15729301,
+  "made": {
+   "closures": 0,
+   "interpolated": 0,
+   "lists": 0,
+   "maps": 1
+  },
+  "module_instructions": 86,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 86,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     4037556
+    ],
+    [
+     "mul",
+     3806510
+    ],
+    [
+     "add",
+     1877655
+    ],
+    [
+     "testn",
+     1302970
+    ],
+    [
+     "ltk",
+     651485
+    ],
+    [
+     "not",
+     641279
+    ],
+    [
+     "addk",
+     636077
+    ],
+    [
+     "mov",
+     626208
+    ]
+   ],
+   "n": 15729301
+  },
+  "typed_sites": {
+   "n": 8325897,
+   "one_kind": 8325897,
+   "sites": 20,
+   "sites_one_kind": 20
+  }
+ },
+ "maps": {
+  "arith": {
+   "n": 75000,
+   "pairs": {
+    "int, int": 75000
+   }
+  },
+  "by_op": {
+   "addk": 25000,
+   "callm": 50000,
+   "exhale": 1,
+   "forloop": 100000,
+   "forprep": 2,
+   "insertmap": 2,
+   "interp": 100000,
+   "loadint": 5,
+   "loadk": 100004,
+   "mov": 150006,
+   "mulk": 50000,
+   "newmap": 2,
+   "ret": 1,
+   "setindex": 50000,
+   "steps": 225007,
+   "testn": 50000
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 50000,
+   "one_kind": 50000,
+   "top": [
+    [
+     "has",
+     50000
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 100002,
+   "mov": 150006,
+   "mov_counted": 50001
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 75000,
+   "calls and returns": 50001,
+   "closures and cells": 0,
+   "comparison and logic": 0,
+   "control": 150002,
+   "data": 150004,
+   "everything else": 1,
+   "moves and constants": 250015,
+   "step marks": 225007
+  },
+  "hot": {
+   "sites_for_90_percent": 17,
+   "top_10_sites": 500000,
+   "top_tenth_of_sites": 200000
+  },
+  "index": {
+   "by": {
+    "map[str]": 50000
+   },
+   "n": 50000,
+   "one_kind": 50000
+  },
+  "instructions": 900030,
+  "made": {
+   "closures": 0,
+   "interpolated": 100000,
+   "lists": 0,
+   "maps": 2
+  },
+  "module_instructions": 51,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 49,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     225007
+    ],
+    [
+     "mov",
+     150006
+    ],
+    [
+     "loadk",
+     100004
+    ],
+    [
+     "interp",
+     100000
+    ],
+    [
+     "forloop",
+     100000
+    ],
+    [
+     "setindex",
+     50000
+    ],
+    [
+     "mulk",
+     50000
+    ],
+    [
+     "callm",
+     50000
+    ]
+   ],
+   "n": 900030
+  },
+  "typed_sites": {
+   "n": 75000,
+   "one_kind": 75000,
+   "sites": 2,
+   "sites_one_kind": 2
+  }
+ },
+ "nbody": {
+  "arith": {
+   "n": 6300361,
+   "pairs": {
+    "float, float": 6200351,
+    "int, int": 100010
+   }
+  },
+  "by_op": {
+   "add": 1300085,
+   "addk": 100010,
+   "appendlist": 5,
+   "call": 20002,
+   "callb": 200022,
+   "cellnew": 1,
+   "closure": 2,
+   "div": 200023,
+   "exhale": 2,
+   "forloop": 320030,
+   "forprep": 120013,
+   "getfield": 4200260,
+   "getindex": 300033,
+   "getup": 320030,
+   "insertmap": 44,
+   "iternext": 120006,
+   "iterprep": 20001,
+   "loadint": 180026,
+   "loadk": 20088,
+   "loadnull": 20001,
+   "loop": 100005,
+   "mov": 480040,
+   "mul": 3500149,
+   "mulk": 14,
+   "neg": 13,
+   "newlist": 1,
+   "newmap": 6,
+   "ret": 20003,
+   "setfield": 1500003,
+   "steps": 3640224,
+   "sub": 1200080
+  },
+  "callb": {
+   "n": 200022,
+   "one_kind": 200022,
+   "top": [
+    [
+     "math.sqrt",
+     200020
+    ],
+    [
+     "math.round",
+     2
+    ]
+   ]
+  },
+  "callm": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "calls": {
+   "n": 20002,
+   "one_callee": 20002,
+   "sites": 3,
+   "sites_one_callee": 3,
+   "to_builtin": 0,
+   "to_function": 20002,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 44,
+   "mov": 480040,
+   "mov_counted": 40010
+  },
+  "fields": {
+   "n": 5700263,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 5700263,
+   "one_shape": 5700263,
+   "over_8": 0,
+   "sites": 57,
+   "sites_one_shape": 57,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 3,
+  "functions_called": {
+   "calls": 20002,
+   "calls_one_row": 20002,
+   "functions": 2,
+   "functions_one_row": 2,
+   "most_rows": 1
+  },
+  "functions_entered": 3,
+  "groups": {
+   "arithmetic": 6300374,
+   "calls and returns": 240027,
+   "closures and cells": 320033,
+   "comparison and logic": 0,
+   "control": 680055,
+   "data": 6000352,
+   "everything else": 2,
+   "moves and constants": 700155,
+   "step marks": 3640224
+  },
+  "hot": {
+   "sites_for_90_percent": 91,
+   "top_10_sites": 2000000,
+   "top_tenth_of_sites": 9000000
+  },
+  "index": {
+   "by": {
+    "list[int]": 300033
+   },
+   "n": 300033,
+   "one_kind": 300033
+  },
+  "instructions": 17881222,
+  "made": {
+   "closures": 2,
+   "interpolated": 0,
+   "lists": 1,
+   "maps": 6
+  },
+  "module_instructions": 457,
+  "returns": {
+   "n": 20003,
+   "one_kind": 20003
+  },
+  "sites": 450,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     40036
+    ],
+    [
+     "loadk",
+     20084
+    ],
+    [
+     "mov",
+     20016
+    ],
+    [
+     "call",
+     20002
+    ],
+    [
+     "forloop",
+     20000
+    ],
+    [
+     "insertmap",
+     44
+    ],
+    [
+     "getfield",
+     30
+    ],
+    [
+     "mul",
+     19
+    ]
+   ],
+   "n": 120324
+  },
+  "typed_sites": {
+   "n": 6300361,
+   "one_kind": 6300361,
+   "sites": 82,
+   "sites_one_kind": 82
+  }
+ },
+ "regex-ish": {
+  "arith": {
+   "n": 1,
+   "pairs": {
+    "int, int": 1
+   }
+  },
+  "by_op": {
+   "callb": 1,
+   "callm": 80007,
+   "exhale": 1,
+   "forloop": 80000,
+   "forprep": 1,
+   "insertmap": 6,
+   "interp": 80002,
+   "loadg": 1,
+   "loadint": 3,
+   "loadk": 160013,
+   "mov": 160018,
+   "mul": 1,
+   "newlist": 1,
+   "newmap": 1,
+   "ret": 1,
+   "steps": 160009
+  },
+  "callb": {
+   "n": 1,
+   "one_kind": 1,
+   "top": [
+    [
+     "int",
+     1
+    ]
+   ]
+  },
+  "callm": {
+   "n": 80007,
+   "one_kind": 80007,
+   "top": [
+    [
+     "push",
+     80000
+    ],
+    [
+     "len",
+     2
+    ],
+    [
+     "get",
+     1
+    ],
+    [
+     "join",
+     1
+    ],
+    [
+     "replace",
+     1
+    ],
+    [
+     "find",
+     1
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 160012,
+   "mov": 160018,
+   "mov_counted": 80013
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 1,
+   "calls and returns": 80009,
+   "closures and cells": 0,
+   "comparison and logic": 0,
+   "control": 80001,
+   "data": 80010,
+   "everything else": 1,
+   "moves and constants": 320035,
+   "step marks": 160009
+  },
+  "hot": {
+   "sites_for_90_percent": 9,
+   "top_10_sites": 720001,
+   "top_tenth_of_sites": 560000
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 720066,
+  "made": {
+   "closures": 0,
+   "interpolated": 80002,
+   "lists": 1,
+   "maps": 1
+  },
+  "module_instructions": 75,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 75,
+  "top_level": {
+   "by_op": [
+    [
+     "mov",
+     160018
+    ],
+    [
+     "loadk",
+     160013
+    ],
+    [
+     "steps",
+     160009
+    ],
+    [
+     "callm",
+     80007
+    ],
+    [
+     "interp",
+     80002
+    ],
+    [
+     "forloop",
+     80000
+    ],
+    [
+     "insertmap",
+     6
+    ],
+    [
+     "loadint",
+     3
+    ]
+   ],
+   "n": 720066
+  },
+  "typed_sites": {
+   "n": 1,
+   "one_kind": 1,
+   "sites": 1,
+   "sites_one_kind": 1
+  }
+ },
+ "richards": {
+  "arith": {
+   "n": 70012,
+   "pairs": {
+    "int, int": 70012
+   }
+  },
+  "by_op": {
+   "add": 10,
+   "addk": 40002,
+   "callb": 1,
+   "callm": 6,
+   "exhale": 1,
+   "forloop": 50010,
+   "forprep": 10003,
+   "getfield": 130004,
+   "getindex": 169998,
+   "insertmap": 20,
+   "interp": 1,
+   "lej": 50000,
+   "loadg": 1,
+   "loadint": 20016,
+   "loadk": 21,
+   "modk": 20002,
+   "mov": 30016,
+   "mul": 1,
+   "newlist": 1,
+   "newmap": 6,
+   "ret": 1,
+   "setfield": 39994,
+   "steps": 190031,
+   "subk": 9997
+  },
+  "callb": {
+   "n": 1,
+   "one_kind": 1,
+   "top": [
+    [
+     "int",
+     1
+    ]
+   ]
+  },
+  "callm": {
+   "n": 6,
+   "one_kind": 6,
+   "top": [
+    [
+     "push",
+     5
+    ],
+    [
+     "get",
+     1
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 50000,
+   "pairs": {
+    "int, int": 50000
+   }
+  },
+  "copies": {
+   "loadk_str": 21,
+   "mov": 30016,
+   "mov_counted": 8
+  },
+  "fields": {
+   "n": 169998,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 169998,
+   "one_shape": 169998,
+   "over_8": 0,
+   "sites": 13,
+   "sites_one_shape": 13,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 70012,
+   "calls and returns": 8,
+   "closures and cells": 0,
+   "comparison and logic": 50000,
+   "control": 60013,
+   "data": 340024,
+   "everything else": 1,
+   "moves and constants": 50054,
+   "step marks": 190031
+  },
+  "hot": {
+   "sites_for_90_percent": 45,
+   "top_10_sites": 340000,
+   "top_tenth_of_sites": 370000
+  },
+  "index": {
+   "by": {
+    "list[int]": 169998
+   },
+   "n": 169998,
+   "one_kind": 169998
+  },
+  "instructions": 760143,
+  "made": {
+   "closures": 0,
+   "interpolated": 1,
+   "lists": 1,
+   "maps": 6
+  },
+  "module_instructions": 151,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 138,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     190031
+    ],
+    [
+     "getindex",
+     169998
+    ],
+    [
+     "getfield",
+     130004
+    ],
+    [
+     "forloop",
+     50010
+    ],
+    [
+     "lej",
+     50000
+    ],
+    [
+     "addk",
+     40002
+    ],
+    [
+     "setfield",
+     39994
+    ],
+    [
+     "mov",
+     30016
+    ]
+   ],
+   "n": 760143
+  },
+  "typed_sites": {
+   "n": 120012,
+   "one_kind": 120012,
+   "sites": 14,
+   "sites_one_kind": 14
+  }
+ },
+ "sieve": {
+  "arith": {
+   "n": 635016,
+   "pairs": {
+    "int, int": 635016
+   }
+  },
+  "by_op": {
+   "add": 607825,
+   "addk": 26543,
+   "callm": 300001,
+   "exhale": 1,
+   "forloop": 300001,
+   "forprep": 1,
+   "getindex": 546,
+   "insertmap": 4,
+   "iternext": 300002,
+   "iterprep": 1,
+   "jmp": 102,
+   "lej": 608473,
+   "loadbool": 300004,
+   "loadint": 6,
+   "loadk": 6,
+   "loop": 908372,
+   "mov": 300006,
+   "mul": 648,
+   "newlist": 1,
+   "newmap": 1,
+   "ret": 1,
+   "setindex": 607827,
+   "steps": 3051531,
+   "testn": 300547
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 300001,
+   "one_kind": 300001,
+   "top": [
+    [
+     "push",
+     300001
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 608473,
+   "pairs": {
+    "int, int": 608473
+   }
+  },
+  "copies": {
+   "loadk_str": 4,
+   "mov": 300006,
+   "mov_counted": 300003
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 635016,
+   "calls and returns": 300002,
+   "closures and cells": 0,
+   "comparison and logic": 608473,
+   "control": 1809026,
+   "data": 608379,
+   "everything else": 1,
+   "moves and constants": 600022,
+   "step marks": 3051531
+  },
+  "hot": {
+   "sites_for_90_percent": 16,
+   "top_10_sites": 5154880,
+   "top_tenth_of_sites": 4554878
+  },
+  "index": {
+   "by": {
+    "list[int]": 608373
+   },
+   "n": 608373,
+   "one_kind": 608373
+  },
+  "instructions": 7612450,
+  "made": {
+   "closures": 0,
+   "interpolated": 0,
+   "lists": 1,
+   "maps": 1
+  },
+  "module_instructions": 88,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 81,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     3051531
+    ],
+    [
+     "loop",
+     908372
+    ],
+    [
+     "lej",
+     608473
+    ],
+    [
+     "setindex",
+     607827
+    ],
+    [
+     "add",
+     607825
+    ],
+    [
+     "testn",
+     300547
+    ],
+    [
+     "mov",
+     300006
+    ],
+    [
+     "loadbool",
+     300004
+    ]
+   ],
+   "n": 7612450
+  },
+  "typed_sites": {
+   "n": 1243489,
+   "one_kind": 1243489,
+   "sites": 7,
+   "sites_one_kind": 7
+  }
+ },
+ "spectral": {
+  "arith": {
+   "n": 4000401,
+   "pairs": {
+    "float, float": 800401,
+    "int and float": 400000,
+    "int, int": 2800000
+   }
+  },
+  "by_op": {
+   "add": 1600200,
+   "addk": 800000,
+   "call": 400040,
+   "callb": 2,
+   "callm": 4100,
+   "cellnew": 1,
+   "closure": 3,
+   "div": 400001,
+   "divk": 400000,
+   "exhale": 1,
+   "forloop": 404210,
+   "forprep": 4043,
+   "getindex": 400400,
+   "getup": 400000,
+   "insertmap": 8,
+   "loadint": 4129,
+   "loadk": 404110,
+   "loadnull": 1,
+   "mov": 816373,
+   "mul": 800200,
+   "newlist": 42,
+   "newmap": 1,
+   "ret": 400041,
+   "steps": 1220702
+  },
+  "callb": {
+   "n": 2,
+   "one_kind": 2,
+   "top": [
+    [
+     "math.sqrt",
+     1
+    ],
+    [
+     "math.round",
+     1
+    ]
+   ]
+  },
+  "callm": {
+   "n": 4100,
+   "one_kind": 4100,
+   "top": [
+    [
+     "push",
+     4100
+    ]
+   ]
+  },
+  "calls": {
+   "n": 400040,
+   "one_callee": 400040,
+   "sites": 6,
+   "sites_one_callee": 6,
+   "to_builtin": 0,
+   "to_function": 400040,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 8,
+   "mov": 816373,
+   "mov_counted": 4245
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 4,
+  "functions_called": {
+   "calls": 400040,
+   "calls_one_row": 400040,
+   "functions": 3,
+   "functions_one_row": 3,
+   "most_rows": 1
+  },
+  "functions_entered": 4,
+  "groups": {
+   "arithmetic": 4000401,
+   "calls and returns": 804183,
+   "closures and cells": 400004,
+   "comparison and logic": 0,
+   "control": 408253,
+   "data": 400451,
+   "everything else": 1,
+   "moves and constants": 1224613,
+   "step marks": 1220702
+  },
+  "hot": {
+   "sites_for_90_percent": 28,
+   "top_10_sites": 4000000,
+   "top_tenth_of_sites": 6000000
+  },
+  "index": {
+   "by": {
+    "list[int]": 400400
+   },
+   "n": 400400,
+   "one_kind": 400400
+  },
+  "instructions": 8458608,
+  "made": {
+   "closures": 3,
+   "interpolated": 0,
+   "lists": 42,
+   "maps": 1
+  },
+  "module_instructions": 199,
+  "returns": {
+   "n": 400041,
+   "one_kind": 400041
+  },
+  "sites": 193,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     542
+    ],
+    [
+     "getindex",
+     400
+    ],
+    [
+     "mov",
+     253
+    ],
+    [
+     "forloop",
+     210
+    ],
+    [
+     "mul",
+     200
+    ],
+    [
+     "add",
+     200
+    ],
+    [
+     "loadk",
+     110
+    ],
+    [
+     "callm",
+     100
+    ]
+   ],
+   "n": 2088
+  },
+  "typed_sites": {
+   "n": 4000401,
+   "one_kind": 4000401,
+   "sites": 17,
+   "sites_one_kind": 17
+  }
+ },
+ "startup-0": {
+  "arith": {
+   "n": 0,
+   "pairs": {}
+  },
+  "by_op": {
+   "exhale": 1,
+   "loadk": 1,
+   "loadnull": 1,
+   "mov": 1,
+   "ret": 1,
+   "steps": 1
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 1,
+   "mov": 1,
+   "mov_counted": 1
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 0,
+   "calls and returns": 1,
+   "closures and cells": 0,
+   "comparison and logic": 0,
+   "control": 0,
+   "data": 0,
+   "everything else": 1,
+   "moves and constants": 3,
+   "step marks": 1
+  },
+  "hot": {
+   "sites_for_90_percent": 6,
+   "top_10_sites": 6,
+   "top_tenth_of_sites": 1
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 6,
+  "made": {
+   "closures": 0,
+   "interpolated": 0,
+   "lists": 0,
+   "maps": 0
+  },
+  "module_instructions": 6,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 6,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     1
+    ],
+    [
+     "loadk",
+     1
+    ],
+    [
+     "mov",
+     1
+    ],
+    [
+     "exhale",
+     1
+    ],
+    [
+     "loadnull",
+     1
+    ],
+    [
+     "ret",
+     1
+    ]
+   ],
+   "n": 6
+  },
+  "typed_sites": {
+   "n": 0,
+   "one_kind": 0,
+   "sites": 0,
+   "sites_one_kind": 0
+  }
+ },
+ "startup-1": {
+  "arith": {
+   "n": 0,
+   "pairs": {}
+  },
+  "by_op": {
+   "callb": 1,
+   "exhale": 1,
+   "insertmap": 1,
+   "loadint": 1,
+   "loadk": 2,
+   "mov": 2,
+   "neg": 1,
+   "newmap": 1,
+   "ret": 1,
+   "steps": 2
+  },
+  "callb": {
+   "n": 1,
+   "one_kind": 1,
+   "top": [
+    [
+     "math.abs",
+     1
+    ]
+   ]
+  },
+  "callm": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 2,
+   "mov": 2,
+   "mov_counted": 1
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 1,
+   "calls and returns": 2,
+   "closures and cells": 0,
+   "comparison and logic": 0,
+   "control": 0,
+   "data": 2,
+   "everything else": 1,
+   "moves and constants": 5,
+   "step marks": 2
+  },
+  "hot": {
+   "sites_for_90_percent": 12,
+   "top_10_sites": 10,
+   "top_tenth_of_sites": 1
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 13,
+  "made": {
+   "closures": 0,
+   "interpolated": 0,
+   "lists": 0,
+   "maps": 1
+  },
+  "module_instructions": 13,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 13,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     2
+    ],
+    [
+     "mov",
+     2
+    ],
+    [
+     "loadk",
+     2
+    ],
+    [
+     "loadint",
+     1
+    ],
+    [
+     "neg",
+     1
+    ],
+    [
+     "callb",
+     1
+    ],
+    [
+     "exhale",
+     1
+    ],
+    [
+     "newmap",
+     1
+    ]
+   ],
+   "n": 13
+  },
+  "typed_sites": {
+   "n": 0,
+   "one_kind": 0,
+   "sites": 0,
+   "sites_one_kind": 0
+  }
+ },
+ "startup-10": {
+  "arith": {
+   "n": 0,
+   "pairs": {}
+  },
+  "by_op": {
+   "callb": 9,
+   "callm": 1,
+   "exhale": 1,
+   "insertmap": 11,
+   "loadint": 4,
+   "loadk": 18,
+   "mov": 11,
+   "neg": 1,
+   "newlist": 1,
+   "newmap": 2,
+   "ret": 1,
+   "steps": 11
+  },
+  "callb": {
+   "n": 9,
+   "one_kind": 9,
+   "top": [
+    [
+     "math.abs",
+     1
+    ],
+    [
+     "str",
+     1
+    ],
+    [
+     "json.stringify",
+     1
+    ],
+    [
+     "path.base",
+     1
+    ],
+    [
+     "time.format_ms",
+     1
+    ],
+    [
+     "hash.short",
+     1
+    ]
+   ]
+  },
+  "callm": {
+   "n": 1,
+   "one_kind": 1,
+   "top": [
+    [
+     "split",
+     1
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 18,
+   "mov": 11,
+   "mov_counted": 9
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 1,
+   "calls and returns": 11,
+   "closures and cells": 0,
+   "comparison and logic": 0,
+   "control": 0,
+   "data": 14,
+   "everything else": 1,
+   "moves and constants": 33,
+   "step marks": 11
+  },
+  "hot": {
+   "sites_for_90_percent": 64,
+   "top_10_sites": 10,
+   "top_tenth_of_sites": 7
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 71,
+  "made": {
+   "closures": 0,
+   "interpolated": 0,
+   "lists": 1,
+   "maps": 2
+  },
+  "module_instructions": 71,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 71,
+  "top_level": {
+   "by_op": [
+    [
+     "loadk",
+     18
+    ],
+    [
+     "steps",
+     11
+    ],
+    [
+     "mov",
+     11
+    ],
+    [
+     "insertmap",
+     11
+    ],
+    [
+     "callb",
+     9
+    ],
+    [
+     "loadint",
+     4
+    ],
+    [
+     "newmap",
+     2
+    ],
+    [
+     "neg",
+     1
+    ]
+   ],
+   "n": 71
+  },
+  "typed_sites": {
+   "n": 0,
+   "one_kind": 0,
+   "sites": 0,
+   "sites_one_kind": 0
+  }
+ },
+ "strbuild": {
+  "arith": {
+   "n": 10001,
+   "pairs": {
+    "int, int": 1,
+    "str, str": 10000
+   }
+  },
+  "by_op": {
+   "addk": 10000,
+   "callb": 1,
+   "callm": 2,
+   "exhale": 1,
+   "forloop": 10000,
+   "forprep": 1,
+   "insertmap": 3,
+   "loadg": 1,
+   "loadint": 4,
+   "loadk": 5,
+   "mov": 6,
+   "mul": 1,
+   "newmap": 1,
+   "ret": 1,
+   "steps": 20006
+  },
+  "callb": {
+   "n": 1,
+   "one_kind": 1,
+   "top": [
+    [
+     "int",
+     1
+    ]
+   ]
+  },
+  "callm": {
+   "n": 2,
+   "one_kind": 2,
+   "top": [
+    [
+     "get",
+     1
+    ],
+    [
+     "len",
+     1
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 5,
+   "mov": 6,
+   "mov_counted": 2
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 10001,
+   "calls and returns": 4,
+   "closures and cells": 0,
+   "comparison and logic": 0,
+   "control": 10001,
+   "data": 4,
+   "everything else": 1,
+   "moves and constants": 16,
+   "step marks": 20006
+  },
+  "hot": {
+   "sites_for_90_percent": 4,
+   "top_10_sites": 40006,
+   "top_tenth_of_sites": 30000
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 40033,
+  "made": {
+   "closures": 0,
+   "interpolated": 0,
+   "lists": 0,
+   "maps": 1
+  },
+  "module_instructions": 37,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 37,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     20006
+    ],
+    [
+     "addk",
+     10000
+    ],
+    [
+     "forloop",
+     10000
+    ],
+    [
+     "mov",
+     6
+    ],
+    [
+     "loadk",
+     5
+    ],
+    [
+     "loadint",
+     4
+    ],
+    [
+     "insertmap",
+     3
+    ],
+    [
+     "callm",
+     2
+    ]
+   ],
+   "n": 40033
+  },
+  "typed_sites": {
+   "n": 10001,
+   "one_kind": 10001,
+   "sites": 2,
+   "sites_one_kind": 2
+  }
+ },
+ "strings": {
+  "arith": {
+   "n": 0,
+   "pairs": {}
+  },
+  "by_op": {
+   "callm": 60002,
+   "exhale": 1,
+   "forloop": 60000,
+   "forprep": 1,
+   "insertmap": 2,
+   "interp": 60000,
+   "loadint": 2,
+   "loadk": 60004,
+   "mov": 120007,
+   "newlist": 1,
+   "newmap": 1,
+   "ret": 1,
+   "steps": 120005
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 60002,
+   "one_kind": 60002,
+   "top": [
+    [
+     "push",
+     60000
+    ],
+    [
+     "join",
+     1
+    ],
+    [
+     "len",
+     1
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 0,
+   "pairs": {}
+  },
+  "copies": {
+   "loadk_str": 60003,
+   "mov": 120007,
+   "mov_counted": 60004
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 0,
+   "calls and returns": 60003,
+   "closures and cells": 0,
+   "comparison and logic": 0,
+   "control": 60001,
+   "data": 60004,
+   "everything else": 1,
+   "moves and constants": 180013,
+   "step marks": 120005
+  },
+  "hot": {
+   "sites_for_90_percent": 8,
+   "top_10_sites": 480002,
+   "top_tenth_of_sites": 180000
+  },
+  "index": {
+   "by": {},
+   "n": 0,
+   "one_kind": 0
+  },
+  "instructions": 480027,
+  "made": {
+   "closures": 0,
+   "interpolated": 60000,
+   "lists": 1,
+   "maps": 1
+  },
+  "module_instructions": 35,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 35,
+  "top_level": {
+   "by_op": [
+    [
+     "mov",
+     120007
+    ],
+    [
+     "steps",
+     120005
+    ],
+    [
+     "loadk",
+     60004
+    ],
+    [
+     "callm",
+     60002
+    ],
+    [
+     "interp",
+     60000
+    ],
+    [
+     "forloop",
+     60000
+    ],
+    [
+     "loadint",
+     2
+    ],
+    [
+     "insertmap",
+     2
+    ]
+   ],
+   "n": 480027
+  },
+  "typed_sites": {
+   "n": 0,
+   "one_kind": 0,
+   "sites": 0,
+   "sites_one_kind": 0
+  }
+ },
+ "trees": {
+  "arith": {
+   "n": 1343511,
+   "pairs": {
+    "int, int": 1343511
+   }
+  },
+  "by_op": {
+   "add": 674476,
+   "addk": 10,
+   "appendlist": 1348956,
+   "call": 1348956,
+   "callb": 5,
+   "cellnew": 2,
+   "closure": 2,
+   "exhale": 7,
+   "forloop": 5456,
+   "forprep": 5,
+   "getindex": 1343498,
+   "getup": 1338040,
+   "insertmap": 5,
+   "interp": 10,
+   "jmp": 1,
+   "lej": 6,
+   "loadint": 2692473,
+   "loadk": 7,
+   "loadnull": 1354416,
+   "loop": 5,
+   "mov": 21868,
+   "nej": 1348956,
+   "newlist": 674478,
+   "newmap": 1,
+   "ret": 1348957,
+   "steps": 2708866,
+   "sub": 5,
+   "subk": 669020
+  },
+  "callb": {
+   "n": 5,
+   "one_kind": 5,
+   "top": [
+    [
+     "math.pow",
+     5
+    ]
+   ]
+  },
+  "callm": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "calls": {
+   "n": 1348956,
+   "one_callee": 1348956,
+   "sites": 10,
+   "sites_one_callee": 10,
+   "to_builtin": 0,
+   "to_function": 1348956,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 1348962,
+   "pairs": {
+    "int, int": 674484,
+    "other": 674478
+   }
+  },
+  "copies": {
+   "loadk_str": 7,
+   "mov": 21868,
+   "mov_counted": 16389
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 3,
+  "functions_called": {
+   "calls": 1348956,
+   "calls_one_row": 1348956,
+   "functions": 2,
+   "functions_one_row": 2,
+   "most_rows": 1
+  },
+  "functions_entered": 3,
+  "groups": {
+   "arithmetic": 1343511,
+   "calls and returns": 2697918,
+   "closures and cells": 1338044,
+   "comparison and logic": 1348962,
+   "control": 5467,
+   "data": 3366948,
+   "everything else": 7,
+   "moves and constants": 4068764,
+   "step marks": 2708866
+  },
+  "hot": {
+   "sites_for_90_percent": 38,
+   "top_10_sites": 6075760,
+   "top_tenth_of_sites": 7095664
+  },
+  "index": {
+   "by": {
+    "list[int]": 1343498
+   },
+   "n": 1343498,
+   "one_kind": 1343498
+  },
+  "instructions": 16878487,
+  "made": {
+   "closures": 2,
+   "interpolated": 10,
+   "lists": 674478,
+   "maps": 1
+  },
+  "module_instructions": 133,
+  "returns": {
+   "n": 1348957,
+   "one_kind": 1348957
+  },
+  "sites": 130,
+  "top_level": {
+   "by_op": [
+    [
+     "mov",
+     21868
+    ],
+    [
+     "steps",
+     10954
+    ],
+    [
+     "call",
+     10916
+    ],
+    [
+     "add",
+     5456
+    ],
+    [
+     "forloop",
+     5456
+    ],
+    [
+     "loadint",
+     19
+    ],
+    [
+     "addk",
+     10
+    ],
+    [
+     "interp",
+     10
+    ]
+   ],
+   "n": 54743
+  },
+  "typed_sites": {
+   "n": 2692473,
+   "one_kind": 2017995,
+   "sites": 11,
+   "sites_one_kind": 10
+  }
+ },
+ "words": {
+  "arith": {
+   "n": 119003,
+   "pairs": {
+    "int, int": 119003
+   }
+  },
+  "by_op": {
+   "addk": 39003,
+   "callm": 80004,
+   "eq": 996,
+   "exhale": 1,
+   "forloop": 40000,
+   "forprep": 1,
+   "getindex": 40997,
+   "insertmap": 5,
+   "interp": 40002,
+   "iternext": 40999,
+   "iterprep": 2,
+   "jmp": 39003,
+   "le": 997,
+   "loadint": 4,
+   "loadk": 40009,
+   "loop": 40997,
+   "lt": 119,
+   "modk": 40000,
+   "mov": 160015,
+   "mulk": 40000,
+   "newlist": 1,
+   "newmap": 2,
+   "not": 997,
+   "ret": 1,
+   "setindex": 40000,
+   "steps": 202008,
+   "test": 997,
+   "testn": 41993
+  },
+  "callb": {
+   "n": 0,
+   "one_kind": 0,
+   "top": []
+  },
+  "callm": {
+   "n": 80004,
+   "one_kind": 80004,
+   "top": [
+    [
+     "push",
+     40000
+    ],
+    [
+     "has",
+     40000
+    ],
+    [
+     "join",
+     1
+    ],
+    [
+     "split",
+     1
+    ],
+    [
+     "keys",
+     1
+    ],
+    [
+     "len",
+     1
+    ]
+   ]
+  },
+  "calls": {
+   "n": 0,
+   "one_callee": 0,
+   "sites": 0,
+   "sites_one_callee": 0,
+   "to_builtin": 0,
+   "to_function": 0,
+   "to_other": 0
+  },
+  "cmp": {
+   "n": 2112,
+   "pairs": {
+    "int, int": 1993,
+    "str, str": 119
+   }
+  },
+  "copies": {
+   "loadk_str": 40008,
+   "mov": 160015,
+   "mov_counted": 120012
+  },
+  "fields": {
+   "n": 0,
+   "not_a_map": 0,
+   "on_dictionary": 0,
+   "one_position": 0,
+   "one_shape": 0,
+   "over_8": 0,
+   "sites": 0,
+   "sites_one_shape": 0,
+   "two_shapes": 0,
+   "up_to_8": 0
+  },
+  "functions": 1,
+  "functions_called": {
+   "calls": 0,
+   "calls_one_row": 0,
+   "functions": 0,
+   "functions_one_row": 0,
+   "most_rows": 0
+  },
+  "functions_entered": 1,
+  "groups": {
+   "arithmetic": 119003,
+   "calls and returns": 80005,
+   "closures and cells": 0,
+   "comparison and logic": 3109,
+   "control": 203992,
+   "data": 121007,
+   "everything else": 1,
+   "moves and constants": 200028,
+   "step marks": 202008
+  },
+  "hot": {
+   "sites_for_90_percent": 21,
+   "top_10_sites": 400001,
+   "top_tenth_of_sites": 400001
+  },
+  "index": {
+   "by": {
+    "map[str]": 80997
+   },
+   "n": 80997,
+   "one_kind": 80997
+  },
+  "instructions": 929153,
+  "made": {
+   "closures": 0,
+   "interpolated": 40002,
+   "lists": 1,
+   "maps": 2
+  },
+  "module_instructions": 108,
+  "returns": {
+   "n": 1,
+   "one_kind": 1
+  },
+  "sites": 100,
+  "top_level": {
+   "by_op": [
+    [
+     "steps",
+     202008
+    ],
+    [
+     "mov",
+     160015
+    ],
+    [
+     "callm",
+     80004
+    ],
+    [
+     "testn",
+     41993
+    ],
+    [
+     "iternext",
+     40999
+    ],
+    [
+     "getindex",
+     40997
+    ],
+    [
+     "loop",
+     40997
+    ],
+    [
+     "loadk",
+     40009
+    ]
+   ],
+   "n": 929153
+  },
+  "typed_sites": {
+   "n": 121115,
+   "one_kind": 121115,
+   "sites": 6,
+   "sites_one_kind": 6
+  }
+ }
+}

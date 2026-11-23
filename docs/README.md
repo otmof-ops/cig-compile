@@ -35,6 +35,14 @@ or an error code.
 - [Payload format 2](decisions/0004-payload-format-2.md): the container a
   program's bytecode, archives, own flags and provenance go in, and the
   order they land in.
+- [What goes native first](decisions/0005-what-goes-native-first.md): how
+  stages C and D start, as typed specializations compiled ahead of time.
+- [Native code in a program](decisions/0006-native-code-in-a-program.md):
+  the section, the loader, the calling convention, and leaving native code.
+- [Where the pieces live](decisions/0007-where-the-pieces-live.md): the
+  crates of the inference, the code generator and the loader.
+- [Research notes](research/README.md): 17 studies of other compilers,
+  and what cig's own VM was measured doing.
 - [Roadmap](roadmap.md): the stages, the phases of #42, and how a request
   gets there.
 
