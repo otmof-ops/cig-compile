@@ -5,6 +5,31 @@ project follows semantic versioning.
 
 ## Unreleased
 
+## 0.5.1 — 2026-11-23
+
+Programs for cig 1.25.0, and two defects of stage `b` fixed. In a program
+built at stage `b` by 0.5.0, a function given a second name after it was
+called could fail with `cannot call null` or call the wrong function
+without an error, and a function that ran before a declaration it read
+printed `null` or wrote the wrong variable. **Build again any stage `b`
+program 0.5.0 built from a script that does either.** The first is fixed;
+a script of the second kind is refused at stage `b` (E1010) and builds at
+stage `a`, as before. Stage `a` programs never had either.
+
+Both were in the lowering, which is cig's now: cigcompile calls
+`cigscript::lower` and carries no copy, so a stage `b` program and `cig
+run --engine vm` (new in cig 1.25.0) are lowered by one piece of code.
+For the 25 benchmark programs, the language tour and the examples, at
+`-O0` and `-O1`, the bytecode is what 0.5.0 emits, byte for byte.
+
+- **cig 1.25.0.** `Cargo.toml` and `fuzz/Cargo.toml` pin `cigscript` at
+  the tag `v1.25.0` (the compiler had been on the commit that brought the
+  lowering, and the fuzz crate still on `v1.24.0`), `src/digests.rs` is
+  `ci/digests.sh v1.25.0`, the bench nightly asks for 1.25.0's runtime, and
+  the third-party notices are made again. The guides' transcripts are from
+  this build: a hello is 17.0 MB on Linux x86_64 and 10.9 MB on Apple
+  Silicon, since cig 1.25.0 is the larger runtime.
+
 - **The memory gate holds a benchmark to what it holds of its own.**
   `bench --against` compared what a program touched: its peak with
   transparent huge pages off, the pages of files it had mapped included.
@@ -27,8 +52,7 @@ project follows semantic versioning.
   `src/cir`, `src/bc` and their tests, about 13,900 lines) is no longer
   here. cigcompile calls `cigscript::lower`, the copy `cig run --engine vm`
   uses (cig-script#254), so a program built at stage `b` and a script run
-  on the VM are lowered by one piece of code and cannot drift. cigscript
-  is pinned to the cig-script commit that has it until cig's next release.
+  on the VM are lowered by one piece of code and cannot drift.
   `--emit cir`, `--emit bc`, `--passes`, `--passes-diff` and `--remarks`
   work as before, through `src/emit.rs`. For the 25 benchmark programs,
   the language tour and the examples, at `-O0` and `-O1`, the bytecode is

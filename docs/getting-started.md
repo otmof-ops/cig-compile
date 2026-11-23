@@ -41,10 +41,10 @@ cigcompile build hello.cig
 The first build on a machine prints the fetch, once:
 
 ```
-fetching cig-v1.24.0-linux-x86_64 from otmof-ops/cig-script (sha256 957ddff2c27c...)
-kept /home/you/.cigscript/cigcompile/runtimes/1.24.0/linux-x86_64/cig (sha256 matches the pin)
-compiled hello.cig -> hello (16.3 MB, cig 1.24.0 for x86_64-unknown-linux-musl, stage a)
-  sha256 445143184b39c480f0934ce7339909d61fed286ed7a7f1ff0d6dab4285406af0
+fetching cig-v1.25.0-linux-x86_64 from otmof-ops/cig-script (sha256 423d648340fd...)
+kept /home/you/.cigscript/cigcompile/runtimes/1.25.0/linux-x86_64/cig (sha256 matches the pin)
+compiled hello.cig -> hello (17.0 MB, cig 1.25.0 for x86_64-unknown-linux-musl, stage a)
+  sha256 9cdf34c970ac17ba5d18bedcb2a224b17cef01fdf3c903fb6ab3e95bed1b4405
 ```
 
 A second `cigcompile build` with nothing changed reads neither the
@@ -52,8 +52,8 @@ runtime nor the program, writes nothing, and takes about a
 millisecond:
 
 ```
-up to date: hello (16.3 MB)
-  sha256 445143184b39c480f0934ce7339909d61fed286ed7a7f1ff0d6dab4285406af0
+up to date: hello (17.0 MB)
+  sha256 9cdf34c970ac17ba5d18bedcb2a224b17cef01fdf3c903fb6ab3e95bed1b4405
 ```
 
 That's the build index at work; see [how it works](how-it-works.md).
@@ -77,11 +77,11 @@ program (`--dry-run`, `--no-rollback`, `--unburn`, and so on), and
 ```
 hello  a CigScript program
   compiled from  hello.cig  (sha256 de4c85156932095faef8c6bb02e3d49759b4f41f0a6bb71f41d94396ebcb49e8)
-  compiled by    cigcompile 0.5.0
-  runs on        cig 1.24.0 (this binary)
+  compiled by    cigcompile 0.5.1
+  runs on        cig 1.25.0 (this binary)
   format         2, stage a
   built          opt 1 for x86_64-unknown-linux-musl
-  runtime        sha256 957ddff2c27c9baa38b5aa43361e165e209ebb3d6a3c82cfa28d7b7777e91b3f
+  runtime        sha256 423d648340fd0db8fd541319f5dec3f1adf0329a387ebdf5d98c064232a90e46
   sections
     source           39 bytes         39 decoded  stored   required  sha256 de4c85156932095faef8c6bb02e3d49759b4f41f0a6bb71f41d94396ebcb49e8
 ```
@@ -96,8 +96,8 @@ build didn't go wrong in between:
 
 ```
 $ cigcompile test hello.cig
-up to date: hello (16.3 MB)
-  sha256 445143184b39c480f0934ce7339909d61fed286ed7a7f1ff0d6dab4285406af0
+up to date: hello (17.0 MB)
+  sha256 9cdf34c970ac17ba5d18bedcb2a224b17cef01fdf3c903fb6ab3e95bed1b4405
 same     hello.cig (dry run: the same plan, output and exit)
 ```
 
@@ -112,7 +112,7 @@ machine. `cigcompile targets` lists them:
 
 ```
 $ cigcompile targets
-x86_64-unknown-linux-musl        linux-x86_64     stage A  run on its own runner                        this machine; runtime /home/you/.cigscript/cigcompile/runtimes/1.24.0/linux-x86_64/cig
+x86_64-unknown-linux-musl        linux-x86_64     stage A  run on its own runner                        this machine; runtime /home/you/.cigscript/cigcompile/runtimes/1.25.0/linux-x86_64/cig
 aarch64-unknown-linux-musl       linux-aarch64    stage A  run on its own runner
 armv7-unknown-linux-musleabihf   linux-arm        stage A  built, not run
 aarch64-apple-darwin             macos-aarch64    stage A  run on its own runner  no box (E777, E763)
@@ -128,10 +128,10 @@ there lacks (the box is Linux's). To build a hello for Apple Silicon:
 
 ```
 $ cigcompile build hello.cig -o bin-mac/hello --target aarch64-apple-darwin
-fetching cig-v1.24.0-macos-aarch64 from otmof-ops/cig-script (sha256 15b92e1549a7...)
-kept /home/you/.cigscript/cigcompile/runtimes/1.24.0/macos-aarch64/cig (sha256 matches the pin)
-compiled hello.cig -> bin-mac/hello (10.5 MB, cig 1.24.0 for aarch64-apple-darwin, stage a)
-  sha256 7a85c97fc18489313398c507a50f508928ea4b4bb578eeaf56202730ca289cb6
+fetching cig-v1.25.0-macos-aarch64 from otmof-ops/cig-script (sha256 5920132f6dd3...)
+kept /home/you/.cigscript/cigcompile/runtimes/1.25.0/macos-aarch64/cig (sha256 matches the pin)
+compiled hello.cig -> bin-mac/hello (10.9 MB, cig 1.25.0 for aarch64-apple-darwin, stage a)
+  sha256 e0fcb5d3027c0865b5b138f8b841943dfb52c9d9e475945a187a04e57390424b
 ```
 
 The runtime for another machine is cig's own release asset for it, of
@@ -153,8 +153,8 @@ it, and the padding and the trailer against what a build writes.
 ```
 $ cigcompile verify hello --script hello.cig
 hello
-  runtime          ok        cig's release asset cig-v1.24.0-linux-x86_64 (sha256 957ddff2c27c9baa)
-  record           ok        hello: hello.cig for cig 1.24.0, built by cigcompile 0.5.0, stage a, -O1, x86_64-unknown-linux-musl
+  runtime          ok        cig's release asset cig-v1.25.0-linux-x86_64 (sha256 423d648340fd0db8)
+  record           ok        hello: hello.cig for cig 1.25.0, built by cigcompile 0.5.1, stage a, -O1, x86_64-unknown-linux-musl
   section source   ok        hello.cig is the script it was built from (1 lines, sha256 de4c85156932095f)
   section table    ok        1 sections: source
   padding          ok        zeros, as the alignment needs

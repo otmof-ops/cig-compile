@@ -77,7 +77,7 @@ guarded for signing.
 
 ```
 cigcompile build hello.cig --pass
-  pass hello.pass (a program pass from this machine, id e5e88eba5398)
+  pass hello.pass (a program pass from this machine, id 188205867784)
 ```
 
 ### Verifying a pass
@@ -87,8 +87,8 @@ cigcompile verify <program> --pass <program>.pass [--allowed-signers <file>]
 ```
 
 - On the machine that built it, the pass holds with nothing more:
-  `pass  ok  made by this machine on 2026-11-15T08:14:37Z: hello.cig for
-  cig 1.24.0 on x86_64-unknown-linux-musl, built by cigcompile 0.5.0`.
+  `pass  ok  made by this machine on 2026-11-22T21:37:19Z: hello.cig for
+  cig 1.25.0 on x86_64-unknown-linux-musl, built by cigcompile 0.5.1`.
 - On another machine, it holds when that machine trusts the builder for
   programs. On the builder, `cig pass key --kinds program` prints the
   line; put it in the other machine's allowed signers (cig's own,
@@ -169,7 +169,7 @@ ones (a program needs nothing else).
 
 ```
 $ cigcompile build hello.cig --emit oci --target x86_64-unknown-linux-musl
-compiled hello.cig -> hello (16.3 MB, cig 1.24.0 for x86_64-unknown-linux-musl, stage a)
+compiled hello.cig -> hello (17.0 MB, cig 1.25.0 for x86_64-unknown-linux-musl, stage a)
   sha256 ...
   image  hello.oci.tar (docker load -i, then run localhost/hello:latest)
 ```
@@ -191,7 +191,7 @@ ar + tar + gzip, written here, so no dpkg is needed to make one.
 ```
 $ cigcompile build hello.cig --emit deb --target x86_64-unknown-linux-musl \
     --pkg-version 1.0.0 --pkg-description "greeting program"
-compiled hello.cig -> hello (16.3 MB, cig 1.24.0 for x86_64-unknown-linux-musl, stage a)
+compiled hello.cig -> hello (17.0 MB, cig 1.25.0 for x86_64-unknown-linux-musl, stage a)
   sha256 ...
   deb    hello_1.0.0_amd64.deb (hello_1.0.0_amd64.deb, dpkg -i to install to /usr/bin/hello)
 ```
@@ -287,8 +287,8 @@ The first part that differs is named:
 
 ```
 out/tool
-  runtime          ok        cig's release asset cig-v1.24.0-linux-x86_64 (sha256 ...)
-  record           ok        tool: tool.cig for cig 1.24.0, built by cigcompile 0.5.0, stage b, -O1, x86_64-unknown-linux-musl
+  runtime          ok        cig's release asset cig-v1.25.0-linux-x86_64 (sha256 ...)
+  record           ok        tool: tool.cig for cig 1.25.0, built by cigcompile 0.5.1, stage b, -O1, x86_64-unknown-linux-musl
   section source   ok        tool.cig is the script it was built from (120 lines, sha256 ...)
   section bytecode DIFFERS   not what tool.cig lowers to at -O1: the first difference is at byte 812
   section table    ok        2 sections: source, bytecode

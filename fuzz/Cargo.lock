@@ -439,10 +439,15 @@ dependencies = [
 [[package]]
 name = "cig-bytecode"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.24.0#de47ec66afef4a7ad93de4d00ea0cd1138dc7466"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.25.0#173aed507f80859c2d91e3b6bc4096aee7743e99"
 dependencies = [
  "blake3",
 ]
+
+[[package]]
+name = "cig-copy"
+version = "0.1.0"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.25.0#173aed507f80859c2d91e3b6bc4096aee7743e99"
 
 [[package]]
 name = "cig-pass"
@@ -464,7 +469,7 @@ dependencies = [
 [[package]]
 name = "cig-pass"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.24.0#de47ec66afef4a7ad93de4d00ea0cd1138dc7466"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.25.0#173aed507f80859c2d91e3b6bc4096aee7743e99"
 dependencies = [
  "base64",
  "blake3",
@@ -481,7 +486,7 @@ dependencies = [
 [[package]]
 name = "cig-vault"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.24.0#de47ec66afef4a7ad93de4d00ea0cd1138dc7466"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.25.0#173aed507f80859c2d91e3b6bc4096aee7743e99"
 dependencies = [
  "getrandom 0.2.17",
  "hex",
@@ -503,10 +508,10 @@ dependencies = [
 
 [[package]]
 name = "cigcompile"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "cigarscript",
- "cigscript 1.24.0",
+ "cigscript 1.25.0",
  "clap",
  "flate2",
  "hex",
@@ -521,7 +526,7 @@ name = "cigcompile-fuzz"
 version = "0.0.0"
 dependencies = [
  "cigcompile",
- "cigscript 1.24.0",
+ "cigscript 1.25.0",
  "libfuzzer-sys",
 ]
 
@@ -561,15 +566,16 @@ dependencies = [
 
 [[package]]
 name = "cigscript"
-version = "1.24.0"
-source = "git+https://github.com/otmof-ops/cig-script?tag=v1.24.0#de47ec66afef4a7ad93de4d00ea0cd1138dc7466"
+version = "1.25.0"
+source = "git+https://github.com/otmof-ops/cig-script?tag=v1.25.0#173aed507f80859c2d91e3b6bc4096aee7743e99"
 dependencies = [
  "argon2",
  "blake3",
  "chacha20poly1305",
  "chrono",
  "cig-bytecode",
- "cig-pass 0.1.0 (git+https://github.com/otmof-ops/cig-script?tag=v1.24.0)",
+ "cig-copy",
+ "cig-pass 0.1.0 (git+https://github.com/otmof-ops/cig-script?tag=v1.25.0)",
  "cig-vault",
  "clap",
  "fastcdc",
