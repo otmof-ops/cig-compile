@@ -262,8 +262,8 @@ struct BuildArgs {
     /// Run exactly these passes, in this order, for bisecting: a comma list of fold-consts, copy-prop, sccp, dead-pure. They shape --emit and --remarks; a program is lowered at -O's level.
     #[arg(long, value_name = "A,B", value_delimiter = ',')]
     passes: Option<Vec<String>>,
-    /// `b`: the program runs its bytecode on cig's VM, and a script that does not lower is refused (E1010). `a` (the default, until stage b passes its speed gates): it runs its script on the tree-walker.
-    #[arg(long, value_name = "a|b", value_parser = ["a", "b"])]
+    /// `b`: the program runs its bytecode on cig's VM, and a script that does not lower is refused (E1010). `c`: a stage b program with native code for the functions that compile to it, where one can be had (Linux on x86-64 and aarch64); elsewhere, and for a script none of whose functions compiles, the stage b program, with a note. `a` (the default, until stage b passes its speed gates): it runs its script on the tree-walker.
+    #[arg(long, value_name = "a|b|c", value_parser = ["a", "b", "c"])]
     stage: Option<String>,
     /// `direct`: every argument on the program's command line is its script's, flags included, and the program takes no run flags (as a script's `pack { own_flags: true }` says).
     #[arg(long, value_name = "direct", value_parser = ["direct"])]
@@ -607,7 +607,7 @@ fn watch(ctx: &Ctx, a: &BuildArgs) -> i32 {
             // that failed there is tried again every two seconds, so it goes
             // in once the program exits, without another save.
             waited += 1;
-            if !built && cfg!(windows) && waited % 20 == 0 {
+            if !built && cfg!(windows) && waited.is_multiple_of(20) {
                 break;
             }
         }
@@ -1280,6 +1280,7 @@ fn options_of(a: &BuildArgs, strength: Option<cigarscript::features::Strength>) 
         stage: match a.stage.as_deref() {
             Some("a") => Some(cigscript::program::Stage::A),
             Some("b") => Some(cigscript::program::Stage::B),
+            Some("c") => Some(cigscript::program::Stage::C),
             _ => None,
         },
         opt: level_of(a),

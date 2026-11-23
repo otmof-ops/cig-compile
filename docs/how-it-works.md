@@ -39,6 +39,18 @@ has every byte; cig-compile's record 0004 has the reasons):
   included). cig's VM runs it through the same run as `cig run`. The
   script stays in `source`, for `--interp`, an error's quoted line and
   `--chains`.
+- **Stage `c`** programs are stage `b` programs with a `native` section
+  after `bytecode`. `cigscript::lower::lowered_with_cir` gives the IR
+  the bytecode was lowered from, `cigscript::lower::cir::infer` the
+  types of every function for each row of argument types it is called
+  with, and `crates/cig-codegen` compiles those whose every value is an
+  int, a float, a bool or null to machine code on Cranelift, for the
+  program's target. The section's layout is cig-script's `cig-native`
+  crate's; its body lies at a file offset that is a multiple of 65,536,
+  and cig maps its code from the program's own file and calls it from
+  the VM ([decisions 0005 to 0007](decisions/0005-what-goes-native-first.md)).
+  The same input gives the same bytes, which is what lets
+  `cigcompile verify` hold a program's native code to its script.
 - **Stage `a`** programs carry `source` alone, and the tree-walker runs
   it. A build makes stage `a` unless it is given `--stage b`, until
   stage `b` passes its speed gates (`DEFAULT_STAGE` in `src/build.rs`

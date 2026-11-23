@@ -1,9 +1,11 @@
 name: differential-random
 
 # #7: every night a thousand programs nobody wrote run under cig and as
-# programs, from a new seed each night, on three systems that share it. A
-# program that differs is shrunk to its smallest form and printed with its
-# seed: DIFF_RANDOM=<seed>:1 DIFF_FILTER=random/ replays it.
+# programs, from a new seed each night, on three systems that share it,
+# and a thousand typed ones, whose arithmetic sits in functions stage c
+# compiles to native code. A program that differs is shrunk to its
+# smallest form and printed with its seed: DIFF_RANDOM=<seed>:1 (or
+# DIFF_TYPED_RANDOM=<seed>:1) with DIFF_FILTER=random/ replays it.
 on:
   schedule:
     - cron: "41 4 * * *"
@@ -41,6 +43,7 @@ jobs:
         env:
           DIFF_FILTER: random/
           DIFF_RANDOM: ${{ github.run_id }}:${{ inputs.count || '1000' }}
+          DIFF_TYPED_RANDOM: ${{ github.run_id }}:${{ inputs.count || '1000' }}
         run: |
           set -o pipefail
           CIGSCRIPT_SRC="$PWD/cigscript-src" cargo test --release --test differential 2>&1 | tee "differential-${{ matrix.os }}.log"

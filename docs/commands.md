@@ -109,7 +109,7 @@ Flags:
 | `--strength mild \| medium \| full` | for a `.cigar` file, check it as if it declared this strength; see [`.cigar` files](#cigar-files-and---strength). A `.cig` script is always mild and ignores it |
 | `--check` | parse and check; write nothing, need no runtime |
 | `--emit cir \| cir-opt` | the verified IR instead of a program; see [IR and passes](#ir-and-passes) |
-| `--stage a \| b` | `b`: the program runs the bytecode its script lowers to on cig's VM, and a script that does not lower is refused (`E1010`) naming the construct and its line. `a`: it runs its script on the tree-walker. Without the flag a build makes stage `a`, until stage `b` passes its speed gates: `--stage b` opts in. See [stages](#stages) |
+| `--stage a \| b \| c` | `b`: the program runs the bytecode its script lowers to on cig's VM, and a script that does not lower is refused (`E1010`) naming the construct and its line. `c`: a stage `b` program with native code for the functions that compile to it, where one can be had; elsewhere the stage `b` program, with a note. `a`: it runs its script on the tree-walker. Without the flag a build makes stage `a`, until stage `b` passes its speed gates: `--stage b` and `--stage c` opt in. See [stages](#stages) |
 | `--args direct` | every argument on the program's command line is its script's, flags included (`tool --version`), and the program takes no run flags: the build's name for what a script says with `pack { ".", own_flags: true }`. A script that says it needs no flag |
 | `--emit bc` | the bytecode the IR lowers to, verified and disassembled: what a stage `b` program carries; see [IR and passes](#ir-and-passes) |
 | `--emit oci` | the program, and beside it an OCI image of it; Linux targets only |
@@ -306,6 +306,13 @@ read part by part as its file lays them out
   `opt`, of `--script`'s text or, without it, of the `source` section.
   A program another cigcompile or cig built is read and verified, and
   its lowering is `unchecked`.
+- **section native** (stage `c`) — its bytes against the table, then
+  read, and compared with a fresh compile, at the recorded `opt` and for
+  the recorded target, of `--script`'s text or, without it, of the
+  `source` section. Machine code cannot be read as a script can: this is
+  the check that a program's native code is what this compiler makes of
+  its script, on any system that runs the compiler. A program another
+  cigcompile or cig built is read, and its compile is `unchecked`.
 - **section `<id>`** — any other section, against the table.
 - **section table** — the table's rules: ids, order, encodings, flags,
   versions, and where each body lies.
@@ -419,7 +426,7 @@ message.
 | `E1007` | two programs would share one name: scripts whose names differ only in case, on a filesystem that does not tell case apart |
 | `E1008` | the runtime would tie programs to this machine's libc: the only cig here is dynamically linked, so a program made from it would start only where the same glibc is |
 | `E1009` | a script whose name is not printable: the name holds a control or an invisible character, and cig would refuse to run such a program (`E1050`) |
-| `E1010` | a script that cannot be a stage b program: `--stage b`, and the script holds a construct the lowering to bytecode does not cover (today a `pack` root that runs a pull or a function), or needs an instruction the pinned runtime's VM does not run. The message names it and its line; without `--stage b` the build makes stage a |
+| `E1010` | a script that cannot be a stage b (or c) program: `--stage b` or `--stage c`, and the script holds a construct the lowering to bytecode does not cover (today a `pack` root that runs a pull or a function), or needs an instruction the pinned runtime's VM does not run. The message names it and its line; without `--stage` the build makes stage a |
 
 **A compiled program at runtime** (`E1050`-`E1053`):
 
@@ -525,6 +532,13 @@ its **stage**:
   burns, plan, journal, rollback, step budget, output and exit codes.
   `--interp` (a run flag) runs the script on the tree-walker instead; a
   damaged bytecode is refused (`E1050`), never run as the script.
+- **stage `c`** — a stage `b` program with native code beside its
+  bytecode (the `native` section): machine code for the functions whose
+  every value is an int, a float, a bool or null, each compiled for the
+  argument types the script calls it with. cig's VM calls it where a
+  call's arguments are of those types and runs the bytecode everywhere
+  else. The program does the same thing either way: its output, its
+  errors and their positions, where the step budget stops it.
 - **stage `a`** — the program carries the script alone, and the
   tree-walker runs it.
 
@@ -540,6 +554,39 @@ naming the construct and its line):
 error[E1010 usage]: tool.cig cannot be a stage b program: a `pack` root that runs a pull or a function is not lowered to bytecode
   --> tool.cig:1:1
 ```
+
+`--stage c` asks for native code where it can be had. It is had when
+the program is for Linux on x86-64 or aarch64, its runtime runs stage
+`c` programs (a cig says which stages it runs), and at least one of the
+script's functions compiles. The build that writes the program says how
+many did (one that finds it up to date says that, and no more):
+
+```
+compiled tool.cig -> tool (17.0 MB, cig 1.25.0 for x86_64-unknown-linux-musl, stage c)
+  native 3 functions compiled, 2 left to the bytecode
+```
+
+Otherwise it makes the stage `b` program, which is the same program
+without native code, and says why in a note:
+
+```
+note: tool.cig is a stage b program: none of its functions compiles to native code (`total`: line 4: a list or a map)
+```
+
+What compiles today: a function that works on numbers and bools, with
+`if`, `while`, `for i in a..b` and calls to other such functions. What
+does not: a function that touches a string, a list, a map, a closure or
+a variable another function shares, calls a builtin, divides an int by
+an int, or uses `try` or `burn`; and the script's top level. Each stays
+bytecode, and `--json` lists the reason for each
+(`"native": {"compiled": 3, "left": 2, "why": [...]}`) and carries the
+note, which it does not print, in `"warnings"`.
+
+A stage `c` program's native code is machine code, not something a
+reader can check as it can the script: `cigcompile verify` compiles the
+script again and holds the program's native code to it, byte for byte,
+and `CIG_NATIVE=0` runs a program on its bytecode alone
+([decision 0006](decisions/0006-native-code-in-a-program.md)).
 
 `--stage a` always makes stage `a`. The record says the stage, the level (`opt`), the target
 triple, the runtime's sha256 and, when every argument is the program's,

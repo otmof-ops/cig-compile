@@ -5,6 +5,46 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **Stage `c`: native code for functions on numbers** (#32, #34).
+  `cigcompile build --stage c` compiles the functions whose every value
+  is an int, a float, a bool or null to machine code, ahead of time, and
+  puts it in the program beside the bytecode (a `native` section). cig's
+  VM calls it where a call's arguments are of the types it was compiled
+  for, and runs the bytecode everywhere else. The program does the same
+  thing either way: every error is made by the interpreter's own
+  operators, from the operands native code left with, and the step
+  budget stops it at the same step.
+  - **Where.** Programs for Linux on x86-64 and aarch64, on a runtime
+    that runs stage `c`: cig's source at the commit this compiler now
+    pins, in no release of cig yet. Elsewhere, and for a script with
+    nothing to compile, `--stage c` makes the stage `b` program and says
+    why in a note. A build says how many functions it compiled;
+    `--json` gives the reason for each one left (`native`) and carries
+    the notes it does not print (`warnings`).
+  - **What.** A function that works on numbers and bools with `if`,
+    `while`, `for i in a..b` and calls of other such functions. Not yet:
+    a script's top level, strings, lists, maps, closures, a variable
+    another function shares, builtins, `try`, `burn`, and an int divided
+    by an int. Each of those stays bytecode.
+  - **Held to the tree-walker.** The differential suite builds every
+    program at stage `c` as well (1,561 comparisons with the typed
+    corpus and 200 random programs, none differing), 100 typed random
+    programs ride each pull request and a thousand run nightly.
+  - **Held to the script.** Machine code cannot be read as a script
+    can, so `cigcompile verify` compiles the script again and holds the
+    program's native code to it, byte for byte: the same input gives the
+    same bytes on every system. `CIG_NATIVE=0` runs a program on its
+    bytecode alone.
+  - **How fast.** Three programs made of such functions took 0.045 to
+    0.128 of stage `b`'s time, 0.15 to 0.35 of Lua 5.4's and 0.59 to
+    1.78 of LuaJIT's
+    ([first numbers](docs/BENCHMARKS-2026-11-23-stage-c.md)). Of the
+    benchmark set only `fib` has such a function, so the set's numbers
+    do not move yet.
+  - **The code generator** is a crate of this repository,
+    `crates/cig-codegen`, on Cranelift 0.137.3 (pinned exactly). It is
+    linked into cigcompile alone: a program carries none of it. Building
+    cigcompile now needs Rust 1.97.
 - **The differential suite corners arithmetic.** 36 programs under
   `tests/corpus/typed/` keep their arithmetic inside functions that take
   and return only ints, floats, bools and null (what stage `c` compiles
@@ -21,7 +61,6 @@ project follows semantic versioning.
   that the program maps from its own file, with every error still made by
   the interpreter's own operators and the step budget exact (`0006`), and
   which crate holds the inference, the generator and the loader (`0007`).
-  Nothing in a program changes yet.
 - **The compiler study is in the repository** (#98): `docs/research/` holds
   17 studies of other compilers read from pinned source (308 mechanisms,
   each with a proposed take, adapt or reject for cig), indexes by issue

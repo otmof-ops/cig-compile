@@ -1,6 +1,6 @@
 # Third-party notices
 
-cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothing is vendored); cig-runtime is cig itself, built from the `cigscript` crate (CigScript, https://github.com/otmof-ops/cig-script, FSL-1.1-ALv2 from v1.21.0, Apache-2.0 for releases through v1.20.0). Every linked crate is under a permissive or source-available license whose use in cigcompile and in a compiled program is allowed; where a crate offers a choice (`OR`), the permissive option is the one taken. Holder names come from each crate's metadata; `unrecorded` means the crate publishes no author field. Regenerate with `cargo license --avoid-dev-deps --json` (cargo-license) and `ci/gen-third-party.py`.
+cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothing is vendored); cig-runtime is cig itself, built from the `cigscript` crate (CigScript, https://github.com/otmof-ops/cig-script, FSL-1.1-ALv2 from v1.21.0, Apache-2.0 for releases through v1.20.0). Every linked crate is under a permissive or source-available license whose use in cigcompile and in a compiled program is allowed; where a crate offers a choice (`OR`), the permissive option is the one taken. The code generator's crates (Cranelift and what it builds on, under Apache-2.0 WITH LLVM-exception) are linked into cigcompile alone: cig-runtime links none of them, so a compiled program carries none. Holder names come from each crate's metadata; `unrecorded` means the crate publishes no author field. Regenerate with `cargo license --avoid-dev-deps --json` (cargo-license) and `ci/gen-third-party.py`.
 
 ## Apache-2.0 OR MIT
 
@@ -8,12 +8,14 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 |---|---|---|---|
 | aead | 0.5.2 | RustCrypto Developers | https://github.com/RustCrypto/traits |
 | aes | 0.8.4 | RustCrypto Developers | https://github.com/RustCrypto/block-ciphers |
+| allocator-api2 | 0.2.21 | Zakarum <zaq.dev@icloud.com> | https://github.com/zakarumych/allocator-api2 |
 | android_system_properties | 0.1.6 | Nicolas Silva <nical@fastmail.com> | https://github.com/nical/android_system_properties |
 | anstream | 1.0.0 | unrecorded | https://github.com/rust-cli/anstyle.git |
 | anstyle | 1.0.14 | unrecorded | https://github.com/rust-cli/anstyle.git |
 | anstyle-parse | 1.0.0 | unrecorded | https://github.com/rust-cli/anstyle.git |
 | anstyle-query | 1.1.5 | unrecorded | https://github.com/rust-cli/anstyle.git |
 | anstyle-wincon | 3.0.11 | unrecorded | https://github.com/rust-cli/anstyle.git |
+| arbitrary | 1.5.0 | The Rust-Fuzz Project Developers, Nick Fitzgerald <fitzgen@gmail.com>, Manish Goregaokar <manishsmail@gmail.com>, Simonas Kazlauskas <arbitrary@kazlauskas.me>, Brian L. Troutwine <brian@troutwine.us>, Corey Farwell <coreyf@rwell.org> | https://github.com/rust-fuzz/arbitrary/ |
 | argon2 | 0.5.3 | RustCrypto Developers | https://github.com/RustCrypto/password-hashes/tree/master/argon2 |
 | arrayvec | 0.7.8 | bluss | https://github.com/bluss/arrayvec |
 | async-broadcast | 0.7.2 | Stjepan Glavina <stjepang@gmail.com>, Yoshua Wuyts <yoshuawuyts@gmail.com>, Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/smol-rs/async-broadcast |
@@ -76,6 +78,7 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 | filetime | 0.2.29 | Alex Crichton <alex@alexcrichton.com> | https://github.com/alexcrichton/filetime |
 | find-msvc-tools | 0.1.15 | unrecorded | https://github.com/rust-lang/cc-rs |
 | flate2 | 1.1.11 | Alex Crichton <alex@alexcrichton.com>, Josh Triplett <josh@joshtriplett.org> | https://github.com/rust-lang/flate2-rs |
+| fnv | 1.0.7 | Alex Crichton <alex@alexcrichton.com> | https://github.com/servo/rust-fnv |
 | futures-core | 0.3.34 | unrecorded | https://github.com/rust-lang/futures-rs |
 | futures-io | 0.3.34 | unrecorded | https://github.com/rust-lang/futures-rs |
 | futures-lite | 2.6.1 | Stjepan Glavina <stjepang@gmail.com>, Contributors to futures-rs | https://github.com/smol-rs/futures-lite |
@@ -85,6 +88,8 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 | futures-util | 0.3.34 | unrecorded | https://github.com/rust-lang/futures-rs |
 | getrandom | 0.2.17 | The Rand Project Developers | https://github.com/rust-random/getrandom |
 | getrandom | 0.4.3 | The Rand Project Developers | https://github.com/rust-random/getrandom |
+| gimli | 0.33.0 | unrecorded | https://github.com/gimli-rs/gimli |
+| hashbrown | 0.16.1 | Amanieu d'Antras <amanieu@gmail.com> | https://github.com/rust-lang/hashbrown |
 | hashbrown | 0.17.1 | unrecorded | https://github.com/rust-lang/hashbrown |
 | heck | 0.5.0 | unrecorded | https://github.com/withoutboats/heck |
 | hermit-abi | 0.5.3 | unrecorded | https://github.com/hermit-os/hermit-rs |
@@ -132,6 +137,7 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 | regex | 1.13.1 | The Rust Project Developers, Andrew Gallant <jamslam@gmail.com> | https://github.com/rust-lang/regex |
 | regex-automata | 0.4.18 | The Rust Project Developers, Andrew Gallant <jamslam@gmail.com> | https://github.com/rust-lang/regex |
 | regex-syntax | 0.8.11 | The Rust Project Developers, Andrew Gallant <jamslam@gmail.com> | https://github.com/rust-lang/regex |
+| rustc-hash | 2.1.3 | The Rust Project Developers | https://github.com/rust-lang/rustc-hash |
 | rustc_version | 0.4.1 | unrecorded | https://github.com/djc/rustc-version-rs |
 | rustversion | 1.0.23 | David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/rustversion |
 | secret-service | 4.0.0 | Walther Chen <walther.chen@gmail.com> | https://github.com/hwchen/secret-service-rs.git |
@@ -150,7 +156,9 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 | shlex | 2.0.1 | comex <comexk@gmail.com>, Fenhl <fenhl@fenhl.net>, Adrian Taylor <adetaylor@chromium.org>, Alex Touchet <alextouchet@outlook.com>, Daniel Parks <dp+git@oxidized.org>, Garrett Berg <googberg@gmail.com> | https://github.com/comex/rust-shlex |
 | signal-hook-registry | 1.4.8 | Michal 'vorner' Vaner <vorner@vorner.cz>, Masaki Hara <ackie.h.gmai@gmail.com> | https://github.com/vorner/signal-hook |
 | signature | 2.2.0 | RustCrypto Developers | https://github.com/RustCrypto/traits/tree/master/signature |
+| smallvec | 1.16.6 | The Servo Project Developers | https://github.com/smallvec/smallvec |
 | spki | 0.7.3 | RustCrypto Developers | https://github.com/RustCrypto/formats/tree/master/spki |
+| stable_deref_trait | 1.2.1 | Robert Grosse <n210241048576@gmail.com> | https://github.com/storyyeller/stable_deref_trait |
 | static_assertions | 1.1.0 | Nikolai Vazquez | https://github.com/nvzqz/static-assertions-rs |
 | syn | 2.0.119 | David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/syn |
 | syn | 3.0.9 | David Tolnay <dtolnay@gmail.com> | https://github.com/dtolnay/syn |
@@ -212,6 +220,7 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 | endi | 1.1.1 | Zeeshan Ali Khan <zeenix@gmail.com> | https://github.com/zeenix/endi |
 | fastcdc | 3.2.1 | Nathan Fiedler <nathanfiedler@fastmail.fm> | https://github.com/nlfiedler/fastcdc-rs |
 | generic-array | 0.14.7 | Bartłomiej Kamiński <fizyk20@gmail.com>, Aaron Trent <novacrazy@gmail.com> | https://github.com/fizyk20/generic-array.git |
+| libm | 0.2.16 | Alex Crichton <alex@alexcrichton.com>, Amanieu d'Antras <amanieu@gmail.com>, Jorge Aparicio <japaricious@gmail.com>, Trevor Gross <tg@trevorgross.com> | https://github.com/rust-lang/compiler-builtins |
 | libmimalloc-sys | 0.1.49 | Octavian Oncescu <octavonce@gmail.com> | https://github.com/purpleprotocol/mimalloc_rust/tree/master/libmimalloc-sys |
 | memoffset | 0.9.1 | Gilad Naaman <gilad.naaman@gmail.com> | https://github.com/Gilnaa/memoffset |
 | mimalloc | 0.1.52 | Octavian Oncescu <octavonce@gmail.com>, Vincent Rouillé <vincent@speedy37.fr>, Thom Chiovoloni <chiovolonit@gmail.com> | https://github.com/purpleprotocol/mimalloc_rust |
@@ -233,6 +242,38 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 | zvariant | 4.2.0 | Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/dbus2/zbus/ |
 | zvariant_derive | 4.2.0 | Zeeshan Ali Khan <zeeshanak@gnome.org> | https://github.com/dbus2/zbus/ |
 | zvariant_utils | 2.1.0 | Zeeshan Ali Khan <zeeshanak@gnome.org>, turbocooler <turbocooler@cocaine.ninja> | https://github.com/dbus2/zbus/ |
+
+## Apache-2.0 WITH LLVM-exception
+
+| crate | version | holder | source |
+|---|---|---|---|
+| cranelift-assembler-x64 | 0.137.3 | unrecorded | crates.io |
+| cranelift-assembler-x64-meta | 0.137.3 | unrecorded | crates.io |
+| cranelift-bforest | 0.137.3 | The Cranelift Project Developers | https://github.com/bytecodealliance/wasmtime |
+| cranelift-bitset | 0.137.3 | The Cranelift Project Developers | https://github.com/bytecodealliance/wasmtime |
+| cranelift-codegen | 0.137.3 | The Cranelift Project Developers | https://github.com/bytecodealliance/wasmtime |
+| cranelift-codegen-meta | 0.137.3 | The Cranelift Project Developers | https://github.com/bytecodealliance/wasmtime |
+| cranelift-codegen-shared | 0.137.3 | The Cranelift Project Developers | https://github.com/bytecodealliance/wasmtime |
+| cranelift-control | 0.137.3 | The Cranelift Project Developers | https://github.com/bytecodealliance/wasmtime |
+| cranelift-entity | 0.137.3 | The Cranelift Project Developers | https://github.com/bytecodealliance/wasmtime |
+| cranelift-frontend | 0.137.3 | The Cranelift Project Developers | https://github.com/bytecodealliance/wasmtime |
+| cranelift-isle | 0.137.3 | The Cranelift Project Developers | https://github.com/bytecodealliance/wasmtime/tree/main/cranelift/isle |
+| cranelift-srcgen | 0.137.3 | The Wasmtime Project Developers | https://github.com/bytecodealliance/wasmtime |
+| regalloc2 | 0.15.3 | Chris Fallin <chris@cfallin.org>, Mozilla SpiderMonkey Developers | https://github.com/bytecodealliance/regalloc2 |
+| target-lexicon | 0.13.6 | Dan Gohman <sunfish@mozilla.com> | https://github.com/bytecodealliance/target-lexicon |
+| wasmtime-internal-core | 50.0.3 | The Wasmtime Project Developers | crates.io |
+
+## FSL-1.1-ALv2
+
+| crate | version | holder | source |
+|---|---|---|---|
+| cig-bytecode | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
+| cig-copy | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
+| cig-native | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
+| cig-pass | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
+| cig-vault | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
+| cigarscript | 0.1.0 | unrecorded | https://github.com/otmof-ops/cigar-script |
+| cigscript | 1.25.0 | unrecorded | https://github.com/otmof-ops/cig-script |
 
 ## MIT OR Unlicense
 
@@ -256,17 +297,6 @@ cigcompile and cig-runtime link the Rust crates below, pulled as packages (nothi
 | zstd | 0.13.4 | Alexandre Bury <alexandre.bury@gmail.com> | https://github.com/gyscos/zstd-rs |
 | zstd-safe | 7.4.0 | Alexandre Bury <alexandre.bury@gmail.com> | https://github.com/gyscos/zstd-rs |
 | zstd-sys | 2.1.2+zstd.1.5.7 | Alexandre Bury <alexandre.bury@gmail.com> | https://github.com/gyscos/zstd-rs |
-
-## FSL-1.1-ALv2
-
-| crate | version | holder | source |
-|---|---|---|---|
-| cig-bytecode | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
-| cig-copy | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
-| cig-pass | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
-| cig-vault | 0.1.0 | unrecorded | https://github.com/otmof-ops/cig-script |
-| cigarscript | 0.1.0 | unrecorded | https://github.com/otmof-ops/cigar-script |
-| cigscript | 1.25.0 | unrecorded | https://github.com/otmof-ops/cig-script |
 
 ## Apache-2.0 OR Apache-2.0 WITH LLVM-exception OR MIT
 

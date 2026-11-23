@@ -1,8 +1,24 @@
+[workspace]
+members = [".", "crates/cig-codegen"]
+
+# CigScript, pinned once for the workspace (`fuzz/Cargo.toml` names it
+# again: its own workspace). Between cig's releases the pin is a commit
+# of cig-script's main, as here: cig 1.25.0 with the VM's call into
+# native code and the inference stage c compiles from. A release of
+# cigcompile pins cig's release tag.
+[workspace.dependencies]
+cigscript = { git = "https://github.com/otmof-ops/cig-script", rev = "520ad097cd88679a203195f9eb3fe78a420dc323" }
+# What a program and its compiler agree on about native code (stage c):
+# the `native` section's layout. cig-script's crate, at cigscript's pin.
+cig-native = { git = "https://github.com/otmof-ops/cig-script", rev = "520ad097cd88679a203195f9eb3fe78a420dc323" }
+
 [package]
 name = "cigcompile"
 version = "0.5.1"
 edition = "2021"
-rust-version = "1.82"
+# Cranelift, which `crates/cig-codegen` compiles native code with, needs
+# 1.97.
+rust-version = "1.97"
 description = "CigCompile: CigScript scripts as programs that run with nothing installed"
 license = "FSL-1.1-ALv2"
 repository = "https://github.com/otmof-ops/cig-compile"
@@ -29,7 +45,10 @@ path = "src/bin/cig-runtime.rs"
 alloc-count = []
 
 [dependencies]
-cigscript = { git = "https://github.com/otmof-ops/cig-script", tag = "v1.25.0" }
+cigscript = { workspace = true }
+cig-native = { workspace = true }
+# The code generator for stage c: typed functions of the IR to machine code.
+cig-codegen = { path = "crates/cig-codegen" }
 # `.cigar` files and `--strength` (cigar-script#7): the checker and lowering
 # that `cigar check` is, pinned the way cigscript is, to a cigar-script commit.
 # The rev here is built on cigscript v1.20.0's AST and keeps its own cigscript

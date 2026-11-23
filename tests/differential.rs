@@ -101,6 +101,14 @@ struct Tally {
     passed: usize,
     skipped: Vec<String>,
     failed: Vec<String>,
+    /// Cases whose `--stage c` build held native code: the ones a stage c
+    /// program is compared for.
+    native: usize,
+    /// The typed cases (the corpus under `typed/` and the typed random
+    /// programs) that were built at stage c, and those of them whose
+    /// build held native code.
+    typed: usize,
+    typed_native: usize,
 }
 
 fn main() {
@@ -226,12 +234,28 @@ fn main() {
             }
         }
     }
+    // The typed programs are what holds native code to the tree-walker.
+    // A build that stopped making any would leave them comparing stage b
+    // twice, and this suite passing: where native code can be had, most
+    // of them must have had some.
+    let native_here = cfg!(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ));
+    if native_here && std::env::var_os("DIFF_AS").is_none() && tally.typed_native * 2 < tally.typed
+    {
+        tally.failed.push(format!(
+            "stage c: {} of the {} typed programs had native code, and most of them should",
+            tally.typed_native, tally.typed
+        ));
+    }
     println!(
-        "\ndifferential: {} same, {} skipped, {} differ, in {:.0} s",
+        "\ndifferential: {} same, {} skipped, {} differ, in {:.0} s ({} programs with native code at stage c)",
         tally.passed,
         tally.skipped.len(),
         tally.failed.len(),
-        started.elapsed().as_secs_f64()
+        started.elapsed().as_secs_f64(),
+        tally.native
     );
     for s in &tally.skipped {
         println!("  skipped {s}");
@@ -494,7 +518,8 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
     }
     // Compiled at each stage (differential_stage_b_is_identical): stage a
     // runs the script on the tree-walker, stage b its bytecode on the VM,
-    // and both are held to `cig run`. A script that does not check is
+    // stage c the same with native code for the functions that compile to
+    // it, and each is held to `cig run`. A script that does not check is
     // refused by the compiler exactly as `cig run` refuses it.
     lay_out();
     let mut c = Command::new(&tools.cc);
@@ -540,6 +565,34 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
             false,
             || format!("built at stage a, and at stage b: {built_b:?}"),
         ),
+    }
+    // Stage c, where there is one: the build makes the stage b program,
+    // with a note, of a script none of whose functions compiles to native
+    // code and for a machine that does not load it. That program is the
+    // one just compared, so it is not compared twice.
+    if programs.len() == 2 {
+        let mut c = Command::new(&tools.cc);
+        env(&mut c);
+        let prog_c = prog_at("c");
+        let built_c = run(c
+            .args(["build", &build_name, "--stage", "c", "-o"])
+            .arg(&prog_c));
+        let typed = case.script.contains("typed");
+        tally.typed += usize::from(typed);
+        match built_c.code {
+            Some(0) if built_c.stderr.contains("is a stage b program") => {}
+            Some(0) => {
+                tally.native += 1;
+                tally.typed_native += usize::from(typed);
+                programs.push(("c", prog_c));
+            }
+            _ => report(
+                tally,
+                &format!("{} (built at stage c)", case.script),
+                false,
+                || format!("built at stage b, and at stage c: {built_c:?}"),
+            ),
+        }
     }
     // The interpreter against itself, once for each mode.
     let mut controlled: Vec<String> = Vec::new();
@@ -607,20 +660,21 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
                 }
             }
             for (stage, at) in &programs {
-                let name = if *stage == "b" {
-                    format!("{name} stage b")
-                } else {
+                let name = if *stage == "a" {
                     name.clone()
+                } else {
+                    format!("{name} stage {stage}")
                 };
                 let (b, tb, jb, eb) = side(Some(at));
                 let (ca, cb) = (canon(&a, true, json), canon(&b, false, json));
                 let mut same = ca == cb && ta == tb && ja == jb;
                 // Each record names the engine that ran it, and each side
                 // has one right answer: `cig run` here and a stage a
-                // program run on the tree-walker, a stage b program on the
-                // VM. (The value is left out of the records compared
-                // above: it is the one field that differs by design.)
-                let want = if *stage == "b" { "vm" } else { "tree" };
+                // program run on the tree-walker, a stage b or c program
+                // on the VM. (The value is left out of the records
+                // compared above: it is the one field that differs by
+                // design.)
+                let want = if *stage == "a" { "tree" } else { "vm" };
                 let engines_right = ea.iter().all(|e| e == "tree") && eb.iter().all(|e| e == want);
                 same &= engines_right;
                 // The .out files are written with Unix paths (CigScript's own
@@ -658,13 +712,16 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
             }
         }
     }
-    if programs.len() == 2 && std::env::var("DIFF_BUDGETS").map_or(true, |v| v != "0") {
-        the_step_budget_stops_on_the_same_line(tools, case, &prog_b, &lay_out, &env, tally);
+    if std::env::var("DIFF_BUDGETS").map_or(true, |v| v != "0") {
+        for (stage, at) in programs.iter().filter(|(stage, _)| *stage != "a") {
+            the_step_budget_stops_on_the_same_line(tools, case, stage, at, &lay_out, &env, tally);
+        }
     }
 }
 
-/// cig-compile#31: `--max-steps` stops the stage b program on the step,
-/// the line and the code the interpreter stops on, for the case's first
+/// cig-compile#31: `--max-steps` stops the stage b program, and the
+/// stage c program, on the step, the line and the code the interpreter
+/// stops on, for the case's first
 /// one-step real run. Every budget from 1 to the run's total and one past
 /// it when the total is at most 100 steps (or with DIFF_BUDGETS=all);
 /// past that the first 50, fifty more spread over the rest, and the last
@@ -673,7 +730,8 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
 fn the_step_budget_stops_on_the_same_line(
     tools: &Tools,
     case: &Case,
-    prog_b: &Path,
+    stage: &str,
+    prog: &Path,
     lay_out: &dyn Fn(),
     env: &dyn Fn(&mut Command),
     tally: &mut Tally,
@@ -695,7 +753,7 @@ fn the_step_budget_stops_on_the_same_line(
     let side = |program: bool, max: u64| -> Outcome {
         lay_out();
         let mut c = if program {
-            Command::new(prog_b)
+            Command::new(prog)
         } else {
             Command::new(&tools.cig)
         };
@@ -751,8 +809,13 @@ fn the_step_budget_stops_on_the_same_line(
     report(
         tally,
         &format!(
-            "{} the_step_budget_stops_on_the_same_line ({} budgets of {total} steps)",
+            "{} the_step_budget_stops_on_the_same_line{} ({} budgets of {total} steps)",
             case.script,
+            if stage == "b" {
+                String::new()
+            } else {
+                format!(" stage {stage}")
+            },
             budgets.len()
         ),
         differ.is_none(),

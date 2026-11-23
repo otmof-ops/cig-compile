@@ -81,7 +81,7 @@ Two sizes differ from #30's table, on purpose. `strbuild` appends 10,000 times, 
 
 ## Stage A, measured
 
-The table below is cig 1.15.0's, measured with the references as they were before the rewrite of 2026-11-15; [BENCHMARKS-2026-11-15.md](BENCHMARKS-2026-11-15.md) measures cig 1.24.0 and stage `b` programs against the rewritten ones.
+The table below is cig 1.15.0's, measured with the references as they were before the rewrite of 2026-11-15; [BENCHMARKS-2026-11-23-stage-c.md](BENCHMARKS-2026-11-23-stage-c.md) is the first reading of stage `c`'s native code, on three programs made of the functions it compiles; [BENCHMARKS-2026-11-15.md](BENCHMARKS-2026-11-15.md) measures cig 1.24.0 and stage `b` programs against the rewritten ones.
 
 `cigcompile bench --ref --runs 5`, cig 1.15.0, on an Intel Core Ultra 7 255H (16 cores, Linux 6.17, governor powersave), Python 3.12, Node 18 and Rust stable; medians in ms:
 
