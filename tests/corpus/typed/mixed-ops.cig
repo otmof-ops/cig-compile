@@ -1,0 +1,12 @@
+# Every operator on an int and a float, both orders. The int is
+# converted to float.
+pull add(a, b) { snuff a + b }
+pull sub(a, b) { snuff a - b }
+pull mul(a, b) { snuff a * b }
+pull div(a, b) { snuff a / b }
+
+exhale add(1, 0.5), add(0.5, 1)
+exhale sub(3, 0.25), sub(0.25, 3)
+exhale mul(2, 0.5), mul(0.5, 2)
+exhale div(7, 2.0), div(2.0, 7), div(0, 0.5)
+exhale add(-1, -0.0), mul(0, 1e-300), mul(0, 1e308)

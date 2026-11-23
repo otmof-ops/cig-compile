@@ -1,0 +1,12 @@
+# The same function called with four different rows of argument types:
+# (int, int), (float, float), (int, float), (float, int). Each row is
+# its own specialisation under the design.
+pull op(a, b) {
+  snuff a + b
+}
+
+exhale op(1, 2)
+exhale op(1.5, 2.5)
+exhale op(1, 2.5)
+exhale op(1.5, 2)
+exhale op(0, 0), op(0.0, 0.0), op(0, 0.0), op(0.0, 0)

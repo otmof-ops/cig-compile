@@ -1,0 +1,14 @@
+# Comparisons at the extremes: `big` vs `small`, each operator.
+pull lt(a, b) { snuff a < b }
+pull le(a, b) { snuff a <= b }
+pull gt(a, b) { snuff a > b }
+pull ge(a, b) { snuff a >= b }
+pull eq(a, b) { snuff a == b }
+pull ne(a, b) { snuff a != b }
+
+stick big = 9223372036854775807
+stick small = -big - 1
+
+exhale lt(small, big), le(small, big), gt(small, big), ge(small, big)
+exhale lt(big, big), le(big, big), gt(big, big), ge(big, big)
+exhale eq(small, small), eq(big, small), ne(big, small), ne(big, big)

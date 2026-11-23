@@ -18,6 +18,8 @@
 mod gen;
 #[path = "differential/real_world.rs"]
 mod real_world;
+#[path = "differential/typed.rs"]
+mod typed;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -153,6 +155,51 @@ fn main() {
     for case in real_world::cases() {
         if case.script.contains(&filter) {
             run_case(&tools, &src, &case, &mut tally);
+        }
+    }
+    // The typed corpus: small programs whose arithmetic lives
+    // inside functions that take and return only ints, floats, bools
+    // and null. Each program rides every stage the suite already runs.
+    // Stage `c` is one more value in `programs` later; the comparison
+    // loop already reads each `(stage, path)` row it finds.
+    for case in typed::cases() {
+        if case.script.contains(&filter) {
+            run_case(&tools, &src, &case, &mut tally);
+        }
+    }
+    // The typed generator's hand-written edges: NaN as a
+    // condition, the exact int-vs-float boundary at 2^53, `-0.0`
+    // versus `0.0`. Both sides run each one.
+    for (name, text) in gen::typed_edges() {
+        let case = edge_case(&format!("typed-{name}"), &text);
+        if case.script.contains(&filter) {
+            run_case(&tools, &src, &case, &mut tally);
+        }
+    }
+    // The typed random mode: DIFF_TYPED_RANDOM=<seed>:<count>
+    // makes `count` typed programs from seed `seed` and compares each
+    // like the hand-written corpus. A program that differs is shrunk
+    // to the fewest statements that still differ, as DIFF_RANDOM does.
+    if let Some((seed, count)) = std::env::var("DIFF_TYPED_RANDOM").ok().and_then(|v| {
+        let (a, b) = v.split_once(':')?;
+        Some((a.parse::<u64>().ok()?, b.parse::<u64>().ok()?))
+    }) {
+        for k in 0..count {
+            let seed = seed.wrapping_add(k);
+            let stmts = gen::typed_program(seed);
+            let case = typed::random_case(seed, &stmts);
+            if !case.script.contains(&filter) {
+                continue;
+            }
+            let before = tally.failed.len();
+            run_case(&tools, &src, &case, &mut tally);
+            if tally.failed.len() > before {
+                let smallest = shrink_typed(&tools, &src, seed, stmts);
+                println!(
+                    "the smallest typed program that differs, from seed {seed}:\n{}\n",
+                    smallest.join("\n")
+                );
+            }
         }
     }
     // Random programs (#7): DIFF_RANDOM=<seed>:<count>. A program that
@@ -758,6 +805,23 @@ fn shrink(tools: &Tools, src: &Path, seed: u64, mut stmts: Vec<String>) -> Vec<S
         candidate.remove(k);
         let mut t = Tally::default();
         run_case(tools, src, &random_case(seed, &candidate), &mut t);
+        if !t.failed.is_empty() {
+            stmts = candidate;
+        }
+    }
+    stmts
+}
+
+/// The same shrinker for the typed random mode, through
+/// [`typed::random_case`] so the case is named like its full siblings.
+fn shrink_typed(tools: &Tools, src: &Path, seed: u64, mut stmts: Vec<String>) -> Vec<String> {
+    let mut k = stmts.len();
+    while k > 0 {
+        k -= 1;
+        let mut candidate = stmts.clone();
+        candidate.remove(k);
+        let mut t = Tally::default();
+        run_case(tools, src, &typed::random_case(seed, &candidate), &mut t);
         if !t.failed.is_empty() {
             stmts = candidate;
         }

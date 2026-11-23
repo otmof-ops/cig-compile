@@ -1,0 +1,17 @@
+# Mutual recursion: each function's values stay a bool, its argument an
+# int. The two cross-calls land on a single specialisation row per side.
+pull is_even(n) {
+  if n == 0 {
+    snuff true
+  }
+  snuff is_odd(n - 1)
+}
+
+pull is_odd(n) {
+  if n == 0 {
+    snuff false
+  }
+  snuff is_even(n - 1)
+}
+
+exhale is_even(0), is_even(1), is_even(6), is_odd(7), is_odd(12)

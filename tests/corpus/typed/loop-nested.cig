@@ -1,0 +1,12 @@
+# A nested pair of loops inside a typed function.
+pull nested(n) {
+  roll s = 0
+  for i in 0..n {
+    for j in 0..n {
+      s += i * j
+    }
+  }
+  snuff s
+}
+
+exhale nested(0), nested(1), nested(5), nested(10)

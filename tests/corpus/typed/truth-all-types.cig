@@ -1,0 +1,15 @@
+# An int, a float, a bool and null in every truth position: `if`, `!`,
+# `and`, `or`, `??`. Truth of an int is `!= 0`; of a float, `!= 0.0`
+# (a NaN is true); null and false are false; everything else is true.
+pull branch(x) { if x { snuff 1 } else { snuff 0 } }
+pull neg(x) { snuff not x }
+pull band(a, b) { snuff a and b }
+pull bor(a, b) { snuff a or b }
+pull coal(a, b) { snuff a ?? b }
+
+exhale branch(0), branch(1), branch(-1)
+exhale branch(0.0), branch(-0.0), branch(0.5), branch(true), branch(false), branch(null)
+exhale neg(0), neg(1), neg(0.0), neg(0.5), neg(true), neg(false), neg(null)
+exhale band(0, 1), band(1, 0), band(true, 1), band(null, 1)
+exhale bor(0, 2), bor(1, 2), bor(null, 7), bor(false, 0.5)
+exhale coal(null, 3), coal(0, 3), coal(false, 3), coal(0.0, 3)

@@ -1,0 +1,19 @@
+# The call depth: recursion to exactly the limit, then one past it.
+# `MAX_CALL_DEPTH` is 4,000 in `src/interp/mod.rs`; a chain of 4,000
+# `down` frames fits (`down(3999)`), and 4,001 does not (`down(4000)`
+# raises `E506`).
+pull down(n) {
+  if n <= 0 {
+    snuff 0
+  }
+  snuff down(n - 1) + 1
+}
+
+exhale down(10)
+exhale down(100)
+exhale down(3999)
+try {
+  exhale down(4000)
+} ashtray e {
+  exhale "caught", e.kind
+}

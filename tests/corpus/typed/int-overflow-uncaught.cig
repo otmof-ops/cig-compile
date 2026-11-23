@@ -1,0 +1,8 @@
+# An uncaught overflow leaves the program with a non-zero exit code and
+# the same message text on both sides.
+pull mul(a, b) {
+  snuff a * b
+}
+
+stick big = 9223372036854775807
+exhale mul(big, 2)

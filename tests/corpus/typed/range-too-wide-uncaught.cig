@@ -1,0 +1,9 @@
+# E512 uncaught: the exit code and the error text are compared.
+pull first(a, b) {
+  for i in a..b {
+    snuff i
+  }
+  snuff 0
+}
+
+exhale first(0, 10000001)

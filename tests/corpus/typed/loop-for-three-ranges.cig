@@ -1,0 +1,21 @@
+# `for i in a..b` at the three shapes of the bounds: a < b, a == b (empty),
+# and a > b (empty: cig's ranges are half-open and never reverse).
+pull range_count(a, b) {
+  roll n = 0
+  for _i in a..b {
+    n += 1
+  }
+  snuff n
+}
+
+pull range_sum(a, b) {
+  roll acc = 0
+  for i in a..b {
+    acc += i
+  }
+  snuff acc
+}
+
+exhale range_count(0, 5), range_count(4, 4), range_count(7, 3)
+exhale range_sum(0, 5), range_sum(4, 4), range_sum(7, 3)
+exhale range_sum(-3, 3)

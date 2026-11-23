@@ -1,0 +1,12 @@
+# A function that calls a builtin in one branch only: a builtin reached
+# from a typed function still has to behave the same on both sides,
+# because the branch may run under any row the caller gave.
+pull describe(flag, n) {
+  if flag {
+    snuff str(n)
+  }
+  snuff "skipped"
+}
+
+exhale describe(true, 0), describe(true, 42), describe(false, 0)
+exhale describe(true, -1), describe(false, 7)

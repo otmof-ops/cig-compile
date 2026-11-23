@@ -1,0 +1,13 @@
+# The same operators at i64's edges that do NOT overflow: `big - 1`,
+# `small + 1`, `big + small` (= -1), `big * 1`, `small * 1`. The point
+# is that native code must give the same answer, not call its exit.
+pull add(a, b) { snuff a + b }
+pull sub(a, b) { snuff a - b }
+pull mul(a, b) { snuff a * b }
+
+stick big = 9223372036854775807
+stick small = -big - 1
+
+exhale add(big, -1), add(small, 1), add(big, small)
+exhale sub(big, 0), sub(small, 0), sub(big, big), sub(small, small)
+exhale mul(big, 1), mul(small, 1), mul(-1, big)

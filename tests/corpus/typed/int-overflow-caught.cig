@@ -1,0 +1,30 @@
+# `+`, `-`, `*` at i64's edges, each overflow caught by a `try` around
+# the call. The caught `.message` and `.code` are printed; the exit code
+# stays 0.
+pull add(a, b) {
+  snuff a + b
+}
+
+pull sub(a, b) {
+  snuff a - b
+}
+
+pull mul(a, b) {
+  snuff a * b
+}
+
+stick big = 9223372036854775807
+stick small = -big - 1
+
+for case in ["add-ok", "add-of", "sub-ok", "sub-of", "mul-ok", "mul-of"] {
+  try {
+    if case == "add-ok" { exhale add(big - 1, 1) }
+    if case == "add-of" { exhale add(big, 1) }
+    if case == "sub-ok" { exhale sub(small + 1, 1) }
+    if case == "sub-of" { exhale sub(small, 1) }
+    if case == "mul-ok" { exhale mul(big, 1) }
+    if case == "mul-of" { exhale mul(big, 2) }
+  } ashtray e {
+    exhale case, e.kind, e.message
+  }
+}

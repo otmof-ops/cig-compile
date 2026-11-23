@@ -1,0 +1,11 @@
+# A function whose parameter is reassigned to another type inside it:
+# an int in, a float stored over it, a float returned. The outer type
+# does not "stick" after the reassignment.
+pull coerce(x) {
+  roll v = x
+  v = v + 0.5
+  snuff v
+}
+
+exhale coerce(1), coerce(0), coerce(-3)
+exhale coerce(1.0), coerce(2.5)

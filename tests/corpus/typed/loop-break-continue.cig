@@ -1,0 +1,28 @@
+# `break` and `continue` inside a typed loop. The counter leaves early
+# on `break`; `continue` skips the even steps.
+pull first_over(n) {
+  roll i = 0
+  while i < 100 {
+    if i > n {
+      break
+    }
+    i += 1
+  }
+  snuff i
+}
+
+pull sum_odd_under(n) {
+  roll i = 0
+  roll acc = 0
+  while i < n {
+    i += 1
+    if i % 2 == 0 {
+      continue
+    }
+    acc += i
+  }
+  snuff acc
+}
+
+exhale first_over(0), first_over(10), first_over(99)
+exhale sum_odd_under(0), sum_odd_under(5), sum_odd_under(10)
