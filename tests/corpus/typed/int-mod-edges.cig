@@ -1,0 +1,18 @@
+# `%` with a zero divisor (E502), with -1 (always 0), with negative
+# operands. Each error is caught by a `try` around the call.
+pull rem(a, b) {
+  snuff a % b
+}
+
+for case in ["ok", "zero", "neg-one", "neg-left", "neg-right", "both-neg"] {
+  try {
+    if case == "ok"        { exhale rem(10, 3) }
+    if case == "zero"      { exhale rem(5, 0) }
+    if case == "neg-one"   { exhale rem(42, -1) }
+    if case == "neg-left"  { exhale rem(-7, 3) }
+    if case == "neg-right" { exhale rem(7, -3) }
+    if case == "both-neg"  { exhale rem(-7, -3) }
+  } ashtray e {
+    exhale case, e.kind, e.message
+  }
+}

@@ -1,0 +1,12 @@
+# `+`, `-`, `*`, `/` on floats, `-0.0`, large and small values, and the
+# comparisons that have an answer.
+pull add(a, b) { snuff a + b }
+pull sub(a, b) { snuff a - b }
+pull mul(a, b) { snuff a * b }
+pull div(a, b) { snuff a / b }
+pull lt(a, b) { snuff a < b }
+
+exhale add(0.1, 0.2), add(-0.0, 0.0), sub(1.0, 2.0), mul(1.5, 2.5)
+exhale div(1.0, 3.0), div(7.0, 2.0), div(-0.0, 1.0)
+exhale add(1e308, 1e308), sub(1e-300, 1e-300), mul(1e-300, 1e-300)
+exhale lt(-0.0, 0.0), lt(0.0, -0.0), lt(1e-300, 1.0), lt(1.0, 1e308)

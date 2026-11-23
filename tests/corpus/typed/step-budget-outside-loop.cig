@@ -1,0 +1,12 @@
+# The budget wording differs inside and outside a loop: cig's own
+# E515 has one line for each. This one spends its budget in a chain of
+# calls, the body outside any loop in the caller.
+pull succ(x) { snuff x + 1 }
+
+pull stack(n) {
+  snuff succ(succ(succ(succ(succ(n)))))
+}
+
+exhale stack(0)
+exhale stack(10)
+exhale stack(100)

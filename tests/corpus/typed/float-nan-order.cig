@@ -1,0 +1,24 @@
+# A NaN reaching an ordering: `(inf - inf) < 1.0` fails with "cannot
+# order a NaN". Each ordering is tried inside a try, then one uncaught.
+pull sub_f(a, b) { snuff a - b }
+pull big_mul(a, b) { snuff a * b }
+pull lt(a, b) { snuff a < b }
+pull le(a, b) { snuff a <= b }
+pull gt(a, b) { snuff a > b }
+pull ge(a, b) { snuff a >= b }
+
+stick inf = big_mul(1e308, 10.0)
+stick nan = sub_f(inf, inf)
+
+for case in ["lt", "le", "gt", "ge", "lt-rev", "nan-vs-int"] {
+  try {
+    if case == "lt"         { exhale lt(nan, 1.0) }
+    if case == "le"         { exhale le(nan, 1.0) }
+    if case == "gt"         { exhale gt(nan, 1.0) }
+    if case == "ge"         { exhale ge(nan, 1.0) }
+    if case == "lt-rev"     { exhale lt(1.0, nan) }
+    if case == "nan-vs-int" { exhale lt(nan, 0) }
+  } ashtray e {
+    exhale case, e.message
+  }
+}

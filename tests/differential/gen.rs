@@ -548,3 +548,374 @@ pub fn edges() -> Vec<(&'static str, String)> {
         ),
     ]
 }
+
+/// The typed generator (#39): a program of functions whose every value
+/// is an int, a float, a bool or null, and a top level that calls each
+/// with several rows of argument types and prints the result, or the
+/// caught error's kind, message and line. These are the functions stage
+/// `c` runs as native code (`docs/decisions/0005`); the suite holds
+/// every stage it runs to the tree-walker on each program made here.
+///
+/// A program ends: there are no `while true`, every `for` is bounded by
+/// a small count, and every call carries a decreasing `fuel` so
+/// recursion stops. Constants are drawn from the edges of i64 and from
+/// the edges of `f64` (`0`, `1`, `-1`, `i64::MAX`, `i64::MIN`, `0.0`,
+/// `-0.0`, `1e308`, `1e-300`) as often as from the middle. Deterministic
+/// from `seed`.
+pub fn typed_program(seed: u64) -> Vec<String> {
+    let mut g = TypedGen {
+        rng: Rng::new(seed ^ 0xA5A5_5A5A_5A5A_A5A5),
+        funcs: Vec::new(),
+        names: 0,
+    };
+    let n = 1 + g.rng.below(4);
+    let mut out = Vec::new();
+    for _ in 0..n {
+        out.push(g.function());
+    }
+    // Every function is called from the top level with several rows,
+    // each inside a try so an overflow or an ordered NaN is caught and
+    // printed instead of ending the program.
+    for i in 0..g.funcs.len() {
+        let name = g.funcs[i].name.clone();
+        let arity = g.funcs[i].arity;
+        let rows = 2 + g.rng.below(3);
+        for _ in 0..rows {
+            let args: Vec<String> = (0..arity).map(|_| g.edge_arg()).collect();
+            let call = format!("{name}({})", args.join(", "));
+            out.push(format!(
+                "try {{\n  exhale \"{name}\", {call}\n}} ashtray e {{\n  exhale \"{name}\", \"err\", e.kind, e.message, e.line\n}}"
+            ));
+        }
+    }
+    out
+}
+
+/// The hand-written edge programs for the typed mode, which a seed
+/// rarely reaches: a NaN as a condition, an int beside the float it
+/// rounds to at 2^53, and `-0.0` beside `0.0`. Each program's values
+/// stay int, float, bool or null.
+pub fn typed_edges() -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "nan-as-condition",
+            [
+                "pull sub_f(a, b) { snuff a - b }",
+                "pull big_mul(a, b) { snuff a * b }",
+                "stick inf = big_mul(1e308, 10.0)",
+                "stick nan = sub_f(inf, inf)",
+                "if nan { exhale \"nan is truthy\" } else { exhale \"nan is falsy\" }",
+                "exhale not nan, nan == nan, nan != nan, nan ?? 7",
+            ]
+            .join("\n")
+                + "\n",
+        ),
+        (
+            "two-pow-53",
+            [
+                "pull eq(a, b) { snuff a == b }",
+                "stick big_int = 9007199254740993",
+                "stick big_flt = 9007199254740992.0",
+                "exhale eq(big_int, big_flt), eq(big_int - 1, big_flt)",
+            ]
+            .join("\n")
+                + "\n",
+        ),
+        (
+            "neg-zero",
+            [
+                "pull add(a, b) { snuff a + b }",
+                "exhale add(0.0, -0.0), add(-0.0, -0.0), add(-0.0, 0.0)",
+                "exhale 0.0 == -0.0, -0.0 < 0.0",
+            ]
+            .join("\n")
+                + "\n",
+        ),
+    ]
+}
+
+/// Per-function state for the typed generator: the name and how many
+/// int-or-float parameters it takes.
+struct TypedFn {
+    name: String,
+    arity: u64,
+}
+
+struct TypedGen {
+    rng: Rng,
+    funcs: Vec<TypedFn>,
+    names: u32,
+}
+
+impl TypedGen {
+    fn fresh(&mut self, prefix: &str) -> String {
+        self.names += 1;
+        format!("{prefix}{}", self.names)
+    }
+
+    /// One constant from i64's and f64's edges as often as from the
+    /// middle. An integer is unparenthesized when it is non-negative
+    /// and parenthesized `(-N)` when it is negative, so a call site
+    /// like `f(-7, 1)` always parses.
+    fn edge_arg(&mut self) -> String {
+        match self.rng.below(16) {
+            // Integers from the edges.
+            0 => "9223372036854775807".to_string(),
+            1 => "(-9223372036854775807 - 1)".to_string(),
+            2 => "0".to_string(),
+            3 => "1".to_string(),
+            4 => "(-1)".to_string(),
+            // Floats from the edges.
+            5 => "0.0".to_string(),
+            6 => "(-0.0)".to_string(),
+            7 => "1.0".to_string(),
+            8 => "(-1.0)".to_string(),
+            9 => "1e308".to_string(),
+            10 => "1e-300".to_string(),
+            11 => "(-1e308)".to_string(),
+            // Smaller mid values: integers.
+            12 | 13 => {
+                let n = self.rng.small();
+                if n < 0 {
+                    format!("({n})")
+                } else {
+                    n.to_string()
+                }
+            }
+            // Smaller mid values: floats.
+            _ => {
+                let lits = ["0.5", "2.5", "(-3.25)", "0.1", "(-0.5)"];
+                lits[self.rng.below(lits.len() as u64) as usize].to_string()
+            }
+        }
+    }
+
+    /// A function of two kinds: a non-recursive body of a few int
+    /// statements and a typed `snuff`, or a bounded recursion of the
+    /// form `if fuel <= 0 { snuff 0 } snuff self(a..., fuel-1) + k`.
+    fn function(&mut self) -> String {
+        let name = self.fresh("tf");
+        let arity = 1 + self.rng.below(4);
+        let params: Vec<String> = (0..arity).map(|i| format!("p{i}")).collect();
+        let recursive = !self.funcs.is_empty() && self.rng.chance(35);
+        let body = if recursive {
+            self.recursive_body(&name, &params)
+        } else {
+            self.straight_body(&params)
+        };
+        self.funcs.push(TypedFn {
+            name: name.clone(),
+            arity,
+        });
+        format!("pull {name}({}) {{\n{body}\n}}", params.join(", "))
+    }
+
+    /// `fuel` is the last param: when zero or less, the function
+    /// returns an int from its own name. Otherwise it calls itself or
+    /// another typed function, with `fuel - 1`. Both sides end.
+    fn recursive_body(&mut self, name: &str, params: &[String]) -> String {
+        let fuel = params.last().cloned().unwrap_or_else(|| "p0".to_string());
+        let inner = if self.funcs.len() >= 2 && self.rng.chance(50) {
+            // Call another generated function.
+            let k = self.rng.below(self.funcs.len() as u64) as usize;
+            let other = self.funcs[k].name.clone();
+            let other_arity = self.funcs[k].arity;
+            let args: Vec<String> = (0..other_arity).map(|_| self.leaf_int(params)).collect();
+            format!("{other}({})", args.join(", "))
+        } else {
+            // Self call with `fuel - 1` in the fuel slot.
+            let args: Vec<String> = params
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    if i + 1 == params.len() {
+                        format!("{p} - 1")
+                    } else {
+                        p.clone()
+                    }
+                })
+                .collect();
+            format!("{name}({})", args.join(", "))
+        };
+        let step = self.leaf_int(params);
+        format!(
+            "  if {fuel} <= 0 {{\n    snuff 0\n  }}\n  snuff {inner} + {step}",
+            fuel = fuel,
+            inner = inner,
+            step = step,
+        )
+    }
+
+    /// A straight-line body: a few locals, a conditional, an optional
+    /// bounded loop, and a `snuff` of an int or a float.
+    fn straight_body(&mut self, params: &[String]) -> String {
+        let mut lines = Vec::new();
+        let locals = self.rng.below(3);
+        let mut locs: Vec<String> = Vec::new();
+        for _ in 0..locals {
+            let v = self.fresh("l");
+            let e = self.int_expr(params, &locs, 2);
+            locs.push(v.clone());
+            lines.push(format!("  roll {v} = {e}"));
+        }
+        if self.rng.chance(45) {
+            let bound = 1 + self.rng.below(6);
+            let i = self.fresh("i");
+            let inner = self.int_expr(params, &locs, 1);
+            let acc = self.fresh("acc");
+            lines.push(format!("  roll {acc} = 0"));
+            lines.push(format!("  for {i} in 0..{bound} {{"));
+            lines.push(format!("    {acc} += {inner} + {i}"));
+            lines.push("  }".to_string());
+            locs.push(acc);
+        }
+        // The returned expression, by the function's declared type.
+        let ret = match self.rng.below(5) {
+            0 => format!("snuff {}", self.bool_expr(params, &locs, 2)),
+            1 | 2 => format!("snuff {}", self.float_expr(params, &locs, 2)),
+            _ => format!("snuff {}", self.int_expr(params, &locs, 2)),
+        };
+        if self.rng.chance(40) {
+            let cond = self.bool_expr(params, &locs, 1);
+            lines.push(format!("  if {cond} {{"));
+            lines.push(format!("    {}", ret));
+            lines.push("  }".to_string());
+            lines.push(format!("  {}", ret));
+        } else {
+            lines.push(format!("  {}", ret));
+        }
+        lines.join("\n")
+    }
+
+    /// A leaf int expression: a parameter, a local, or an edge literal.
+    fn leaf_int(&mut self, params: &[String]) -> String {
+        if !params.is_empty() && self.rng.chance(60) {
+            let k = self.rng.below(params.len() as u64) as usize;
+            return params[k].clone();
+        }
+        if self.rng.chance(20) {
+            return self.edge_arg();
+        }
+        let n = self.rng.small();
+        if n < 0 {
+            format!("({n})")
+        } else {
+            n.to_string()
+        }
+    }
+
+    fn pick_local(&mut self, locs: &[String]) -> Option<String> {
+        if locs.is_empty() {
+            return None;
+        }
+        let k = self.rng.below(locs.len() as u64) as usize;
+        Some(locs[k].clone())
+    }
+
+    fn int_expr(&mut self, params: &[String], locs: &[String], depth: u32) -> String {
+        if depth == 0 || self.rng.chance(45) {
+            if let Some(l) = self.pick_local(locs) {
+                if self.rng.chance(40) {
+                    return l;
+                }
+            }
+            return self.leaf_int(params);
+        }
+        let d = depth - 1;
+        match self.rng.below(7) {
+            0 => format!(
+                "({} + {})",
+                self.int_expr(params, locs, d),
+                self.int_expr(params, locs, d)
+            ),
+            1 => format!(
+                "({} - {})",
+                self.int_expr(params, locs, d),
+                self.int_expr(params, locs, d)
+            ),
+            2 => format!(
+                "({} * {})",
+                self.int_expr(params, locs, d),
+                self.int_expr(params, locs, d)
+            ),
+            3 => format!(
+                "({} % {})",
+                self.int_expr(params, locs, d),
+                1 + self.rng.below(7)
+            ),
+            4 => format!("(-{})", self.int_expr(params, locs, d)),
+            _ => self.leaf_int(params),
+        }
+    }
+
+    fn float_expr(&mut self, params: &[String], locs: &[String], depth: u32) -> String {
+        if depth == 0 || self.rng.chance(50) {
+            let lits = ["0.1", "0.5", "1.0", "(-0.0)", "0.0", "1e308", "1e-300"];
+            return lits[self.rng.below(lits.len() as u64) as usize].to_string();
+        }
+        let d = depth - 1;
+        match self.rng.below(5) {
+            0 => format!(
+                "({} + {})",
+                self.float_expr(params, locs, d),
+                self.float_expr(params, locs, d)
+            ),
+            1 => format!(
+                "({} - {})",
+                self.float_expr(params, locs, d),
+                self.float_expr(params, locs, d)
+            ),
+            2 => format!(
+                "({} * {})",
+                self.float_expr(params, locs, d),
+                self.float_expr(params, locs, d)
+            ),
+            3 => format!(
+                "({} / {})",
+                self.float_expr(params, locs, d),
+                1 + self.rng.below(5)
+            ),
+            // An int converted to a float through a mixed op.
+            _ => format!(
+                "({} + {})",
+                self.int_expr(params, locs, d),
+                self.float_expr(params, locs, d)
+            ),
+        }
+    }
+
+    fn bool_expr(&mut self, params: &[String], locs: &[String], depth: u32) -> String {
+        if depth == 0 {
+            return if self.rng.chance(50) { "true" } else { "false" }.to_string();
+        }
+        let d = depth - 1;
+        match self.rng.below(6) {
+            0 => format!(
+                "{} < {}",
+                self.int_expr(params, locs, d),
+                self.int_expr(params, locs, d)
+            ),
+            1 => format!(
+                "{} == {}",
+                self.int_expr(params, locs, d),
+                self.int_expr(params, locs, d)
+            ),
+            2 => format!(
+                "{} >= {}",
+                self.int_expr(params, locs, d),
+                self.int_expr(params, locs, d)
+            ),
+            3 => format!("not ({})", self.bool_expr(params, locs, d)),
+            4 => format!(
+                "({}) and ({})",
+                self.bool_expr(params, locs, d),
+                self.bool_expr(params, locs, d)
+            ),
+            _ => format!(
+                "({}) or ({})",
+                self.bool_expr(params, locs, d),
+                self.bool_expr(params, locs, d)
+            ),
+        }
+    }
+}

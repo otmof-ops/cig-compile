@@ -1,0 +1,12 @@
+# `==` across int and float: the int is converted to a float first, so
+# 1 == 1.0, and 2^53 + 1 (which no float holds) equals the float 2^53
+# it rounds to.
+pull eq(a, b) { snuff a == b }
+pull ne(a, b) { snuff a != b }
+
+exhale eq(1, 1.0), eq(1, 2.0), eq(0, -0.0), eq(1, 1.5)
+exhale ne(1, 1.0), ne(1, 2.0)
+stick big_int = 9007199254740993
+stick big_flt = 9007199254740992.0
+exhale eq(big_int, big_flt), ne(big_int, big_flt)
+exhale eq(9007199254740992, big_flt)

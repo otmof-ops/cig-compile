@@ -1,0 +1,11 @@
+# `%` on floats is not compiled by the native code generator (0007),
+# but the tree-walker and the VM must still agree today. The error at
+# `% 0.0` is E502; the non-zero cases return a float remainder.
+pull fmod(a, b) { snuff a % b }
+
+exhale fmod(7.0, 2.5), fmod(-7.0, 2.5), fmod(7.0, -2.5)
+try {
+  exhale fmod(1.0, 0.0)
+} ashtray e {
+  exhale "caught", e.kind, e.message
+}

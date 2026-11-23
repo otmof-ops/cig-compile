@@ -1,0 +1,19 @@
+# Float division by 0.0 is E502, like the int case; caught and uncaught.
+pull div(a, b) { snuff a / b }
+
+try {
+  exhale div(1.0, 0.0)
+} ashtray e {
+  exhale "caught 1.0/0.0", e.kind, e.message
+}
+try {
+  exhale div(-1.0, 0.0)
+} ashtray e {
+  exhale "caught -1.0/0.0", e.kind, e.message
+}
+try {
+  exhale div(0.0, 0.0)
+} ashtray e {
+  exhale "caught 0.0/0.0", e.kind, e.message
+}
+exhale div(1.0, -0.0)

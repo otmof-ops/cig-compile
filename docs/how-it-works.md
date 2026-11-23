@@ -173,6 +173,29 @@ that cough and roll back), runs each one, and shrinks a differ to the
 fewest statements that still differ. Every pull request runs 100 from
 a fixed seed; nightly runs a thousand on Linux, macOS and Windows.
 
+A **typed corpus** (`tests/corpus/typed/`, 36 programs) corners
+arithmetic. Each program keeps its arithmetic inside functions that
+take and return only ints, floats, bools and null, the functions stage
+`c` compiles to native code ([decision 0005](decisions/0005-what-goes-native-first.md)),
+and prints from the top level: recursion and mutual recursion, a
+function of eight parameters, `while` and `for` loops over every shape
+of range, `break` and `continue`, integer overflow at both ends of
+`i64` (`E503`), modulo by zero (`E502`) and by -1, the negation of the
+smallest int, float division by `0.0`, a NaN reaching an ordering, a
+NaN as a condition, an int beside the float it rounds to, the truth of
+each type, the call depth at the limit and one past it (`E506`), a
+range wider than the limit (`E512`), and the step budget spent inside
+a function, inside a nested call and outside any loop. Every error is
+there caught, with its kind, message and line printed, and uncaught.
+The suite compares each at every stage it runs.
+
+A **typed random mode** (`DIFF_TYPED_RANDOM=<seed>:<count>`) makes
+more: functions over ints, floats and bools, calls between them
+bounded by a counter, constants drawn from the edges of `i64` and
+`f64` as often as from the middle, and a top level that calls each
+function with several rows of argument types inside a `try`. A program
+that differs is shrunk as `DIFF_RANDOM`'s is.
+
 ## Fuzzing
 
 The compiler is the first reader of code that may come from someone

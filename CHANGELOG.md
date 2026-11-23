@@ -5,6 +5,16 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **The differential suite corners arithmetic.** 36 programs under
+  `tests/corpus/typed/` keep their arithmetic inside functions that take
+  and return only ints, floats, bools and null (what stage `c` compiles
+  to native code): overflow at both ends of `i64`, modulo by zero and by
+  -1, a NaN in an ordering and as a condition, an int beside the float
+  it rounds to, the call depth at the limit and one past it, a range
+  wider than the limit, the step budget spent inside a function and
+  inside a nested call, each error caught and uncaught. A typed random
+  mode (`DIFF_TYPED_RANDOM=<seed>:<count>`) makes more of them. Stage
+  `a` and stage `b` agree with the tree-walker on every one.
 - **Stages C and D are designed.** Three decision records say how they
   start: typed specializations compiled ahead of time and entered from
   the VM (`docs/decisions/0005`), native code as a section of the program

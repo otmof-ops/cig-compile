@@ -1,0 +1,14 @@
+# `Int / Int`: exact stays int, inexact becomes float. The caller sees
+# different types from the same function; its stored value and the
+# downstream op demonstrate the split (0007: `bin /` on ints is not
+# compiled by the native code generator, because its result type
+# depends on the values).
+pull idiv(a, b) { snuff a / b }
+
+exhale idiv(6, 3), idiv(7, 2), idiv(-6, 3), idiv(-7, 2)
+exhale idiv(0, 5), idiv(5, 1)
+
+roll a = idiv(6, 3)
+roll b = idiv(7, 2)
+exhale a + 1, b + 1
+exhale a == 2, b == 3.5

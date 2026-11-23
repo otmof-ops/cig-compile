@@ -1,0 +1,10 @@
+# Call depth, uncaught: the run leaves with E506 and a non-zero exit
+# code; both sides must say the same thing.
+pull down(n) {
+  if n <= 0 {
+    snuff 0
+  }
+  snuff down(n - 1) + 1
+}
+
+exhale down(4000)

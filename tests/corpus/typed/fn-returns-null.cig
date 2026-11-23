@@ -1,0 +1,10 @@
+# A function whose value is always null: `snuff` with no expression
+# returns null. The caller prints it.
+pull none(n) {
+  if n > 0 {
+    snuff
+  }
+  snuff
+}
+
+exhale none(0), none(1), none(-5)

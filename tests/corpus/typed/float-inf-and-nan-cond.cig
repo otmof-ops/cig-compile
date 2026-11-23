@@ -1,0 +1,15 @@
+# Infinities (from `1e308 * 10`), and NaN (from `inf - inf`) as a
+# condition and under `!`. Both print the same from the two sides.
+pull big_mul(a, b) { snuff a * b }
+pull sub_f(a, b) { snuff a - b }
+pull truth(x) { if x { snuff 1 } else { snuff 0 } }
+
+stick inf = big_mul(1e308, 10.0)
+stick neg_inf = -inf
+stick nan = sub_f(inf, inf)
+
+exhale inf, neg_inf, nan
+exhale truth(inf), truth(neg_inf), truth(nan)
+exhale truth(0.0), truth(-0.0)
+exhale not (nan == nan), nan == nan, nan != nan
+exhale nan == 1.0, nan == 0, 1.0 == nan

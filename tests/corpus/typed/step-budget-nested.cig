@@ -1,0 +1,23 @@
+# The step budget is spent inside a nested call: `outer` is a
+# typed function that calls another typed function on every turn.
+pull inner(k) {
+  roll j = 0
+  roll acc = 0
+  while j < k {
+    acc = acc + j
+    j += 1
+  }
+  snuff acc
+}
+
+pull outer(n) {
+  roll i = 0
+  roll acc = 0
+  while i < n {
+    acc = acc + inner(i)
+    i += 1
+  }
+  snuff acc
+}
+
+exhale outer(20)

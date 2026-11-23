@@ -1,0 +1,15 @@
+# Unary minus of i64::MIN overflows: `-small` with small = i64::MIN.
+pull neg(x) {
+  snuff -x
+}
+
+stick big = 9223372036854775807
+stick small = -big - 1
+
+try {
+  exhale neg(small)
+} ashtray e {
+  exhale "caught", e.kind, e.message
+}
+
+exhale neg(0), neg(1), neg(-1), neg(big)

@@ -1,0 +1,15 @@
+# A loop whose body calls another typed function: the inner call stays
+# int → int, the outer loop stays int-counted.
+pull square(x) {
+  snuff x * x
+}
+
+pull sum_squares(n) {
+  roll acc = 0
+  for i in 0..n {
+    acc += square(i)
+  }
+  snuff acc
+}
+
+exhale sum_squares(0), sum_squares(1), sum_squares(5), sum_squares(10)

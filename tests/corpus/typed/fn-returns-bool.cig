@@ -1,0 +1,11 @@
+# A function whose value is always a bool.
+pull positive(n) {
+  snuff n > 0
+}
+
+pull both_positive(a, b) {
+  snuff positive(a) and positive(b)
+}
+
+exhale positive(-3), positive(0), positive(7)
+exhale both_positive(1, 2), both_positive(1, -1), both_positive(-5, -6)

@@ -1,0 +1,15 @@
+# The step budget is spent inside a typed function: the differential
+# runner's own sweep (`--max-steps` from 1 upward) must stop on the same
+# line and at the same step on both sides. The loop body prints a
+# small landmark each turn so progress on both sides is comparable.
+pull work(n) {
+  roll i = 0
+  roll acc = 0
+  while i < n {
+    acc = acc + i
+    i += 1
+  }
+  snuff acc
+}
+
+exhale work(200)

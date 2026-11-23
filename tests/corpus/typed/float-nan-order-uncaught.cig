@@ -1,0 +1,9 @@
+# Uncaught: the program leaves on the NaN ordering. Error text and exit
+# code are compared.
+pull sub_f(a, b) { snuff a - b }
+pull big_mul(a, b) { snuff a * b }
+pull lt(a, b) { snuff a < b }
+
+stick inf = big_mul(1e308, 10.0)
+stick nan = sub_f(inf, inf)
+exhale lt(nan, 1.0)

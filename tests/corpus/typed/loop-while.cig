@@ -1,0 +1,12 @@
+# A while loop with a counter inside a typed function.
+pull sum_to(n) {
+  roll i = 0
+  roll acc = 0
+  while i < n {
+    acc += i
+    i += 1
+  }
+  snuff acc
+}
+
+exhale sum_to(0), sum_to(1), sum_to(10), sum_to(100)
