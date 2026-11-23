@@ -3,7 +3,7 @@
 
 # 0006: Native code in a program: the section, the loader, the calling convention, and leaving it
 
-- Status: accepted for the first step, 2026-11-23; amended the same day to what was built (the loader maps the code alone, who answers for the bytes, the stack, `CIG_NATIVE`, what `--stage c` does where native code cannot be had)
+- Status: accepted for the first step, 2026-11-23; amended the same day to what was built (the loader maps the code alone, who answers for the bytes, the stack, `CIG_NATIVE`, what `--stage c` does where native code cannot be had). [0008](0008-native-code-on-the-vms-frame.md), 2026-11-24, adds a second kind of native code (a function's body, run on the VM's frame) and with it the section's version 2 and the interface's version 2; what this record says of entries, loading and trust holds for both
 - Issues: #32 (stage C), #36 (start-up and size), #40 (hardened programs); otmof-ops/cig-script#256 (cig-cherry)
 - Research: [study 03](../research/studies/03-wasmtime-ahead-of-time-and-winch.md) (Wasmtime ahead of time), [study 02](../research/studies/02-cranelift-back-end-and-regalloc2.md) (Cranelift's back end), [study 17](../research/studies/17-from-machine-code-to-a-program.md) (from machine code to a program)
 - Related: [0004](0004-payload-format-2.md) (payload format 2), [0005](0005-what-goes-native-first.md) (what is compiled), [0007](0007-where-the-pieces-live.md) (crates); the layout's own reference is the `cig-native` crate's README in cig-script

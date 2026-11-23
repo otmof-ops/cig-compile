@@ -3,7 +3,7 @@
 
 # 0005: Stage C and stage D start as one thing: typed specializations, compiled ahead of time, entered from the VM
 
-- Status: accepted for the first step, 2026-11-23. Revisited with its numbers when that step runs.
+- Status: accepted for the first step, 2026-11-23. That step ran ([its numbers](../BENCHMARKS-2026-11-23-stage-c.md)); what follows it is [0008](0008-native-code-on-the-vms-frame.md), 2026-11-24, which takes the four later steps listed here as one.
 - Issues: #32 (stage C), #34 (stage D), #35 (values), #98 (the study); otmof-ops/cig-script#256 (cig-cherry)
 - Research: [the studies](../research/README.md); the entries each point rests on are named in place.
 - Related: [0001](0001-backend.md) (the staged path), [0006](0006-native-code-in-a-program.md) (how a program carries native code), [0007](0007-where-the-pieces-live.md) (crates)
@@ -57,7 +57,7 @@
 
 ## What follows
 
-In the order the census argues for:
+[0008](0008-native-code-on-the-vms-frame.md) replaces this list: the four steps below turned out to need the same way in and out of native code, and it builds that once. As this record had them, in the order the census argues for:
 1. loops at the top level as units of their own (most benchmark programs keep their hot loop outside any function);
 2. lists and maps reached through calls into the runtime, then shapes for records (#35);
 3. integer division and float remainder through exits to the VM;

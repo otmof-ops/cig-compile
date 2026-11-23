@@ -41,6 +41,9 @@ or an error code.
   the section, the loader, the calling convention, and leaving native code.
 - [Where the pieces live](decisions/0007-where-the-pieces-live.md): the
   crates of the inference, the code generator and the loader.
+- [Native code on the VM's frame](decisions/0008-native-code-on-the-vms-frame.md):
+  native code for every function, run on the frame the VM made, with the
+  bytecode going on wherever it stops.
 - [Research notes](research/README.md): 17 studies of other compilers,
   and what cig's own VM was measured doing.
 - [Roadmap](roadmap.md): the stages, the phases of #42, and how a request
