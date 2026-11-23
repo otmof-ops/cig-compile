@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 Jay Taylor (https://github.com/otmof-ops/cig-compile)
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+[package]
+name = "cig-codegen"
+version = "0.1.0"
+edition = "2021"
+# What Cranelift 0.137 needs.
+rust-version = "1.97"
+description = "cig-codegen: CIR specializations to machine code for cig's stage-C programs, on Cranelift"
+license = "FSL-1.1-ALv2"
+repository = "https://github.com/otmof-ops/cig-compile"
+readme = "README.md"
+keywords = ["compiler", "codegen", "cranelift", "aot"]
+categories = ["compilers"]
+publish = false
+
+[lib]
+name = "cig_codegen"
+path = "src/lib.rs"
+
+[dependencies]
+# Pinned exactly (docs/decisions/0007): a program's native code is held
+# to a fresh compile of its script, byte for byte, so the generator must
+# not move under it. Both back ends are always built in, and
+# `cranelift-native` is never a dependency: the target is the program's,
+# not the host's.
+cranelift-codegen = { version = "=0.137.3", default-features = false, features = ["std", "x86", "arm64"] }
+cranelift-frontend = "=0.137.3"
+# `target-lexicon` is Cranelift's own dependency: naming the Triple that
+# `isa::lookup` takes.
+target-lexicon = "0.13.5"
+# The IR and its types, and the section's layout, the context and the
+# entry convention: cig-script's, at the workspace's pin.
+cigscript = { workspace = true }
+cig-native = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

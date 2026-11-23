@@ -762,7 +762,9 @@ fn layout(bytes: &[u8]) -> Layout {
     let p = trailer - len;
     let table = trailer - 64 * count..trailer;
     let sections = bytes[table.clone()]
-        .chunks_exact(64)
+        .as_chunks::<64>()
+        .0
+        .iter()
         .map(|e| {
             let id = String::from_utf8_lossy(&e[..8])
                 .trim_end_matches('\0')
@@ -1133,6 +1135,471 @@ fn a_stage_b_program_refuses_a_damaged_bytecode_section_and_still_answers_cig_pr
     assert!(text(&info.stdout).contains("bytecode"), "{j}");
     // The undamaged program runs.
     assert_eq!(text(&s.prog(&exe_name("b"), &[]).stdout), "ran\n");
+}
+
+/// Where a stage c program can be had: Linux on x86-64 and aarch64 (the
+/// runtime these tests build with is this build's, which runs stage c).
+const NATIVE: bool = cfg!(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+));
+
+/// A script with a function that compiles to native code (`fib`) and
+/// one that does not (`label` makes a string).
+const TYPED: &str = "pull fib(n) {\n  if n < 2 { snuff n }\n  snuff fib(n - 1) + fib(n - 2)\n}\npull label(n) { snuff \"fib = ${n}\" }\nexhale label(fib(20))\n";
+
+/// `--stage c`: where native code can be had the program is a stage c
+/// program, with native code for the functions that compile and a line
+/// that counts them; elsewhere it is the stage b program, with a note.
+/// It runs the same either way, and without its native code.
+#[test]
+fn stage_c_compiles_what_it_can_and_the_program_runs_the_same() {
+    let s = Sandbox::new();
+    s.write("typed.cig", TYPED);
+    let built = s.cc(&["build", "typed.cig", "--stage", "c"]);
+    let (out, err) = (ok(&built), text(&built.stderr));
+    let r = record_of(&s.exe("typed"));
+    if NATIVE {
+        assert!(out.contains("stage c)"), "{out}");
+        assert!(
+            out.contains("\n  native 1 function compiled, 1 left to the bytecode\n"),
+            "{out}"
+        );
+        assert!(!err.contains("note:"), "{err}");
+        assert_eq!(r.stage, cigscript::program::Stage::C);
+        let bytes = fs::read(s.exe("typed")).unwrap();
+        let l = layout(&bytes);
+        let ids: Vec<&str> = l.sections.iter().map(|(i, _)| i.as_str()).collect();
+        assert_eq!(ids, ["source", "bytecode", "native"]);
+        // The section a program maps lies on a 64 KiB boundary of the file.
+        let (_, native) = &l.sections[2];
+        assert_eq!(native.start % 65_536, 0);
+        let t = cig_native::Tables::parse(&bytes[native.clone()]).expect("its tables");
+        assert_eq!(t.entries.len(), 1);
+        assert_eq!(
+            (t.entries[0].args.as_slice(), t.entries[0].ret),
+            ([cig_native::Ty::Int].as_slice(), cig_native::Ty::Int)
+        );
+        let said = ok(&s.prog(&exe_name("typed"), &["--cig-program"]));
+        assert!(said.contains("native code"), "{said}");
+    } else {
+        assert!(out.contains("stage b)"), "{out}");
+        assert!(!out.contains("native"), "{out}");
+        assert!(
+            err.contains("note: typed.cig is a stage b program: native code is built for Linux on x86-64 and aarch64, not for "),
+            "{err}"
+        );
+        assert_eq!(r.stage, cigscript::program::Stage::B);
+    }
+    // The same run, with its native code and without.
+    let with = s.prog(&exe_name("typed"), &[]);
+    assert_eq!(text(&with.stdout), "fib = 6765\n", "{}", text(&with.stderr));
+    let mut c = Command::new(s.exe("typed"));
+    s.env(&mut c);
+    let without = c.env("CIG_NATIVE", "0").output().unwrap();
+    assert_eq!(text(&without.stdout), "fib = 6765\n");
+    // --json says how many, and why each of the others was left.
+    let json = ok(&s.cc(&[
+        "build",
+        "typed.cig",
+        "--stage",
+        "c",
+        "--json",
+        "-o",
+        &exe_name("j"),
+    ]));
+    let j: serde_json::Value = serde_json::from_str(json.trim()).unwrap();
+    if NATIVE {
+        assert_eq!(j["stage"], "c", "{j}");
+        assert_eq!(
+            j["native"],
+            serde_json::json!({"compiled": 1, "left": 1, "why": ["`label`: line 5: a string"]}),
+            "{j}"
+        );
+        assert_eq!(j["warnings"], serde_json::json!([]), "{j}");
+    } else {
+        assert_eq!(
+            (&j["stage"], &j["native"]),
+            (&"b".into(), &serde_json::Value::Null),
+            "{j}"
+        );
+    }
+}
+
+/// `--stage c` on a script with nothing to compile makes the stage b
+/// program and says why; on a script that does not lower it is refused,
+/// as `--stage b` is.
+#[test]
+fn stage_c_says_why_a_script_has_no_native_code() {
+    let s = Sandbox::new();
+    s.write(
+        "top.cig",
+        "roll t = 0\nfor i in 0..10 {\n  t += i\n}\nexhale t\n",
+    );
+    s.write(
+        "text.cig",
+        "pull greet(name) { snuff \"hi ${name}\" }\nexhale greet(\"you\")\n",
+    );
+    s.write(
+        "packs.cig",
+        "pack { root() }\npull root() {\n  snuff \".\"\n}\nexhale \"packed\"\n",
+    );
+    for (script, why) in [
+        (
+            "top",
+            "all its code is at the top level, and native code is compiled for functions",
+        ),
+        (
+            "text",
+            "none of its functions compiles to native code (`greet`: it is called with a string)",
+        ),
+    ] {
+        let built = s.cc(&["build", &format!("{script}.cig"), "--stage", "c"]);
+        let (out, err) = (ok(&built), text(&built.stderr));
+        assert!(out.contains("stage b)") && !out.contains("native"), "{out}");
+        if NATIVE {
+            assert!(
+                err.contains(&format!("note: {script}.cig is a stage b program: {why}\n")),
+                "{err}"
+            );
+        } else {
+            assert!(err.contains("native code is built for Linux"), "{err}");
+        }
+        assert_eq!(
+            record_of(&s.exe(script)).stage,
+            cigscript::program::Stage::B
+        );
+    }
+    assert_eq!(text(&s.prog(&exe_name("top"), &[]).stdout), "45\n");
+    assert_eq!(text(&s.prog(&exe_name("text"), &[]).stdout), "hi you\n");
+    // --json prints no note: its record carries it.
+    let built = s.cc(&[
+        "build",
+        "top.cig",
+        "--stage",
+        "c",
+        "--json",
+        "-o",
+        &exe_name("j"),
+    ]);
+    assert_eq!(text(&built.stderr), "");
+    let j: serde_json::Value = serde_json::from_str(ok(&built).trim()).unwrap();
+    assert_eq!(
+        (&j["stage"], &j["native"]),
+        (&"b".into(), &serde_json::Value::Null),
+        "{j}"
+    );
+    let notes = j["warnings"].as_array().expect("its warnings");
+    assert_eq!(notes.len(), 1, "{j}");
+    assert!(
+        notes[0]
+            .as_str()
+            .unwrap()
+            .starts_with("note: top.cig is a stage b program: "),
+        "{j}"
+    );
+    let refused = s.cc(&["build", "packs.cig", "--stage", "c", "-o", "nope"]);
+    assert_eq!(refused.status.code(), Some(3));
+    let err = text(&refused.stderr);
+    assert!(err.contains("E1010"), "{err}");
+    assert!(
+        err.contains("packs.cig cannot be a stage c program: "),
+        "{err}"
+    );
+    assert!(!s.path().join("nope").exists());
+}
+
+/// The stage c program at `program` with `native` as its native section:
+/// written as a build writes it, every hash made good.
+fn with_native(s: &Sandbox, program: &str, native: Vec<u8>, out: &str) {
+    let bytes = fs::read(s.exe(program)).unwrap();
+    let l = layout(&bytes);
+    let r = record_of(&s.exe(program));
+    let part = |id: &str| {
+        let (_, at) = l.sections.iter().find(|(i, _)| i == id).unwrap();
+        bytes[at.clone()].to_vec()
+    };
+    let source = String::from_utf8(part("source")).unwrap();
+    let mut b = cigscript::program::Build::new(&r.name, &r.file, &source, &r.compiler, &r.target);
+    b.stage = r.stage;
+    b.opt = r.opt.clone();
+    for (id, version, required, body) in [
+        (
+            "bytecode",
+            cigscript::cig_bytecode::FORMAT_VERSION,
+            true,
+            part("bytecode"),
+        ),
+        ("native", cig_native::VERSION as u16, false, native),
+    ] {
+        b.sections.push(cigscript::program::Section {
+            id: id.to_string(),
+            version,
+            encoding: cigscript::program::Encoding::Stored,
+            required,
+            bytes: body,
+        });
+    }
+    fs::write(
+        s.exe(out),
+        cigscript::program::append2(&bytes[..l.p], &b).unwrap(),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(s.exe(out), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// A program's section, by its id.
+fn section_of(s: &Sandbox, program: &str, id: &str) -> Vec<u8> {
+    let bytes = fs::read(s.exe(program)).unwrap();
+    let l = layout(&bytes);
+    let (_, at) = l.sections.iter().find(|(i, _)| i == id).unwrap();
+    bytes[at.clone()].to_vec()
+}
+
+/// What `verify --json` says of one part: its verdict and its words.
+fn part_of(out: &Output, part: &str) -> (String, String) {
+    let json: serde_json::Value = serde_json::from_str(text(&out.stdout).trim())
+        .unwrap_or_else(|_| panic!("verify --json: {}", text(&out.stdout)));
+    let p = json["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["part"] == part)
+        .unwrap_or_else(|| panic!("no part `{part}`: {json}"));
+    (
+        p["verdict"].as_str().unwrap().to_string(),
+        p["said"].as_str().unwrap().to_string(),
+    )
+}
+
+/// A stage c program's native code is held to a fresh compile of its
+/// script: `verify` passes the program a build made, and names the
+/// native section of one whose machine code was changed and every hash
+/// made good again, which no other check can see.
+#[test]
+fn verify_holds_native_code_to_a_fresh_compile() {
+    if !NATIVE {
+        return;
+    }
+    let s = Sandbox::new();
+    s.write("typed.cig", TYPED);
+    ok(&s.cc(&["build", "typed.cig", "--stage", "c"]));
+    let checked = s.cc(&["verify", &exe_name("typed"), "--runtime", RT, "--json"]);
+    assert_eq!(
+        differing(&checked),
+        Vec::<String>::new(),
+        "{}",
+        ok(&checked)
+    );
+    let (verdict, said) = part_of(&checked, "section native");
+    assert_eq!(verdict, "ok");
+    assert!(
+        said.contains(" bytes, 1 entry, and is what its source compiles to at -O1 for "),
+        "{said}"
+    );
+    // The same program with one byte of its machine code changed.
+    let mut native = section_of(&s, "typed", "native");
+    let code_len = cig_native::Tables::parse(&native).unwrap().code_len as usize;
+    native[code_len / 2] ^= 0x01;
+    assert!(cig_native::Tables::parse(&native).is_ok(), "it still reads");
+    with_native(&s, "typed", native, "changed");
+    assert_eq!(
+        fs::metadata(s.exe("changed")).unwrap().len(),
+        fs::metadata(s.exe("typed")).unwrap().len()
+    );
+    let checked = s.cc(&["verify", &exe_name("changed"), "--runtime", RT, "--json"]);
+    assert_eq!(checked.status.code(), Some(1), "{}", text(&checked.stderr));
+    assert_eq!(differing(&checked), ["section native"]);
+    let (_, said) = part_of(&checked, "section native");
+    assert!(
+        said.starts_with("not what its source compiles to at -O1 for ")
+            && said.contains("the first difference is at byte "),
+        "{said}"
+    );
+    // Against another script, the bytecode and the native code both differ.
+    s.write(
+        "other.cig",
+        &TYPED.replace("fib(n - 1) + fib(n - 2)", "fib(n - 1) + fib(n - 2) + 0"),
+    );
+    let other = s.cc(&[
+        "verify",
+        &exe_name("typed"),
+        "--runtime",
+        RT,
+        "--script",
+        "other.cig",
+        "--json",
+    ]);
+    let parts = differing(&other);
+    assert!(
+        parts.contains(&"section native".to_string())
+            && parts.contains(&"section bytecode".to_string()),
+        "{parts:?}"
+    );
+    // A section that does not read is damaged: the program runs its
+    // bytecode, and verify names it.
+    let mut broken = section_of(&s, "typed", "native");
+    let at = broken.len() - 80;
+    broken[at] ^= 0xff;
+    with_native(&s, "typed", broken, "broken");
+    assert_eq!(
+        text(&s.prog(&exe_name("broken"), &[]).stdout),
+        "fib = 6765\n"
+    );
+    let checked = s.cc(&["verify", &exe_name("broken"), "--runtime", RT, "--json"]);
+    assert_eq!(differing(&checked), ["section native"]);
+    let (_, said) = part_of(&checked, "section native");
+    assert!(said.starts_with("damaged: it does not read: "), "{said}");
+}
+
+/// The native code is what runs. Two scripts with one function each,
+/// of the same shape and another result: the first's program given the
+/// second's native code, relabeled as its own, gives the second's
+/// answer where native code runs and its own where it does not. That is
+/// what a stage c program's native code is trusted with, and `verify`
+/// names it; the same code under its own label is refused by the
+/// program itself.
+#[test]
+fn a_stage_c_program_runs_its_native_code_and_verify_answers_for_it() {
+    if !NATIVE {
+        return;
+    }
+    let s = Sandbox::new();
+    s.write("one.cig", "pull f(n) { snuff n + 1 }\nexhale f(1)\n");
+    s.write("two.cig", "pull f(n) { snuff n + 2 }\nexhale f(1)\n");
+    for script in ["one", "two"] {
+        let out = ok(&s.cc(&["build", &format!("{script}.cig"), "--stage", "c"]));
+        assert!(out.contains("native 1 function compiled\n"), "{out}");
+    }
+    assert_eq!(text(&s.prog(&exe_name("one"), &[]).stdout), "2\n");
+    assert_eq!(text(&s.prog(&exe_name("two"), &[]).stdout), "3\n");
+    let without = |exe: &str| {
+        let mut c = Command::new(s.exe(exe));
+        s.env(&mut c);
+        text(&c.env("CIG_NATIVE", "0").output().unwrap().stdout)
+    };
+    // The second's code as it is: it names the second's bytecode, so
+    // the first's program does not load it, and runs its bytecode.
+    let theirs = section_of(&s, "two", "native");
+    with_native(&s, "one", theirs.clone(), "foreign");
+    assert_eq!(text(&s.prog(&exe_name("foreign"), &[]).stdout), "2\n");
+    let checked = s.cc(&["verify", &exe_name("foreign"), "--runtime", RT, "--json"]);
+    assert_eq!(differing(&checked), ["section native"]);
+    assert_eq!(
+        part_of(&checked, "section native").1,
+        "it was not compiled from this program's bytecode: the module hash it names is another's"
+    );
+    // Relabeled as the first's own: it loads, and it is what runs.
+    let mut relabeled = cig_native::Section::parse(&theirs).unwrap();
+    relabeled.module = cig_native::Section::parse(&section_of(&s, "one", "native"))
+        .unwrap()
+        .module;
+    with_native(&s, "one", relabeled.to_bytes().unwrap(), "relabeled");
+    assert_eq!(
+        text(&s.prog(&exe_name("relabeled"), &[]).stdout),
+        "3\n",
+        "the native code runs"
+    );
+    assert_eq!(without("relabeled"), "2\n", "the bytecode is the script's");
+    assert_eq!(without("one"), "2\n");
+    let checked = s.cc(&["verify", &exe_name("relabeled"), "--runtime", RT, "--json"]);
+    assert_eq!(checked.status.code(), Some(1));
+    assert_eq!(differing(&checked), ["section native"]);
+    assert!(
+        part_of(&checked, "section native")
+            .1
+            .starts_with("not what its source compiles to at -O1 for "),
+        "{}",
+        text(&checked.stdout)
+    );
+}
+
+/// A runtime from before stage c (it has no mark that says it runs it)
+/// gets the stage b program, and the note says so.
+#[test]
+fn stage_c_on_a_runtime_that_does_not_run_it_is_stage_b_with_a_note() {
+    let s = Sandbox::new();
+    s.write("typed.cig", TYPED);
+    let mut runtime = fs::read(RT).unwrap();
+    let mark = b"\0cig-runtime-stages=abc\0";
+    let at = runtime
+        .windows(mark.len())
+        .position(|w| w == mark)
+        .expect("this build's runtime says the stages it runs");
+    // `ab`, as a cig of before says by saying nothing.
+    runtime[at + mark.len() - 2] = 0;
+    let old = s.exe("old-cig");
+    fs::write(&old, &runtime).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&old, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let built = s.cc(&[
+        "build",
+        "typed.cig",
+        "--stage",
+        "c",
+        "--runtime",
+        old.to_str().unwrap(),
+    ]);
+    let (out, err) = (ok(&built), text(&built.stderr));
+    assert!(out.contains("stage b)") && !out.contains("native"), "{out}");
+    if NATIVE {
+        assert!(
+            err.contains("note: typed.cig is a stage b program: its runtime, cig ")
+                && err.contains(", does not run stage c programs\n"),
+            "{err}"
+        );
+    }
+    assert_eq!(
+        record_of(&s.exe("typed")).stage,
+        cigscript::program::Stage::B
+    );
+    assert_eq!(
+        text(&s.prog(&exe_name("typed"), &[]).stdout),
+        "fib = 6765\n"
+    );
+}
+
+/// A stage c build that changes nothing says the program is up to date,
+/// and no more: the count is a build's that wrote one.
+#[test]
+fn a_stage_c_build_that_changes_nothing_says_up_to_date() {
+    let s = Sandbox::new();
+    s.write("typed.cig", TYPED);
+    ok(&s.cc(&["build", "typed.cig", "--stage", "c"]));
+    let again = ok(&s.cc(&["build", "typed.cig", "--stage", "c"]));
+    assert!(
+        again.starts_with("up to date: ") && !again.contains("native"),
+        "{again}"
+    );
+    let json = ok(&s.cc(&["build", "typed.cig", "--stage", "c", "--json"]));
+    let j: serde_json::Value = serde_json::from_str(json.trim()).unwrap();
+    assert_eq!(
+        (&j["written"], &j["native"]),
+        (&false.into(), &serde_json::Value::Null),
+        "{j}"
+    );
+    assert_eq!(j["stage"], if NATIVE { "c" } else { "b" }, "{j}");
+}
+
+/// The same inputs give the same bytes at stage c too.
+#[test]
+fn the_same_build_twice_gives_the_same_bytes_at_stage_c() {
+    let s = Sandbox::new();
+    s.write("typed.cig", TYPED);
+    ok(&s.cc(&["build", "typed.cig", "--stage", "c", "-o", &exe_name("one")]));
+    let two = format!("out/two{}", std::env::consts::EXE_SUFFIX);
+    ok(&s.cc(&["build", "typed.cig", "--stage", "c", "-o", &two]));
+    assert_eq!(
+        fs::read(s.exe("one")).unwrap(),
+        fs::read(s.path().join(&two)).unwrap()
+    );
 }
 
 /// The same inputs give the same bytes at either stage, wherever the

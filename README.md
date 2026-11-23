@@ -84,6 +84,7 @@ and puts everything back, with no cig on the machine:
 - **A stage `b` program** (`cigcompile build --stage b`, the script's bytecode on cig's VM) takes 0.52 of `cig run`'s time, faster on all 21, and 0.82 of CPython 3.13's; it starts in 3.7 ms, where CPython takes 13.5 ms.
 - **A stage `a` program**, the default, runs on the interpreter as `cig run` does (0.93 of its time).
 - **Lua is faster**: a stage `b` program takes 1.97 times Lua 5.4's time and 5.20 times LuaJIT's.
+- **Stage `c`** (`--stage c`, on `main`, in no release yet) compiles the functions that work on numbers alone to native code. On three small programs made of such functions, read on another machine, it took 0.045 to 0.128 of stage `b`'s time, 0.15 to 0.35 of Lua 5.4's and 0.59 to 1.78 of LuaJIT's ([first numbers](docs/BENCHMARKS-2026-11-23-stage-c.md)). Of the 25 programs above only `fib` has such a function, so the table does not move yet.
 
 Whole processes, start-up included, on a 2018 laptop on battery.
 
@@ -182,8 +183,13 @@ not run. The compiler itself is released for the same machines.
   Stage `a`, the default, is the bundle; `--stage b` runs the script's
   bytecode on cig's VM ([how fast](#how-fast-a-program-runs)), and becomes
   the default once it passes its speed gates
-  ([#31](https://github.com/otmof-ops/cig-compile/issues/31)); native code
-  comes after it ([#32](https://github.com/otmof-ops/cig-compile/issues/32)).
+  ([#31](https://github.com/otmof-ops/cig-compile/issues/31)).
+- **Native code is for functions on numbers, so far.** `--stage c` (on
+  `main`, in no release yet) compiles the functions whose every value is
+  an int, a float, a bool or null, on Linux; a script's top level, and
+  anything that touches a string, a list or a map, runs as stage `b` does
+  ([#32](https://github.com/otmof-ops/cig-compile/issues/32),
+  [what goes native first](docs/decisions/0005-what-goes-native-first.md)).
 - **The box is Linux's.** A program's boxed hop is refused or falls back
   elsewhere, as `cig`'s is (`E777`, `E763`).
 - **Signing is SSH's.** Apple Developer ID and Windows Authenticode need

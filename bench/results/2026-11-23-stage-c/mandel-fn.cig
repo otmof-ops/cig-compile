@@ -1,0 +1,26 @@
+pull escape(cr, ci, limit) {
+  roll x = 0.0
+  roll y = 0.0
+  roll i = 0
+  while i < limit {
+    stick xx = x * x
+    stick yy = y * y
+    if xx + yy > 4.0 { snuff i }
+    y = 2.0 * x * y + ci
+    x = xx - yy + cr
+    i = i + 1
+  }
+  snuff limit
+}
+pull mandel(n, limit) {
+  roll inside = 0
+  for py in 0..n {
+    for px in 0..n {
+      stick cr = px * 3.0 / n - 2.0
+      stick ci = py * 2.0 / n - 1.0
+      if escape(cr, ci, limit) == limit { inside = inside + 1 }
+    }
+  }
+  snuff inside
+}
+exhale mandel(400, 100)

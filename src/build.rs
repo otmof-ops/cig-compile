@@ -12,7 +12,7 @@ use cigscript::diagnostics::{usage, Diagnostic};
 use cigscript::program::{self, Section, Stage};
 use cigscript::syntax::span::Span;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::path::Path;
 
@@ -34,6 +34,25 @@ pub struct Built {
     pub written: bool,
     /// The stage the program is (read back from it when it was up to date).
     pub stage: Option<Stage>,
+    /// For a stage `c` program this build wrote: what of it has native
+    /// code.
+    pub native: Option<Counted>,
+    /// What the build said besides, each as it is printed: the check's
+    /// warnings and the build's notes (a program that is another stage
+    /// than was asked for, and why). `--json` carries them, where
+    /// nothing is printed.
+    pub warnings: Vec<String>,
+}
+
+/// What of a script has native code: how many of its functions do, how
+/// many run as bytecode alone, and why each row of argument types that
+/// was not compiled was not. The top level is no function: it is never
+/// compiled, and never counted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Counted {
+    pub compiled: usize,
+    pub left: usize,
+    pub why: Vec<String>,
 }
 
 /// The stage of the program at `path`, from its record.
@@ -101,6 +120,8 @@ impl Default for Options {
 pub struct NotB {
     pub what: String,
     pub span: Option<Span>,
+    /// The compiler's own defect, not something the script holds.
+    pub bug: bool,
 }
 
 impl NotB {
@@ -126,6 +147,7 @@ pub fn bytecode_of(source: &str, file: &str, opt: u8) -> Result<Vec<u8>, NotB> {
     let program = cigscript::syntax::parse(source).map_err(|d| NotB {
         what: d.message,
         span: d.span,
+        bug: false,
     })?;
     if let Some(d) = cigscript::check::check(&program, &[])
         .errors
@@ -135,6 +157,7 @@ pub fn bytecode_of(source: &str, file: &str, opt: u8) -> Result<Vec<u8>, NotB> {
         return Err(NotB {
             what: d.message,
             span: d.span,
+            bug: false,
         });
     }
     cigscript::lower::module_bytes_at(&program, file, opt).map_err(|s| NotB {
@@ -144,14 +167,136 @@ pub fn bytecode_of(source: &str, file: &str, opt: u8) -> Result<Vec<u8>, NotB> {
             s.what
         },
         span: s.span,
+        bug: s.bug,
     })
 }
 
-/// The stage a build makes and, at stage `b`, its bytecode; with the note
-/// a build says when it makes stage `a` of a script it was not told to.
+/// The native code a stage `c` program carries beside its bytecode.
+pub struct Native {
+    /// The `native` section's body: empty when no function compiled.
+    pub section: Vec<u8>,
+    /// What of the script it is code for.
+    pub counted: Counted,
+}
+
+/// The bytecode and the native code of a stage `c` program: the script
+/// lowered as [`bytecode_of`] lowers it, the types of its functions
+/// inferred across calls (`cigscript::lower::cir::infer`), and every
+/// specialization that qualifies compiled for `arch` (`cig_codegen`).
+/// The native code is compiled from the IR the bytecode was lowered from
+/// and names that module by its hash. `section` is empty when no
+/// specialization qualifies; `left` then says why not, one by one.
+pub fn native_of(
+    source: &str,
+    file: &str,
+    opt: u8,
+    arch: cig_native::Arch,
+) -> Result<(Vec<u8>, Native), NotB> {
+    let said = |d: cigscript::diagnostics::Diagnostic| NotB {
+        what: d.message,
+        span: d.span,
+        bug: false,
+    };
+    let bug = |what: String| NotB {
+        what: format!("{what}, a cigcompile bug"),
+        span: None,
+        bug: true,
+    };
+    let program = cigscript::syntax::parse(source).map_err(said)?;
+    if let Some(d) = cigscript::check::check(&program, &[])
+        .errors
+        .into_iter()
+        .next()
+    {
+        return Err(said(d));
+    }
+    let lowered = cigscript::lower::lowered_with_cir(&program, file, opt).map_err(|s| NotB {
+        what: if s.bug {
+            format!("{}, a cigcompile bug", s.what)
+        } else {
+            s.what
+        },
+        span: s.span,
+        bug: s.bug,
+    })?;
+    let types = cigscript::lower::cir::infer::infer(&lowered.cir);
+    // The module's index of each IR function that is one function of it.
+    let mut index = BTreeMap::new();
+    let mut twice = BTreeSet::new();
+    for (func, at) in lowered.funcs.iter().zip(0u32..) {
+        if index.insert(*func, at).is_some() {
+            twice.insert(*func);
+        }
+    }
+    index.retain(|func, _| !twice.contains(func));
+    let module = cigscript::cig_bytecode::module_hash(&lowered.bytes)
+        .ok_or_else(|| bug("the module has no header".to_string()))?;
+    // The generator's own defects are errors it returns; a panic under it
+    // (Cranelift's) is one too, and is said as one.
+    let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cig_codegen::compile(&lowered.cir, &types, &index, module, arch)
+    }))
+    .map_err(|_| bug("the code generator panicked".to_string()))?
+    .map_err(|e| bug(e.to_string()))?;
+    let name = |f: cigscript::lower::cir::ir::FuncId| {
+        lowered
+            .cir
+            .funcs
+            .get(f.0 as usize)
+            .and_then(|f| f.name.clone())
+            .unwrap_or_else(|| "a function without a name".to_string())
+    };
+    // A function has native code when one of its rows of argument types
+    // compiled. The top level (function 0) is never compiled, and is not
+    // one of the script's functions to a person reading the count; nor is
+    // a function of the IR that the module does not hold (one nothing
+    // makes).
+    let top = cigscript::lower::cir::ir::FuncId(0);
+    let functions: BTreeSet<_> = lowered.funcs.iter().filter(|f| **f != top).collect();
+    let compiled: BTreeSet<_> = made
+        .report
+        .iter()
+        .filter(|o| o.compiled)
+        .map(|o| o.func)
+        .collect();
+    let counted = Counted {
+        compiled: compiled.len(),
+        left: functions.len().saturating_sub(compiled.len()),
+        why: made
+            .report
+            .iter()
+            .filter(|o| !o.compiled && o.func != top)
+            .map(|o| format!("`{}`: {}", name(o.func), o.why))
+            .collect(),
+    };
+    let section = match made.section.entries.is_empty() {
+        true => Vec::new(),
+        false => made
+            .section
+            .to_bytes()
+            .map_err(|e| bug(format!("the native section is not one: {e}")))?,
+    };
+    Ok((lowered.bytes, Native { section, counted }))
+}
+
+/// The machine native code is compiled for, when a program for `triple`
+/// can load it: Linux on x86-64 and aarch64.
+pub fn native_arch(triple: &str) -> Option<cig_native::Arch> {
+    let linux = triple.contains("-linux-");
+    match triple.split('-').next() {
+        Some("x86_64") if linux => Some(cig_native::Arch::X86_64),
+        Some("aarch64") if linux => Some(cig_native::Arch::Aarch64),
+        _ => None,
+    }
+}
+
+/// The stage a build makes, with its bytecode at stage `b` and `c` and
+/// its native code at stage `c`; and the note a build says when it makes
+/// another stage than it was asked for.
 pub struct Staged {
     pub stage: Stage,
     pub bytecode: Option<Vec<u8>>,
+    pub native: Option<Native>,
     pub note: Option<String>,
 }
 
@@ -162,43 +307,115 @@ pub struct Staged {
 /// not.
 pub const DEFAULT_STAGE: Stage = Stage::A;
 
-/// The stage of one script. `--stage a` never lowers; `--stage b` on a
-/// script that does not lower is `E1010`, said here; no flag makes
-/// [`DEFAULT_STAGE`].
-pub fn stage_of(ctx: &Ctx, job: &Job, source: &str, opts: &Options) -> Result<Staged, i32> {
+/// The stage of one script. `--stage a` never lowers; `--stage b` or
+/// `--stage c` on a script that does not lower is `E1010`, said here; no
+/// flag makes [`DEFAULT_STAGE`].
+///
+/// `--stage c` makes a stage `c` program where one can be had: the
+/// target loads native code ([`native_arch`]), its runtime runs stage `c`
+/// programs (it says so in its bytes), and some function of the script
+/// compiles. Otherwise it makes the stage `b` program, which is the same
+/// program without native code, and says why in a note.
+pub fn stage_of(
+    ctx: &Ctx,
+    job: &Job,
+    source: &str,
+    opts: &Options,
+    target: &Target,
+    runtime: &Runtime,
+) -> Result<Staged, i32> {
     let asked = opts.stage.or(match DEFAULT_STAGE {
         Stage::A => Some(Stage::A),
-        Stage::B => None,
+        _ => None,
     });
     if asked == Some(Stage::A) {
         return Ok(Staged {
             stage: Stage::A,
             bytecode: None,
+            native: None,
             note: None,
         });
     }
-    match bytecode_of(source, &recorded_file(job), opts.opt) {
-        Ok(b) => Ok(Staged {
-            stage: Stage::B,
-            bytecode: Some(b),
-            note: None,
-        }),
-        Err(n) if opts.stage == Some(Stage::B) => {
-            let mut d = usage(format!(
-                "{} cannot be a stage b program: {}",
-                job.file, n.what
-            ))
-            .code("E1010")
-            .with_hint("build it without --stage b (a stage a program runs the same script on the tree-walker), or rewrite what the message names");
-            if let Some(s) = n.span {
-                d = d.at(s);
-            }
-            cigscript::cli::report(ctx, &d, Some(&job.file), Some(source));
-            Err(exit::USAGE)
+    // The script does not lower: refused when the stage was asked for.
+    let refused = |n: &NotB, stage: Stage| {
+        let s = stage.as_str();
+        let mut d = usage(format!(
+            "{} cannot be a stage {s} program: {}",
+            job.file, n.what
+        ))
+        .code("E1010")
+        .with_hint(match (n.bug, stage) {
+            // The compiler's defect: the script is not what to change.
+            (true, Stage::C) => format!("this is a defect of cigcompile, not of the script: build it with --stage b meanwhile, which is the same program without native code, and report it at {}", crate::installer::ISSUES),
+            (true, _) => format!("this is a defect of cigcompile, not of the script: build it without --stage {s} meanwhile, and report it at {}", crate::installer::ISSUES),
+            (false, _) => format!("build it without --stage {s} (a stage a program runs the same script on the tree-walker), or rewrite what the message names"),
+        });
+        if let Some(s) = n.span {
+            d = d.at(s);
         }
+        cigscript::cli::report(ctx, &d, Some(&job.file), Some(source));
+        exit::USAGE
+    };
+    let file = recorded_file(job);
+    let b = |bytecode: Vec<u8>, note: Option<String>| Staged {
+        stage: Stage::B,
+        bytecode: Some(bytecode),
+        native: None,
+        note,
+    };
+    if asked == Some(Stage::C) {
+        let stage_b = |why: String| format!("note: {} is a stage b program: {why}\n", job.file);
+        let triple = crate::runtime::triple_of(target, runtime);
+        let runs = runtime
+            .bytes()
+            .map(|bytes| cigscript::program::runtime_runs(bytes, Stage::C));
+        let arch = match (native_arch(&triple), runs) {
+            (Some(arch), Ok(true)) => Ok(arch),
+            (None, _) => Err(format!(
+                "native code is built for Linux on x86-64 and aarch64, not for {triple}"
+            )),
+            (_, Ok(false)) => Err(format!(
+                "its runtime, cig {} for {triple}, does not run stage c programs",
+                runtime.version
+            )),
+            (_, Err(e)) => Err(format!(
+                "its runtime {} cannot be read ({e})",
+                runtime.path.display()
+            )),
+        };
+        return match arch {
+            Err(why) => bytecode_of(source, &file, opts.opt)
+                .map(|code| b(code, Some(stage_b(why))))
+                .map_err(|n| refused(&n, Stage::C)),
+            Ok(arch) => match native_of(source, &file, opts.opt, arch) {
+                Err(n) => Err(refused(&n, Stage::C)),
+                Ok((code, native)) if native.section.is_empty() => {
+                    let c = &native.counted;
+                    let why = match (c.left, c.why.first()) {
+                        (0, _) => "all its code is at the top level, and native code is compiled for functions".to_string(),
+                        (_, Some(first)) => {
+                            format!("none of its functions compiles to native code ({first})")
+                        }
+                        (_, None) => "none of its functions compiles to native code (native code is entered from a call by name, and no call by name reaches one)".to_string(),
+                    };
+                    Ok(b(code, Some(stage_b(why))))
+                }
+                Ok((code, native)) => Ok(Staged {
+                    stage: Stage::C,
+                    bytecode: Some(code),
+                    native: Some(native),
+                    note: None,
+                }),
+            },
+        };
+    }
+    match bytecode_of(source, &file, opts.opt) {
+        Ok(code) => Ok(b(code, None)),
+        Err(n) if opts.stage == Some(Stage::B) => Err(refused(&n, Stage::B)),
         Err(n) => Ok(Staged {
             stage: Stage::A,
             bytecode: None,
+            native: None,
             note: Some(format!(
                 "note: {} is a stage a program: {}\n",
                 job.file,
@@ -361,7 +578,8 @@ pub struct Made<'a> {
 
 /// The program's bytes: the runtime with the checked script appended in
 /// format 2, its record's `stage`, `opt`, `target` and `own_flags` filled,
-/// and at stage `b` the `bytecode` section beside `source`.
+/// at stage `b` and `c` the `bytecode` section beside `source`, and at
+/// stage `c` the `native` section after it.
 pub fn program_bytes(
     job: &Job,
     source: &str,
@@ -385,6 +603,15 @@ pub fn program_bytes(
             encoding: program::Encoding::Stored,
             required: true,
             bytes: code.clone(),
+        });
+    }
+    if let Some(native) = &made.staged.native {
+        b.sections.push(Section {
+            id: program::NATIVE_SECTION.to_string(),
+            version: cig_native::VERSION as u16,
+            encoding: program::Encoding::Stored,
+            required: false,
+            bytes: native.section.clone(),
         });
     }
     program::append2(runtime.bytes()?, &b).map_err(std::io::Error::other)
@@ -513,6 +740,8 @@ pub fn build(
                         .unwrap_or(0),
                     written: false,
                     stage: stage_at(&job.out),
+                    native: None,
+                    warnings,
                 };
                 if sbom {
                     if let Err(e) =
@@ -543,10 +772,12 @@ pub fn build(
             cigscript::cli::report(ctx, &d, None, None);
             return Err(exit::USAGE);
         }
-        let staged = phase(&job.file, "bytecode", || stage_of(ctx, job, &source, &opts))
-            .inspect_err(|_| {
-                progress(serde_json::json!({"event": "failed", "script": job.file}));
-            })?;
+        let staged = phase(&job.file, "bytecode", || {
+            stage_of(ctx, job, &source, &opts, target, runtime)
+        })
+        .inspect_err(|_| {
+            progress(serde_json::json!({"event": "failed", "script": job.file}));
+        })?;
         if let Some(note) = &staged.note {
             // Kept with the warnings, so a build that changes nothing
             // says it again.
@@ -597,6 +828,8 @@ pub fn build(
             bytes: bytes.len() as u64,
             written,
             stage: Some(staged.stage),
+            native: staged.native.as_ref().map(|n| n.counted.clone()),
+            warnings,
         };
         say(ctx, &built, target, runtime);
         out.push(built);
@@ -620,6 +853,8 @@ fn say(ctx: &Ctx, b: &Built, target: &Target, runtime: &Runtime) {
                 "sha256": b.sha256,
                 "written": b.written,
                 "stage": b.stage.map(Stage::as_str),
+                "native": b.native.as_ref().map(|n| serde_json::json!({"compiled": n.compiled, "left": n.left, "why": n.why})),
+                "warnings": b.warnings.iter().map(|w| w.trim_end()).collect::<Vec<_>>(),
             })
         );
         return;
@@ -636,6 +871,17 @@ fn say(ctx: &Ctx, b: &Built, target: &Target, runtime: &Runtime) {
         );
     } else {
         println!("up to date: {} ({size})", b.job.out.display());
+    }
+    if let Some(n) = &b.native {
+        let functions = match n.compiled {
+            1 => "1 function".to_string(),
+            n => format!("{n} functions"),
+        };
+        let rest = match n.left {
+            0 => String::new(),
+            n => format!(", {n} left to the bytecode"),
+        };
+        println!("  native {functions} compiled{rest}");
     }
     println!("  sha256 {}", b.sha256);
 }

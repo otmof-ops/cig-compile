@@ -9,7 +9,10 @@
 //! the `section table`, each `section <id>` (its bytes against the table's
 //! sha256, decoded; `source` against the record and, with `--script`, the
 //! script; `bytecode` parsed, verified and held to a fresh lowering at the
-//! recorded level), the `padding` and the `trailer`, and then the whole
+//! recorded level; `native` read and held to a fresh compile of the same
+//! script for the recorded target, so a program's machine code is shown
+//! to be what this compiler makes of its script), the `padding` and the
+//! `trailer`, and then the whole
 //! file against what a build of those parts writes, the first difference
 //! named by its part. The trailer's head sha256 covers the record and the
 //! table, so a change there is told apart from a change in a body.
@@ -351,7 +354,7 @@ mod format2 {
     use cigscript::cli::Ctx;
     use cigscript::program::{
         self, Encoding, Entry, Record, ALIGN, ENTRY_LEN, KNOWN_SECTIONS, MAGIC2, MAX_PAYLOAD2,
-        MAX_RECORD, MAX_SECTIONS, TRAILER2_LEN,
+        MAX_RECORD, MAX_SECTIONS, NATIVE_ALIGN, NATIVE_SECTION, TRAILER2_LEN,
     };
     use sha2::{Digest, Sha256};
     use std::io::Read as _;
@@ -466,7 +469,8 @@ mod format2 {
     }
 
     /// The table's own rules, as a reader checks them, and what a build
-    /// always writes: `source` and `bytecode` required, at their versions.
+    /// always writes: `source` and `bytecode` required, at their versions,
+    /// and `native` not required, stored as it is, on its own alignment.
     fn table_rules(entries: &[Entry], p: u64, record_len: u64, table_at: u64) -> Option<String> {
         let mut prev_end = record_len;
         let mut prev_key: Option<(usize, [u8; 8])> = None;
@@ -503,9 +507,24 @@ mod format2 {
                     "section `{id}` is not marked required, and a build marks it"
                 ));
             }
+            let native = id == NATIVE_SECTION;
+            if native && e.required() {
+                return Some(
+                    "section `native` is marked required, and a build does not mark it".into(),
+                );
+            }
+            if native && e.encoding() != Some(Encoding::Stored) {
+                return Some(
+                    "section `native` is not stored as it is, and a program maps it from its file"
+                        .into(),
+                );
+            }
+            // A program maps its native code where it lies in its file.
+            let align = if native { NATIVE_ALIGN } else { ALIGN };
             let version = match id {
                 "source" => Some(1),
                 "bytecode" => Some(cigscript::cig_bytecode::FORMAT_VERSION),
+                NATIVE_SECTION => Some(cig_native::VERSION as u16),
                 _ => None,
             };
             if version.is_some_and(|v| v != e.version) {
@@ -525,7 +544,7 @@ mod format2 {
                     e.offset
                 ));
             }
-            if e.offset - prev_end >= ALIGN {
+            if e.offset - prev_end >= align {
                 return Some(format!(
                     "section `{id}` starts {} bytes after what comes before it, more than its alignment needs",
                     e.offset - prev_end
@@ -535,9 +554,9 @@ mod format2 {
                 Some(end) if end <= table_at => prev_end = end,
                 _ => return Some(format!("section `{id}` runs into the section table")),
             }
-            if (p + e.offset) % ALIGN != 0 {
+            if !(p + e.offset).is_multiple_of(align) {
                 return Some(format!(
-                    "section `{id}` does not start at a file offset that is a multiple of 16"
+                    "section `{id}` does not start at a file offset that is a multiple of {align}"
                 ));
             }
         }
@@ -710,18 +729,28 @@ mod format2 {
             h.finalize()[..] == t[24..56]
         };
         let entries: Vec<Entry> = table_bytes
-            .chunks_exact(ENTRY_LEN as usize)
-            .map(entry)
+            .as_chunks::<{ ENTRY_LEN as usize }>()
+            .0
+            .iter()
+            .map(|e| entry(e.as_slice()))
             .collect();
         let ids: Vec<String> = entries.iter().map(|e| e.id().to_string()).collect();
         let record = record_rules(record_bytes);
         let mut table_problem = table_rules(&entries, p, record_len, table_at);
         if let (None, Ok(r)) = (&table_problem, &record) {
+            let native = ids.iter().any(|i| i == NATIVE_SECTION);
             if !ids.iter().any(|i| i == r.stage.needs()) {
                 table_problem = Some(format!(
                     "a stage {} program needs section `{}`, and it has none",
                     r.stage.as_str(),
                     r.stage.needs()
+                ));
+            } else if native != (r.stage == program::Stage::C) {
+                table_problem = Some(format!(
+                    "a stage {} program has {} section `native`, and it has {}",
+                    r.stage.as_str(),
+                    if native { "no" } else { "a" },
+                    if native { "one" } else { "none" },
                 ));
             }
         }
@@ -904,6 +933,104 @@ mod format2 {
                 ),
             },
         }
+        // What the bytecode and the native code are compiled again from,
+        // and at which level: the script when one is given, else the
+        // program's own source.
+        let ours = format!("cigcompile {}", env!("CARGO_PKG_VERSION"));
+        let level = match r.opt.as_str() {
+            "0" => Some(0u8),
+            "1" => Some(1),
+            "2" => Some(2),
+            _ => None,
+        };
+        let from = script
+            .as_ref()
+            .map(|(p, s)| (p.display().to_string(), s.clone()))
+            .or_else(|| text.clone().map(|t| ("its source".to_string(), t)));
+        // The native code: read; then against a fresh compile, for the
+        // recorded target, of the script or of the source. Machine code
+        // cannot be read as a script can: this is what shows it is the
+        // compiler's, of that script.
+        if let Some(code) = body(NATIVE_SECTION) {
+            let (status, detail) = 'native: {
+                let t = match cig_native::Tables::parse(code) {
+                    Ok(t) => t,
+                    Err(e) => break 'native ("differs", format!("damaged: it does not read: {e}")),
+                };
+                // What needs no compile, and so holds whoever built the
+                // program: the code is for this program's bytecode, and
+                // for the machine its record names.
+                let module = body("bytecode").and_then(|b| cigscript::cig_bytecode::module_hash(b));
+                if module != Some(t.module) {
+                    break 'native (
+                        "differs",
+                        "it was not compiled from this program's bytecode: the module hash it names is another's"
+                            .to_string(),
+                    );
+                }
+                let Some(arch) = crate::build::native_arch(&r.target).filter(|a| *a == t.arch)
+                else {
+                    break 'native (
+                        "differs",
+                        format!(
+                            "its code is not for the target the record gives, {}",
+                            r.target
+                        ),
+                    );
+                };
+                if r.compiler != ours || r.cig != cigscript::VERSION {
+                    break 'native (
+                        "unchecked",
+                        format!(
+                            "it reads; built by {} for cig {}, so this {ours} does not compile it again",
+                            r.compiler, r.cig
+                        ),
+                    );
+                }
+                let Some(level) = level else {
+                    break 'native (
+                        "unchecked",
+                        format!(
+                            "it reads; its level `{}` is not one this cigcompile compiles at",
+                            r.opt
+                        ),
+                    );
+                };
+                let Some((what, s)) = from.clone() else {
+                    break 'native (
+                        "unchecked",
+                        "it reads; there is no script to compile it again from".to_string(),
+                    );
+                };
+                match crate::build::native_of(&s, &r.file, level, arch) {
+                    Ok((_, fresh)) if fresh.section == *code => (
+                        "ok",
+                        format!(
+                            "{} bytes, {}, and is what {what} compiles to at -O{level} for {}",
+                            code.len(),
+                            match t.entries.len() {
+                                1 => "1 entry".to_string(),
+                                n => format!("{n} entries"),
+                            },
+                            r.target
+                        ),
+                    ),
+                    Ok((_, fresh)) => (
+                        "differs",
+                        format!(
+                            "not what {what} compiles to at -O{level} for {}: {}",
+                            r.target,
+                            first_difference(&fresh.section, code)
+                        ),
+                    ),
+                    Err(n) => (
+                        "differs",
+                        format!("{what} does not compile at -O{level}: {}", n.said(&r.file)),
+                    ),
+                }
+            };
+            parts.mark("section native", status, detail);
+        }
         // The bytecode: parsed, verified and loaded; then against a fresh
         // lowering at the recorded level, of the script or of the source.
         if let Some(code) = body("bytecode") {
@@ -921,18 +1048,7 @@ mod format2 {
                         .map(|_| ())
                         .map_err(|e| format!("it does not verify: {e}"))
                 });
-            let ours = format!("cigcompile {}", env!("CARGO_PKG_VERSION"));
-            let level = match r.opt.as_str() {
-                "0" => Some(0u8),
-                "1" => Some(1),
-                "2" => Some(2),
-                _ => None,
-            };
-            let from = script
-                .as_ref()
-                .map(|(p, s)| (p.display().to_string(), s.clone()))
-                .or_else(|| text.clone().map(|t| ("its source".to_string(), t)));
-            match (checked, from, level) {
+            match (checked, from.clone(), level) {
                 (Err(why), _, _) => parts.mark("section bytecode", "differs", format!("damaged: {why}")),
                 (Ok(()), _, _) if r.compiler != ours || r.cig != cigscript::VERSION => parts.mark(
                     "section bytecode",

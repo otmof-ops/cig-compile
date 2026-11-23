@@ -85,8 +85,10 @@ jobs:
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - run: cargo fmt --all --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      # The workspace: the compiler and the code generator it builds
+      # native code with (crates/cig-codegen).
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
       # The scripts the differential suite compares come from the CigScript
       # the compiler pins: one source, Cargo.toml.
       - name: the pinned CigScript
@@ -101,11 +103,13 @@ jobs:
         with:
           repository: otmof-ops/cig-orchestrator
           path: cigo-src
-      # 100 generated programs ride along, from a fixed seed so a pull
-      # request's run repeats; differential-random.yml takes a new seed nightly.
+      # 100 generated programs ride along, and 100 typed ones (their
+      # arithmetic in functions that stage c compiles to native code), from
+      # a fixed seed so a pull request's run repeats;
+      # differential-random.yml takes a new seed nightly.
       - name: the differential suite (#7)
         shell: bash
-        run: DIFF_RANDOM=1:100 CIGSCRIPT_SRC="$PWD/cigscript-src" cargo test --release --test differential
+        run: DIFF_RANDOM=1:100 DIFF_TYPED_RANDOM=1:100 CIGSCRIPT_SRC="$PWD/cigscript-src" cargo test --release --test differential
       - name: the budgets stage A can meet (#14)
         shell: bash
         # On Linux the runtime built here links glibc, so cig's static
