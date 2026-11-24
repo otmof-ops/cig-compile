@@ -84,6 +84,57 @@ exhale square_sum(5)
 }
 
 #[test]
+fn a_forprep_that_jumps_to_its_own_next_pc_proves_only_what_both_paths_give() {
+    // A range written as a value (`str((0..n))`) is checked by a
+    // `forprep` whose jump goes to the instruction after it: with turns
+    // it writes its loop variable, R(A+3), and with none it writes
+    // nothing. Both stand at the same pc after, so R(A+3) is an int
+    // there only when it was one before. Here it held a string.
+    let src = "\
+pull show(n) {
+  roll s = \"a\".upper()
+  snuff str((0..n)) + s
+}
+exhale show(0)
+";
+    let m = lower(src);
+    let f = func(&m, "show");
+    let fl = flow(f).expect("flow");
+    let t = infer(f, &fl);
+    let (_, code) = decode_table(&f.instrs).unwrap();
+    let mut tested = 0;
+    let mut told_apart = 0;
+    for d in code.iter().flatten().filter(|d| d.op == Op::FORPREP) {
+        let next = d.pc + d.width;
+        assert_eq!(
+            cig_codegen::flow::target_of(d),
+            Some(next),
+            "a range value's forprep jumps to its own next pc"
+        );
+        let var = (d.a + 3) as usize;
+        let before = t.before(d.pc)[var];
+        let after = t.before(next)[var];
+        assert_eq!(
+            after,
+            before.join(Ty::Int),
+            "R(A+3) after: what both paths give ({before:?} before)"
+        );
+        assert_eq!(
+            t.on_edge(d.pc, next)[var],
+            after,
+            "the edge is the same join"
+        );
+        tested += 1;
+        told_apart += usize::from(before != Ty::Int);
+    }
+    assert!(tested > 0, "the script has a range value");
+    assert!(
+        told_apart > 0,
+        "some range value's variable was no int before: the case the rule is for"
+    );
+}
+
+#[test]
 fn int_plus_int_inside_a_counted_loop_is_int() {
     // Inside the loop body, both `total` (Int by initialization and only
     // updated with an Int result) and `i` (Int from `forprep`) are Int, so

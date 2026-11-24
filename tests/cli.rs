@@ -1211,11 +1211,23 @@ fn stage_c_compiles_what_it_can_and_the_program_runs_the_same() {
     let j: serde_json::Value = serde_json::from_str(json.trim()).unwrap();
     if NATIVE {
         assert_eq!(j["stage"], "c", "{j}");
+        let n = &j["native"];
         assert_eq!(
-            j["native"],
-            serde_json::json!({"compiled": 1, "left": 1, "why": ["`label`: line 5: a string"]}),
+            (&n["compiled"], &n["left"], &n["why"]),
+            (
+                &1.into(),
+                &1.into(),
+                &serde_json::json!(["`label`: line 5: a string"])
+            ),
             "{j}"
         );
+        // One entry (`fib`), and no body: the script has no loop.
+        assert_eq!(
+            (&n["top"], &n["bodies"], &n["typed"], &n["weighed"]),
+            (&false.into(), &0.into(), &1.into(), &0.into()),
+            "{j}"
+        );
+        assert!(n["bytes"].as_u64().is_some_and(|b| b > 0), "{j}");
         assert_eq!(j["warnings"], serde_json::json!([]), "{j}");
     } else {
         assert_eq!(
@@ -1226,16 +1238,20 @@ fn stage_c_compiles_what_it_can_and_the_program_runs_the_same() {
     }
 }
 
-/// `--stage c` on a script with nothing to compile makes the stage b
-/// program and says why; on a script that does not lower it is refused,
-/// as `--stage b` is.
+/// `--stage c` on a script with nothing that is faster as native code
+/// makes the stage b program and says why; on a script that does not
+/// lower it is refused, as `--stage b` is.
 #[test]
 fn stage_c_says_why_a_script_has_no_native_code() {
     let s = Sandbox::new();
+    // No loop, no function.
+    s.write("plain.cig", "exhale \"hi\"\n");
+    // A loop over a list: every turn is the interpreter's anyway.
     s.write(
-        "top.cig",
-        "roll t = 0\nfor i in 0..10 {\n  t += i\n}\nexhale t\n",
+        "walk.cig",
+        "roll xs = [1, 2, 3]\nroll t = \"\"\nfor x in xs {\n  t = t + \"${x}\"\n}\nexhale t\n",
     );
+    // A function on a string.
     s.write(
         "text.cig",
         "pull greet(name) { snuff \"hi ${name}\" }\nexhale greet(\"you\")\n",
@@ -1244,14 +1260,21 @@ fn stage_c_says_why_a_script_has_no_native_code() {
         "packs.cig",
         "pack { root() }\npull root() {\n  snuff \".\"\n}\nexhale \"packed\"\n",
     );
-    for (script, why) in [
+    for (script, why, said) in [
         (
-            "top",
-            "all its code is at the top level, and native code is compiled for functions",
+            "plain",
+            "it has no loop and no function, so native code has nothing to add",
+            "hi\n",
+        ),
+        (
+            "walk",
+            "none of its loops would run faster as native code, and it has no function",
+            "123\n",
         ),
         (
             "text",
-            "none of its functions compiles to native code (`greet`: it is called with a string)",
+            "it has no loop, and none of its functions compiles on its own (`greet`: it is called with a string)",
+            "hi you\n",
         ),
     ] {
         let built = s.cc(&["build", &format!("{script}.cig"), "--stage", "c"]);
@@ -1269,13 +1292,12 @@ fn stage_c_says_why_a_script_has_no_native_code() {
             record_of(&s.exe(script)).stage,
             cigscript::program::Stage::B
         );
+        assert_eq!(text(&s.prog(&exe_name(script), &[]).stdout), said);
     }
-    assert_eq!(text(&s.prog(&exe_name("top"), &[]).stdout), "45\n");
-    assert_eq!(text(&s.prog(&exe_name("text"), &[]).stdout), "hi you\n");
     // --json prints no note: its record carries it.
     let built = s.cc(&[
         "build",
-        "top.cig",
+        "walk.cig",
         "--stage",
         "c",
         "--json",
@@ -1295,7 +1317,7 @@ fn stage_c_says_why_a_script_has_no_native_code() {
         notes[0]
             .as_str()
             .unwrap()
-            .starts_with("note: top.cig is a stage b program: "),
+            .starts_with("note: walk.cig is a stage b program: "),
         "{j}"
     );
     let refused = s.cc(&["build", "packs.cig", "--stage", "c", "-o", "nope"]);
@@ -1307,6 +1329,203 @@ fn stage_c_says_why_a_script_has_no_native_code() {
         "{err}"
     );
     assert!(!s.path().join("nope").exists());
+}
+
+/// A loop whose work is arithmetic gets native code where it stands, the
+/// top level included: a body, entered at the loop. The program runs
+/// the same with it and without, the step budget stops both on the
+/// same step, and `verify` holds the body to a fresh compile.
+#[test]
+fn a_loop_of_arithmetic_gets_a_body_and_the_program_runs_the_same() {
+    let s = Sandbox::new();
+    s.write(
+        "top.cig",
+        "roll t = 0\nfor i in 0..1000 {\n  t += i\n}\nexhale t\n",
+    );
+    let built = s.cc(&["build", "top.cig", "--stage", "c"]);
+    let out = ok(&built);
+    if !NATIVE {
+        assert!(out.contains("stage b)"), "{out}");
+        return;
+    }
+    assert!(
+        out.contains("stage c)") && out.contains("\n  native the top level compiled\n"),
+        "{out}"
+    );
+    // One body, the top level's, entered at the loop's start, and no
+    // entry: the rule a build uses.
+    let native = section_of(&s, "top", "native");
+    let t = cig_native::Tables::parse(&native).expect("its tables");
+    assert_eq!(
+        (t.entries.len(), t.bodies.len(), t.rule),
+        (0, 1, cig_native::Rule::Loops)
+    );
+    assert_eq!(t.bodies[0].func, 0);
+    assert_eq!(t.bodies[0].resumes.len(), 1, "{:?}", t.bodies[0].resumes);
+    assert!(t.bodies[0].resumes[0] > 0, "the loop, not the start");
+    let said = ok(&s.prog(&exe_name("top"), &["--cig-program"]));
+    assert!(said.contains("1 body for "), "{said}");
+    // With its native code and without: the same answer, and the same
+    // stop at every budget tried, by what is printed and how it exits.
+    let run = |native: bool, args: &[&str]| {
+        let mut c = Command::new(s.exe("top"));
+        s.env(&mut c);
+        if !native {
+            c.env("CIG_NATIVE", "0");
+        }
+        let o = c.args(args).output().unwrap();
+        (o.status.code(), text(&o.stdout), text(&o.stderr))
+    };
+    assert_eq!(run(true, &[]).1, "499500\n");
+    for budget in ["1", "2", "50", "999", "2003", "2004", "100000"] {
+        assert_eq!(
+            run(true, &["--max-steps", budget]),
+            run(false, &["--max-steps", budget]),
+            "--max-steps {budget}"
+        );
+    }
+    assert_ne!(run(true, &["--max-steps", "50"]).0, Some(0));
+    // --json: the top level has a body, and nothing else has native code.
+    let json = ok(&s.cc(&[
+        "build",
+        "top.cig",
+        "--stage",
+        "c",
+        "--json",
+        "-o",
+        &exe_name("j"),
+    ]));
+    let j: serde_json::Value = serde_json::from_str(json.trim()).unwrap();
+    let n = &j["native"];
+    assert_eq!(
+        (
+            &n["top"],
+            &n["bodies"],
+            &n["typed"],
+            &n["compiled"],
+            &n["left"],
+            &n["weighed"]
+        ),
+        (
+            &true.into(),
+            &1.into(),
+            &0.into(),
+            &0.into(),
+            &0.into(),
+            &0.into()
+        ),
+        "{j}"
+    );
+    // verify compiles the script again and holds the body to it.
+    let checked = s.cc(&["verify", &exe_name("top"), "--runtime", RT, "--json"]);
+    assert_eq!(
+        differing(&checked),
+        Vec::<String>::new(),
+        "{}",
+        ok(&checked)
+    );
+    let (verdict, said) = part_of(&checked, "section native");
+    assert_eq!(verdict, "ok");
+    assert!(
+        said.contains(" bytes, 1 body, and is what its source compiles to at -O1 for "),
+        "{said}"
+    );
+    // One byte of the body changed, every hash made good: verify names it.
+    let mut changed = native.clone();
+    let code_len = t.code_len as usize;
+    changed[code_len / 2] ^= 0x01;
+    with_native(&s, "top", changed, "changed");
+    let checked = s.cc(&["verify", &exe_name("changed"), "--runtime", RT, "--json"]);
+    assert_eq!(differing(&checked), ["section native"]);
+}
+
+/// A program built with a body for every function (the compiler's test
+/// build) records that, and `verify` compiles it again the same way:
+/// the rule is the section's, not the environment's.
+#[test]
+fn verify_compiles_a_program_again_by_the_rule_it_records() {
+    if !NATIVE {
+        return;
+    }
+    let s = Sandbox::new();
+    s.write("typed.cig", TYPED);
+    let mut c = Command::new(env!("CARGO_BIN_EXE_cigcompile"));
+    s.env(&mut c);
+    ok(&c
+        .args(["build", "typed.cig", "--stage", "c"])
+        .env("CIGCOMPILE_BODIES", "every")
+        .output()
+        .unwrap());
+    let t = cig_native::Tables::parse(&section_of(&s, "typed", "native")).unwrap();
+    assert_eq!(t.rule, cig_native::Rule::Every);
+    // The top level, `fib` and `label`: each has a body, and `fib` its
+    // entry beside it.
+    assert_eq!((t.bodies.len(), t.entries.len()), (3, 1));
+    assert_eq!(
+        text(&s.prog(&exe_name("typed"), &[]).stdout),
+        "fib = 6765\n"
+    );
+    // Verified with nothing in the environment.
+    let checked = s.cc(&["verify", &exe_name("typed"), "--runtime", RT, "--json"]);
+    assert_eq!(
+        differing(&checked),
+        Vec::<String>::new(),
+        "{}",
+        ok(&checked)
+    );
+    let (_, said) = part_of(&checked, "section native");
+    assert!(
+        said.contains(" bytes, 3 bodies and 1 entry, and is what"),
+        "{said}"
+    );
+}
+
+/// No memory of a running stage c program is both writable and
+/// executable: its native code is mapped from its own file, read and
+/// execute, and never changed (#32, #40).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_running_stage_c_program_has_no_memory_that_is_writable_and_executable() {
+    if !NATIVE {
+        return;
+    }
+    let s = Sandbox::new();
+    // A loop that enters its body, then the process's own memory map.
+    s.write(
+        "maps.cig",
+        "roll t = 0\nfor i in 0..1000 {\n  t += i\n}\nexhale t\nexhale fs.read_text(\"/proc/self/maps\")\n",
+    );
+    let out = ok(&s.cc(&["build", "maps.cig", "--stage", "c"]));
+    assert!(out.contains("native the top level compiled"), "{out}");
+    let bytes = fs::read(s.exe("maps")).unwrap();
+    let l = layout(&bytes);
+    let (_, native) = l.sections.iter().find(|(i, _)| i == "native").unwrap();
+    let ran = s.prog(&exe_name("maps"), &[]);
+    let said = text(&ran.stdout);
+    assert!(said.starts_with("499500\n"), "{said} {}", text(&ran.stderr));
+    let mut mapped = false;
+    for line in said.lines().skip(1) {
+        let mut f = line.split_whitespace();
+        let (Some(_), Some(perms), Some(offset)) = (f.next(), f.next(), f.next()) else {
+            continue;
+        };
+        assert!(
+            !(perms.contains('w') && perms.contains('x')),
+            "writable and executable: {line}"
+        );
+        // The section's code, from the program's own file at the
+        // section's offset: read and execute, private.
+        if perms == "r-xp"
+            && u64::from_str_radix(offset, 16) == Ok(native.start as u64)
+            && line.ends_with("maps")
+        {
+            mapped = true;
+        }
+    }
+    assert!(
+        mapped,
+        "the native code is not mapped from the file:\n{said}"
+    );
 }
 
 /// The stage c program at `program` with `native` as its native section:

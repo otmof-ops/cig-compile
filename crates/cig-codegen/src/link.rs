@@ -193,6 +193,8 @@ pub fn assemble(
         code,
         entries: section_entries,
         sites: all_sites,
+        bodies: Vec::new(),
+        rule: cig_native::Rule::None,
     };
     // Check the section is well-formed.
     let _ = section.to_bytes().map_err(Error::Format)?;

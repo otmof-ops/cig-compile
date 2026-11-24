@@ -617,9 +617,13 @@ fn the_bytes_are_the_same_on_every_host() {
             (arch, bytes.len(), fingerprint(&bytes))
         })
         .collect();
+    // Updated for interface 2: the footer carries new fields (body
+    // count, resume count, rule) and the version and interface bytes
+    // moved from 1 to 2. `Rule::None` keeps the code and the entry
+    // and site tables the same byte for byte; only the footer differs.
     let held = [
-        (Arch::X86_64, 3384, 592_107_944_872_101_445),
-        (Arch::Aarch64, 3216, 17_159_691_451_912_911_750),
+        (Arch::X86_64, 3384, 10_074_670_610_979_580_805),
+        (Arch::Aarch64, 3216, 17_860_211_359_695_669_158),
     ];
     assert_eq!(made, held, "what this host generates (length, fingerprint)");
 }

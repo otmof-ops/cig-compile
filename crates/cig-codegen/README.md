@@ -8,7 +8,10 @@ cig's stage `c` programs.
 
 ## What it does
 
-One job: a module's IR and its types in, a `native` section out.
+Two jobs, in one crate: a module's IR and its types in, a `native`
+section's **typed entries** out; and a module's bytecode and a rule in,
+the section's **bodies** out. The two share the back end, the layout
+and the test harness.
 
 `compile` takes the module (`cigscript::lower::cir`), its inference
 (`cigscript::lower::cir::infer`), each function's index in the bytecode
@@ -17,13 +20,23 @@ the specializations that qualify, compiles each with Cranelift, packs
 the code and its tables into a `cig_native::Section`, and reports every
 specialization as compiled or left to the bytecode, with the reason.
 
+`bodies` takes the bytecode module, a `Rule` (none, loops, or every)
+and a machine, walks the functions pre-order, and gives back a `Bodies`:
+a code blob with one body per function that gets one, each body's row
+(its offset in the blob and its resume points), and an outcome per
+function. A body is native code of signature
+`extern "C" fn(ctx: *mut Context, at: u32) -> u64`: it is entered at
+one of its resume points on the frame the VM pushed and returns a
+stop that says where the bytecode goes on, raised, or a defect.
+
 It knows nothing of programs, files or the command line.
-`cigcompile build --stage c` calls it and puts the section in a program;
-cig's VM loads the code and calls it. The layout both sides use is
-cig-script's `cig-native` crate. The design is decisions
+`cigcompile build --stage c` calls both and puts the section in a
+program; cig's VM loads the code and calls it. The layout both sides
+use is cig-script's `cig-native` crate. The design is decisions
 [0005](../../docs/decisions/0005-what-goes-native-first.md),
-[0006](../../docs/decisions/0006-native-code-in-a-program.md) and
-[0007](../../docs/decisions/0007-where-the-pieces-live.md).
+[0006](../../docs/decisions/0006-native-code-in-a-program.md),
+[0007](../../docs/decisions/0007-where-the-pieces-live.md) and
+[0008](../../docs/decisions/0008-native-code-on-the-vms-frame.md).
 
 The code does exactly what the tree-walker does. It never makes an
 error: where the interpreter would raise one, native code writes the
@@ -112,13 +125,119 @@ the status is 0 and returns the status.
 - **No traps, no calls out.** The code has no instruction that can
   trap and calls nothing but other bodies of its section.
 
+## The bodies
+
+A **body** is one function's native code, the top level's included,
+run on the frame the VM made for the call: the same registers, holding
+the values the bytecode would find. It is entered at one of its
+**resume points** and returns a **stop**: `At(pc)` (the bytecode goes
+on at `pc`), `Raised(pc)` (a helper raised while the frame's pc was
+this one) or `Defect(pc)` (a register was not of the type the
+compiler proved: a bug). A body never makes an error.
+
+**Any instruction can be the interpreter's**, on the same frame, so a
+body is always right and every construct of the language is in every
+body. What is machine code is a question of time alone.
+
+### What an instruction becomes (`src/body.rs`)
+
+- **Native:** its inline form. `nop`, `jmp`, `loop`, `steps`; `mov`,
+  `loadnull`, `loadbool`, `loadint`, `loadk` of a number or a bool;
+  `add`, `sub`, `mul`, `mod` and their `k` forms on ints, and those
+  and `div` on a number and a float; `neg`, `not`; `eq`, `lt`, `le`,
+  their `k` forms and their jump forms; `test`, `testn`, `testset`;
+  `forprep` and `forloop` with a step of 1. A form is the
+  interpreter's result for the operands it covers. For any others (an
+  overflow, a zero divisor, a string, a write over a register that
+  holds a list) it calls the runtime's `again(ctx, pc)` before it has
+  written anything, and the interpreter runs that one instruction.
+- **A stretch:** a run of instructions with no inline form is one
+  call, `run(ctx, from, to)`, and the body goes on wherever the
+  bytecode comes out of that range.
+- **A leave:** the body returns `At(pc)`, and the VM's own loop runs
+  the bytecode until it reaches a resume point. `call`, `tailcall`
+  and `ret` are always leaves: the VM's instruction makes and ends
+  frames.
+
+### Where a register's value is (stage D on the frame)
+
+In the frame, with its tag, unless the type pass (`src/types.rs`)
+proves it an int, a float or a bool at that instruction: then it is
+**held** in a machine register and no tag is read or written. Three
+rules keep that exact:
+
+1. every held register is written to the frame before anything else
+   reads the frame (a helper call, a return);
+2. a register is read back where its value comes from the frame (a
+   resume point, after the interpreter ran an instruction that wrote
+   it), and its tag is compared with the proven type: a mismatch is
+   `Defect(pc)`;
+3. a held register's place in the frame never holds a value that owns
+   memory, so writing it back frees nothing.
+
+### Where machine code pays (`src/plan.rs`)
+
+Machine code beats the interpreter by a couple of nanoseconds an
+instruction. Crossing between them costs several times that: a
+stretch is a call into the runtime, and leaving a body and entering
+it again is two trips through the VM's loop. A loop that reads a
+list, calls a function and adds two numbers is faster left to the
+interpreter whole; a loop of arithmetic is faster native whole.
+
+So before anything is emitted, each loop is settled, innermost first:
+its own instructions are a ring, each one native, part of a stretch
+or left to the VM, and the cheapest answers for the whole ring are
+found exactly. "All of it is the interpreter's" is always a
+candidate and costs what the bytecode costs, so by its own figures a
+plan is never slower than stage `b`. A function none of whose loops
+pays gets no body.
+
+What the search weighs, in tenths of a nanosecond, measured on one
+x86-64 laptop and rounded:
+
+| | cost |
+|---|---:|
+| an instruction as machine code | 3 |
+| an instruction in the interpreter | 21 |
+| a stretch (a call into the runtime and back) | 120 |
+| leaving a body | 50 |
+| entering a body | 250 |
+
+An inline form whose operands the type pass proved is always taken.
+One that tests its operands when it runs is a **guess**: it is
+counted as failing a share of the time (5% for a plain write, 25%
+for arithmetic on values of unknown type, half for a move), each
+failure a call. A guess next to instructions the interpreter runs
+anyway joins their stretch, where a failure costs nothing. The
+runtime bounds what a wrong guess can cost: a body whose guesses
+keep failing is no longer entered there, and the bytecode has the
+loop back.
+
+A body's **resume points** are the native instructions the
+interpreter can arrive at: the start of a native loop, the
+instruction after a call inside one.
+
+### The rules
+
+- `Rule::None`: no body.
+- `Rule::Loops`: what a build makes. A body for each function with a
+  loop that pays, entered at those loops.
+- `Rule::Every`: for the tests. A body for every function, with
+  every instruction that has an inline form native and every resume
+  point the bytecode has, so every form and every way in runs on
+  every script. `Mode::Frame` keeps every register in the frame
+  there, and `Mode::Checked` also compares each type the pass proved
+  with the register's real tag at every instruction that uses it:
+  how the pass is held to the VM.
+
 ## The same input gives the same bytes
 
 On any host, for either machine:
 
 - specializations are compiled in the order of (module index, row);
-  every body is laid out before every entry;
-- sites are numbered through the section in that order;
+  every typed-entry body is laid out before every entry;
+- bodies are compiled in the module's pre-order (0 is the top level);
+- sites are numbered through the section in the order they are met;
 - the crate holds no unordered map, reads no clock and detects no host
   CPU: Cranelift is given the target's baseline and nothing else;
 - Cranelift is pinned to one exact version.
@@ -128,11 +247,28 @@ and hold its native code to the result, byte for byte.
 
 ## Tests
 
-`cargo test -p cig-codegen` (`tests/generate.rs`): the same bytes on two
-compiles and the same entries and sites for both machines; what is
-compiled, and the reason for each thing that is not; the frame bound;
-and, on Linux, the generated code run through cig-native's loader:
-results, every way of leaving with its site and operands, steps and
-depth counted mark by mark. Whole programs are held to the tree-walker
-by the differential suite at the workspace root, which builds each one
-at stage `c`.
+`cargo test -p cig-codegen`:
+
+- `tests/generate.rs` (the typed entries): the same bytes on two
+  compiles and the same entries and sites for both machines; what is
+  compiled, and the reason for each thing that is not; the frame bound;
+  and, on Linux, the generated code run through cig-native's loader:
+  results, every way of leaving with its site and operands, steps and
+  depth counted mark by mark.
+- `src/plan.rs` (the plan): a loop of proven arithmetic is native
+  whole, a loop the interpreter runs anyway is left to it whole, a
+  guess joins the stretch beside it, a call is not worth leaving for
+  among little work and is among much, a native loop draws its outer
+  loop in.
+- `tests/bodies.rs` (the bodies): which functions get one and where
+  it is entered under each rule; the same bytes on two compiles and a
+  fingerprint for each machine; and, on Linux, bodies mapped and
+  entered on real frames against a recording host: a loop that runs
+  to its end in machine code in each mode, one entered part way, the
+  step budget, an overflow, operands an inline form does not cover, a
+  stretch, a stop the body hands back, and a register that is not of
+  its proven type.
+
+Whole programs are held to the tree-walker by the differential suite
+at the workspace root, which builds each one at stage `c`, and, with
+`DIFF_BODIES`, again with a body for every function.

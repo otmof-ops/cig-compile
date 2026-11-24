@@ -516,13 +516,40 @@ fn transfer_edge(
     kty: &[Ty],
     cells: &BTreeSet<u32>,
 ) -> Vec<Ty> {
+    let fall = d.pc + d.width;
+    let fell = to == fall;
+    let jumped = crate::flow::target_of(d) == Some(to);
+    if fell && jumped {
+        // The instruction's jump goes to the pc it falls through to (a
+        // range written as a value is checked by a `forprep` that jumps
+        // nowhere). Whichever happened, the bytecode stands at `to`: a
+        // register has a type there only when both paths give it.
+        let went_on = transfer_path(d, in_row, true, kty, cells);
+        let leapt = transfer_path(d, in_row, false, kty, cells);
+        return went_on
+            .into_iter()
+            .zip(leapt)
+            .map(|(a, b)| a.join(b))
+            .collect();
+    }
+    transfer_path(d, in_row, fell, kty, cells)
+}
+
+/// [`transfer_edge`] for one of an instruction's two ways on: it fell
+/// through (`fell`), or it jumped.
+fn transfer_path(
+    d: &DecodedInstr,
+    in_row: &[Ty],
+    fell: bool,
+    kty: &[Ty],
+    cells: &BTreeSet<u32>,
+) -> Vec<Ty> {
     let mut out = transfer(d, in_row, kty);
     // Edge-sensitive rules.
     match d.op {
         // testset: fall-through only writes R(A) = R(B)'s type.
         Op::TESTSET => {
-            let fall = d.pc + d.width;
-            if to == fall {
+            if fell {
                 let ty = in_row.get(d.b_u as usize).copied().unwrap_or(Ty::Any);
                 if let Some(slot) = out.get_mut(d.a as usize) {
                     *slot = ty;
@@ -538,8 +565,7 @@ fn transfer_edge(
         // into the body, R(A+3) is Int and R(A), R(A+1), R(A+2) are refined
         // to Int (for_window raises otherwise).
         Op::FORPREP => {
-            let fall = d.pc + d.width;
-            if to == fall {
+            if fell {
                 // Into the loop body.
                 for off in 0..=3 {
                     if let Some(slot) = out.get_mut((d.a + off) as usize) {
@@ -560,8 +586,7 @@ fn transfer_edge(
         // forloop: the going-on path sets R(A) and R(A+3) to Int; the
         // fall-through path (loop done) writes nothing.
         Op::FORLOOP => {
-            let fall = d.pc + d.width;
-            if to == fall {
+            if fell {
                 // Loop done: no writes (the `writes` default would have
                 // written R(A) and R(A+3) to Int; undo it).
                 if let Some(slot) = out.get_mut(d.a as usize) {
@@ -582,17 +607,14 @@ fn transfer_edge(
         }
         // iternext: on the fall-through (item found) writes R(A+3) = Any
         // and R(A+2) = Int; on the jump (done) writes nothing.
-        Op::ITERNEXT => {
-            let fall = d.pc + d.width;
-            if to != fall {
-                // Done: undo the writes.
-                for off in [2, 3] {
-                    if let Some(slot) = out.get_mut((d.a + off) as usize) {
-                        *slot = in_row
-                            .get((d.a + off) as usize)
-                            .copied()
-                            .unwrap_or(Ty::None);
-                    }
+        Op::ITERNEXT if !fell => {
+            // Done: undo the writes.
+            for off in [2, 3] {
+                if let Some(slot) = out.get_mut((d.a + off) as usize) {
+                    *slot = in_row
+                        .get((d.a + off) as usize)
+                        .copied()
+                        .unwrap_or(Ty::None);
                 }
             }
         }

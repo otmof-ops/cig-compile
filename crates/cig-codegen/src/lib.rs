@@ -42,13 +42,17 @@ use cig_native::{Arch, Section};
 use cigscript::lower::cir::infer::{Inference, Row};
 use cigscript::lower::cir::ir::{FuncId, Module};
 
+mod body;
 pub mod flow;
 mod isa;
 mod link;
 mod lower;
+mod plan;
 mod qualify;
 pub mod types;
 
+pub use body::{bodies, bodies_as, Bodies, BodyOutcome, Mode};
+pub use cig_native::Rule;
 pub use isa::{target as target_isa, triple_of, IsaError};
 pub use qualify::{fixed_point, qualifies, Scalar, SpecKey};
 
@@ -110,6 +114,31 @@ pub enum Error {
     /// The section's own writer refused: a code length or table shape
     /// out of the format's rules. A defect in the generator.
     Format(cig_native::FormatError),
+    /// A body left a trap in its code. The generator compiles no
+    /// trapping instruction, so this is a Cranelift inlay we did not
+    /// expect; a defect to find.
+    BodyTrap {
+        /// The function's index in the bytecode module.
+        func: u32,
+        /// Cranelift's trap code.
+        what: String,
+    },
+    /// A body produced a relocation this generator cannot resolve.
+    /// Step 1 has no body-to-body call; any relocation is a defect.
+    BodyStrayReloc {
+        /// The function's index.
+        func: u32,
+        /// Cranelift's own description.
+        what: String,
+    },
+    /// A body generator counted more of something than fits in the
+    /// section's own count.
+    BodyTooMany {
+        /// `"bytes of body code"`, `"bodies"` or `"resume points"`.
+        what: &'static str,
+        /// How many.
+        count: usize,
+    },
 }
 
 impl core::fmt::Display for Error {
@@ -134,6 +163,16 @@ impl core::fmt::Display for Error {
                 at.0, at.1
             ),
             Error::Format(e) => write!(f, "the section's writer refused: {e}"),
+            Error::BodyTrap { func, what } => {
+                write!(f, "body of function {func} has a reachable trap: {what}")
+            }
+            Error::BodyStrayReloc { func, what } => write!(
+                f,
+                "body of function {func} has a relocation this generator does not resolve: {what}"
+            ),
+            Error::BodyTooMany { what, count } => {
+                write!(f, "{count} {what}, more than a section holds")
+            }
         }
     }
 }

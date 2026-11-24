@@ -40,15 +40,29 @@ has every byte; cig-compile's record 0004 has the reasons):
   script stays in `source`, for `--interp`, an error's quoted line and
   `--chains`.
 - **Stage `c`** programs are stage `b` programs with a `native` section
-  after `bytecode`. `cigscript::lower::lowered_with_cir` gives the IR
-  the bytecode was lowered from, `cigscript::lower::cir::infer` the
-  types of every function for each row of argument types it is called
-  with, and `crates/cig-codegen` compiles those whose every value is an
-  int, a float, a bool or null to machine code on Cranelift, for the
-  program's target. The section's layout is cig-script's `cig-native`
-  crate's; its body lies at a file offset that is a multiple of 65,536,
-  and cig maps its code from the program's own file and calls it from
-  the VM ([decisions 0005 to 0007](decisions/0005-what-goes-native-first.md)).
+  after `bytecode`, made by `crates/cig-codegen` on Cranelift for the
+  program's target. It holds two kinds of machine code:
+  - **Entries.** `cigscript::lower::lowered_with_cir` gives the IR the
+    bytecode was lowered from and `cigscript::lower::cir::infer` the
+    types of every function for each row of argument types it is called
+    with; a function whose every value is an int, a float, a bool or
+    null is compiled whole for each such row
+    ([decision 0005](decisions/0005-what-goes-native-first.md)).
+  - **Bodies.** The bytecode itself is compiled, function by function,
+    to code that runs on the frame the VM made: each register where the
+    bytecode has it, and one the compiler proves to be an int, a float
+    or a bool kept in a machine register meanwhile. Whatever has no
+    machine code the interpreter runs on the same frame, so every
+    construct is in every body. A plan decides, loop by loop, what is
+    worth machine code, and a function none of whose loops pays gets
+    no body ([decision 0008](decisions/0008-native-code-on-the-vms-frame.md);
+    the generator's [README](../crates/cig-codegen/README.md) has the
+    plan and its figures).
+
+  The section's layout is cig-script's `cig-native` crate's; it lies at
+  a file offset that is a multiple of 65,536, and cig maps its code from
+  the program's own file, read and execute and never writable, and
+  enters it from the VM ([decisions 0006 and 0007](decisions/0006-native-code-in-a-program.md)).
   The same input gives the same bytes, which is what lets
   `cigcompile verify` hold a program's native code to its script.
 - **Stage `a`** programs carry `source` alone, and the tree-walker runs
@@ -185,7 +199,7 @@ that cough and roll back), runs each one, and shrinks a differ to the
 fewest statements that still differ. Every pull request runs 100 from
 a fixed seed; nightly runs a thousand on Linux, macOS and Windows.
 
-A **typed corpus** (`tests/corpus/typed/`, 36 programs) corners
+A **typed corpus** (`tests/corpus/typed/`, 37 programs) corners
 arithmetic. Each program keeps its arithmetic inside functions that
 take and return only ints, floats, bools and null, the functions stage
 `c` compiles to native code ([decision 0005](decisions/0005-what-goes-native-first.md)),
@@ -207,6 +221,18 @@ bounded by a counter, constants drawn from the edges of `i64` and
 `f64` as often as from the middle, and a top level that calls each
 function with several rows of argument types inside a `try`. A program
 that differs is shrunk as `DIFF_RANDOM`'s is.
+
+**Bodies everywhere** (`DIFF_BODIES=every-checked,every`). A build
+gives a body only to a loop that pays, so most of a script stays
+bytecode and most of the generator would never run. For the tests the
+compiler makes two other builds of each script's stage `c` program
+(`CIGCOMPILE_BODIES`): one with a body for every function and machine
+code for every instruction that has any, and one that also compares
+each type the compiler proved with the register's real value at every
+instruction that relies on it. Each is one more program held to the
+same `cig run`, in every mode and through the step-budget sweep, so
+every inline form, every way into a body and every claim of the type
+pass meets every script in the corpus. Every pull request runs both.
 
 ## Fuzzing
 
