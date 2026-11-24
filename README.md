@@ -84,9 +84,19 @@ and puts everything back, with no cig on the machine:
 - **A stage `b` program** (`cigcompile build --stage b`, the script's bytecode on cig's VM) takes 0.52 of `cig run`'s time, faster on all 21, and 0.82 of CPython 3.13's; it starts in 3.7 ms, where CPython takes 13.5 ms.
 - **A stage `a` program**, the default, runs on the interpreter as `cig run` does (0.93 of its time).
 - **Lua is faster**: a stage `b` program takes 1.97 times Lua 5.4's time and 5.20 times LuaJIT's.
-- **Stage `c`** (`--stage c`, on `main`, in no release yet) compiles the functions that work on numbers alone to native code. On three small programs made of such functions, read on another machine, it took 0.045 to 0.128 of stage `b`'s time, 0.15 to 0.35 of Lua 5.4's and 0.59 to 1.78 of LuaJIT's ([first numbers](docs/BENCHMARKS-2026-11-23-stage-c.md)). Of the 25 programs above only `fib` has such a function, so the table does not move yet.
+- **Stage `c`** (`--stage c`, on `main`, in no release yet) adds native code for a script's loops and for its functions on numbers, where that comes out ahead. Measured on 2026-11-24, both built from `main`, on another machine than the table above ([the paper](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCHMARKS-2026-11-24.md)):
 
-Whole processes, start-up included, on a 2018 laptop on battery.
+  | program | stage b, ms | stage c, ms | stage c ÷ stage b | Lua 5.4, ms | CPython 3.12, ms |
+  |---|---:|---:|---:|---:|---:|
+  | `mandel` | 40.2 | 7.4 | 0.18 | 16.2 | 53.0 |
+  | `fib` | 16.8 | 4.4 | 0.26 | 4.4 | 12.6 |
+  | `fannkuch` | 40.7 | 12.3 | 0.30 | 22.4 | 33.2 |
+  | `loop` | 9.3 | 4.6 | 0.50 | 4.3 | 21.7 |
+  | `sieve` | 32.8 | 25.5 | 0.78 | 11.1 | 25.2 |
+
+  Where a program has native code it takes 0.52 of its stage `b` time (8 of the 21 compute programs have some), and 0.78 over all 21: faster on 7, level on 14, slower on none. Over the 21, a stage `c` program takes 0.66 of CPython 3.12's time (stage `b`: 0.84), 1.37 times Lua 5.4's (stage `b`: 1.83) and 2.54 times LuaJIT's (stage `b`: 3.40). A loop that calls a function, reads a map's field or builds a string each turn is not compiled yet and runs as stage `b` does.
+
+Whole processes, start-up included: the table at the top on a 2018 laptop on battery, with cig 1.24.0 as released; stage `c`'s on a 2025 laptop on mains power, every process pinned to one core.
 
 ## Measuring
 
