@@ -143,22 +143,28 @@ body. What is machine code is a question of time alone.
 
 - **Native:** its inline form. `nop`, `jmp`, `loop`, `steps`; `mov`,
   `loadnull`, `loadbool`, `loadint`, `loadk` of a number or a bool;
-  `add`, `sub`, `mul`, `mod` and their `k` forms on ints, and those
-  and `div` on a number and a float; `neg`, `not`; `eq`, `lt`, `le`,
-  their `k` forms and their jump forms; `test`, `testn`, `testset`;
-  `forprep` and `forloop` with a step of 1; `getindex` and `setindex`
-  of a list by an int, for an element that is a number, a bool or
-  null. A form is the interpreter's result for the operands it covers. For any others (an
+  `add`, `sub`, `mul`, `div`, `mod` and their `k` forms on two ints or
+  on a number and a float (an int divided by an int is an int when it
+  divides exactly and a float otherwise, as the interpreter has it);
+  `neg`, `not`; `eq`, `lt`, `le`, their `k` forms and their jump
+  forms; `test`, `testn`, `testset`; `forprep` and `forloop` with a
+  step of 1; `getindex` and `setindex` of a list by an int, for an
+  element that is a number, a bool or null. A form is the
+  interpreter's result for the operands it covers. For any others (an
   overflow, a zero divisor, a string, a write over a register that
   holds a list) it calls the runtime's `again(ctx, pc)` before it has
   written anything, and the interpreter runs that one instruction.
 - **A stretch:** a run of instructions with no inline form is one
   call, `run(ctx, from, to)`, and the body goes on wherever the
-  bytecode comes out of that range.
+  bytecode comes out of that range. A `call` in a stretch is
+  **carried**: the runtime makes it and runs the callee to its return
+  under the body, in the callee's own body where it has one, and goes
+  on in the range. Where it cannot (the stack has no room), it stands
+  at the call, and the body returns that stop.
 - **A leave:** the body returns `At(pc)`, and the VM's own loop runs
-  the bytecode until it reaches a resume point. `call`, `tailcall`
-  and `ret` are always leaves: the VM's instruction makes and ends
-  frames.
+  the bytecode until it reaches a resume point. `tailcall` and `ret`
+  are always leaves: the VM's instruction ends the frame. A `call` is
+  one where the plan finds that cheaper than a stretch.
 
 ### Where a register's value is (stage D on the frame)
 
@@ -214,8 +220,15 @@ its own instructions are a ring, each one native, part of a stretch
 or left to the VM, and the cheapest answers for the whole ring are
 found exactly. "All of it is the interpreter's" is always a
 candidate and costs what the bytecode costs, so by its own figures a
-plan is never slower than stage `b`. A function none of whose loops
-pays gets no body.
+plan is never slower than stage `b`.
+
+Then a function's own code outside its loops is settled the same way,
+as a line from the call to the return with the loops as items: it
+starts and ends in the interpreter, pays for entering where its first
+native instruction is and for leaving after its last, and spreads
+nothing over turns. A function is called any number of times, so its
+straight code is worth weighing; the top level runs once, and only
+its loops are. A function nothing of which pays gets no body.
 
 What the search weighs, in tenths of a nanosecond, measured on one
 x86-64 laptop and rounded:
@@ -225,17 +238,26 @@ x86-64 laptop and rounded:
 | an instruction as machine code | 3 |
 | an instruction in the interpreter | 21 |
 | a stretch (a call into the runtime and back) | 120 |
+| a `call` carried in a stretch, beyond the stretch | 40 |
 | leaving a body | 50 |
 | entering a body | 250 |
+| entering a body at its function's first instruction | 70 |
 | a list's element read or written as machine code | 10 |
 | the same in the interpreter | 40 |
 | asking the runtime where a list's elements lie | 100 |
+
+Entering at a function's first instruction is the cheap way in: the
+frame is new, no register is held in a machine register yet, and
+nothing is read back from it. Anywhere else the body reads back, and
+checks the type of, every register it holds there.
 
 An inline form whose operands the type pass proved is always taken.
 One that tests its operands when it runs is a **guess**: it is
 counted as failing a share of the time (3% for a plain write, 10%
 for arithmetic on values of unknown type or a list read by a proven
-int, 30% for a move), each failure a call. A guess next to
+int, 30% for a move), each failure four tenths of a call: a guess
+that keeps failing is given up by the runtime and costs nothing
+more, so over a run it costs less than its rate. A guess next to
 instructions the interpreter runs anyway joins their stretch, where a
 failure costs nothing.
 
@@ -254,22 +276,32 @@ the turn, so it costs nothing a turn; after a stretch it is asked for
 again, so one read between two instructions the interpreter runs
 joins their stretch, and eight reads after one share one view.
 
+**A call is weighed like anything else.** Left to the VM's loop it
+costs the body's way out and its way in again; carried in a stretch
+it costs the stretch (which the instruction that loads the callee
+often shares) and a little more. A loop with enough arithmetic
+around a call stays native around it; a loop of calls and nothing
+else is the interpreter's whole, and a stretch of the loop around it
+can hold it, calls and all.
+
 A body's **resume points** are the native instructions the
-interpreter can arrive at: the start of a native loop, the
-instruction after a call inside one.
+interpreter can arrive at: a function's first instruction, the start
+of a native loop, the instruction after a stretch or a call.
 
 ### The rules
 
 - `Rule::None`: no body.
 - `Rule::Loops`: what a build makes. A body for each function with a
-  loop that pays, entered at those loops.
+  loop or straight code that pays, entered there.
 - `Rule::Every`: for the tests. A body for every function, with
-  every instruction that has an inline form native and every resume
-  point the bytecode has, so every form and every way in runs on
-  every script. `Mode::Frame` keeps every register in the frame
-  there, and `Mode::Checked` also compares each type the pass proved
-  with the register's real tag at every instruction that uses it:
-  how the pass is held to the VM.
+  every instruction that has an inline form native, every call
+  carried and every resume point the bytecode has, so every form and
+  every way in runs on every script. `Mode::Frame` keeps every
+  register in the frame there, and `Mode::Checked` also compares each
+  type the pass proved with the register's real tag at every
+  instruction that uses it (how the pass is held to the VM) and
+  leaves every call to the VM's own loop, so the two builds the
+  differential suite makes of a script make its calls both ways.
 
 ## The same input gives the same bytes
 
@@ -298,19 +330,26 @@ and hold its native code to the result, byte for byte.
   depth counted mark by mark.
 - `src/plan.rs` (the plan): a loop of proven arithmetic is native
   whole, a loop the interpreter runs anyway is left to it whole, a
-  guess joins the stretch beside it, a call is not worth leaving for
-  among little work and is among much, a native loop draws its outer
-  loop in; a loop that writes a list and counts is native whole with
-  the list in view, an index after a stretch pays for its view each
-  turn, and a loop native whole keeps its outer loop's lists in view.
+  guess joins the stretch beside it, a call among little work is left
+  with its loop and among much is carried (with what loads its
+  callee, in one stretch), a loop of calls alone is one stretch of
+  the loop around it, a native loop draws its outer loop in; a
+  function's straight code is native when there is enough of it, is
+  entered at its first native instruction, and carries its calls; a
+  loop that writes a list and counts is native whole with the list in
+  view, an index after a stretch pays for its view each turn, and a
+  loop native whole keeps its outer loop's lists in view.
 - `tests/bodies.rs` (the bodies): which functions get one and where
   it is entered under each rule; the same bytes on two compiles and a
   fingerprint for each machine; and, on Linux, bodies mapped and
   entered on real frames against a recording host: a loop that runs
   to its end in machine code in each mode, one entered part way, the
   step budget, an overflow, operands an inline form does not cover, a
-  stretch, a stop the body hands back, and a register that is not of
-  its proven type; a list of numbers read where it lies and asked for
+  stretch, a call carried in one a turn and left in the checked
+  build, an int divided by an int over its edges, a stop the body
+  hands back, and a register that is not of its proven type; a
+  function's straight code entered at its start; a list of numbers
+  read where it lies and asked for
   once, an element machine code may not copy, an index with no
   element, a register that holds no list, and a list written in place
   until a string is in the way.

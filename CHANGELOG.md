@@ -5,6 +5,41 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **Stage `c`: a call no longer ends native code, and a function's own
+  code can be native**
+  ([decision 0008](docs/decisions/0008-native-code-on-the-vms-frame.md),
+  "A call from a body, and a function's own code"; #32, #34).
+  - **A call is carried.** A loop that called a function stayed
+    bytecode whole: the native code had to return at the call and be
+    entered again after it, which cost more than the call. cig's
+    runtime now makes the call and runs the callee to its return under
+    the native code, so a loop with enough arithmetic around a call
+    stays native around it. The compiler weighs both ways for each
+    call.
+  - **A function's straight code.** A function with no loop got no
+    native code of its own unless every value in it was a number of a
+    known type. Now a function's code outside its loops is weighed as
+    its loops are, and compiled when there is enough arithmetic in it
+    to pay for entering it: a helper a hot loop calls. The top level
+    runs once, and only its loops are weighed.
+  - **`/` on two ints is native:** an int when it divides exactly, the
+    two as floats otherwise, as the interpreter has it.
+  - **What a program does is unchanged.** The differential suite's two
+    test builds of each script now make its calls both ways: one
+    carries every call, the other (the one that checks every proven
+    type) leaves every call to the VM's own loop.
+  - **First readings**, this machine, whole processes pinned to one
+    core: `spectral` takes 0.79 of its stage `b` time (it was level),
+    and no other program of the set moved by more than 3%. cig's own
+    calls got cheaper at every stage on the way (`fib` at stage `b`
+    takes 0.89 of the time it took).
+  - **What a build says.** A script none of whose functions got native
+    code reads `... and none of its functions has native code of its
+    own (...)`; `--json`'s `weighed` counts every function the
+    compiler weighed and left, not only those with a loop.
+  - **Needs** cig's source at the commit this compiler now pins (in no
+    release yet).
+
 - **Stage `c`: native code for loops, on the VM's own frame**
   ([decision 0008](docs/decisions/0008-native-code-on-the-vms-frame.md);
   #32, #34). `cigcompile build --stage c` now compiles a loop whose work

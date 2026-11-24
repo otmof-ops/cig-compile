@@ -124,8 +124,9 @@ pub struct BodyOutcome {
     /// How many of the function's instructions are machine code in the
     /// body, and how many it has in all.
     pub inline: (u32, u32),
-    /// The function has a loop, and the plan left every loop of it to
-    /// the bytecode: none would run faster as machine code.
+    /// The plan weighed the function (its loops, and for any function
+    /// but the top level its straight code) and left all of it to the
+    /// bytecode: none would run faster as machine code.
     pub weighed: bool,
 }
 
@@ -227,17 +228,23 @@ pub fn bodies_as(module: &BcModule, rule: Rule, arch: Arch, mode: Mode) -> Resul
             report.push(left("the rule gives no function a body".to_string()));
             continue;
         }
-        if rule == Rule::Loops && flow.loop_heads.is_empty() {
+        // The top level runs once: only its loops are weighed.
+        let top = idx == 0;
+        if rule == Rule::Loops && top && flow.loop_heads.is_empty() {
             report.push(left("it has no loop".to_string()));
             continue;
         }
-        let made = match compile_one(f, &flow, &*isa, mode, rule) {
+        let made = match compile_one(f, &flow, &*isa, mode, rule, top) {
             Ok(Some(c)) => c,
             // The plan found nothing that machine code would run faster.
             Ok(None) => {
+                let why = match top {
+                    true => "none of its loops would run faster as machine code",
+                    false => "it would not run faster as machine code",
+                };
                 report.push(BodyOutcome {
                     weighed: true,
-                    ..left("none of its loops would run faster as machine code".to_string())
+                    ..left(why.to_string())
                 });
                 continue;
             }
@@ -333,6 +340,7 @@ fn compile_one(
     isa: &dyn TargetIsa,
     mode: Mode,
     rule: Rule,
+    top: bool,
 ) -> Result<Option<OneBody>, String> {
     let call_conv = isa.default_call_conv();
     let ptr = isa.pointer_type();
@@ -354,7 +362,13 @@ fn compile_one(
         after_interp = c == Class::Interp;
         class.insert(d.pc, c);
     }
-    let plan = plan::plan(rule, flow, &code, &class, end);
+    let asked = plan::Asked {
+        straight: !top,
+        // The checked build leaves every call to the VM's own loop:
+        // the tests then run both ways of making one on every script.
+        carry: mode != Mode::Checked,
+    };
+    let plan = plan::plan(rule, flow, &code, &class, end, asked);
     if plan.resumes.is_empty() {
         return Ok(None);
     }
@@ -524,13 +538,17 @@ fn compile_one(
         .iter()
         .map(|r| format!("{:?}", r.target))
         .collect();
-    // The one trap Cranelift may record is the division inside an
-    // `srem`, which no run reaches with a zero divisor: `%` tests its
-    // divisor first.
+    // The traps Cranelift may record are those of the machine's
+    // division inside an `srem` and an `sdiv`: a zero divisor, and the
+    // least int by -1. No run reaches either: `%` and `/` test for both
+    // before they divide.
     let traps: Vec<String> = buffer
         .traps()
         .iter()
-        .filter(|t| t.code != cranelift_codegen::ir::TrapCode::INTEGER_DIVISION_BY_ZERO)
+        .filter(|t| {
+            t.code != cranelift_codegen::ir::TrapCode::INTEGER_DIVISION_BY_ZERO
+                && t.code != cranelift_codegen::ir::TrapCode::INTEGER_OVERFLOW
+        })
         .map(|t| format!("{t:?}"))
         .collect();
     let frame_bytes = buffer
@@ -1641,8 +1659,9 @@ impl Emit<'_> {
 
     /// `+`, `-`, `*`, `/`, `%`: two ints (an overflow and a zero
     /// divisor are the interpreter's), or two numbers one of which is
-    /// a float. An int divided by an int, and a float's remainder, are
-    /// the interpreter's.
+    /// a float. An int divided by an int is an int when it divides
+    /// exactly and a float otherwise, as the interpreter has it. A
+    /// float's remainder is the interpreter's.
     fn arith(
         &mut self,
         b: &mut FunctionBuilder,
@@ -1667,7 +1686,6 @@ impl Emit<'_> {
             let q = self.is_int(b, y);
             both(b, p, q)
         };
-        let int_path = !matches!(ints, Cond::Never) && op != Op::DIV;
         let float_path = !matches!(ints, Cond::Always) && op != Op::MOD;
         let numbers = if float_path {
             {
@@ -1682,27 +1700,17 @@ impl Emit<'_> {
         // Two ints.
         let rest = b.create_block();
         match ints {
-            Cond::Always if int_path => {}
-            Cond::If(c) if int_path => {
+            Cond::Always => {}
+            Cond::If(c) => {
                 let yes = b.create_block();
                 b.ins().brif(c, yes, &[], rest, &[]);
                 b.switch_to_block(yes);
             }
-            Cond::If(c) => {
-                // Two ints have no inline form for this operator.
-                let no = b.create_block();
-                b.ins().brif(c, fb, &[], no, &[]);
-                b.switch_to_block(no);
-                b.ins().jump(rest, &[]);
-            }
-            Cond::Always => {
-                b.ins().jump(fb, &[]);
-            }
-            _ => {
+            Cond::Never => {
                 b.ins().jump(rest, &[]);
             }
         }
-        if int_path && !matches!(ints, Cond::Never) {
+        if !matches!(ints, Cond::Never) {
             let (xi, yi) = (self.int_of(b, x), self.int_of(b, y));
             let v = match op {
                 Op::ADD | Op::SUB | Op::MUL => {
@@ -1715,6 +1723,36 @@ impl Emit<'_> {
                     b.ins().brif(over, fb, &[], ok, &[]);
                     b.switch_to_block(ok);
                     v
+                }
+                Op::DIV => {
+                    // `/`: a zero divisor is the interpreter's error,
+                    // and the least int by -1 its overflow (the one
+                    // quotient that does not fit, which the machine's
+                    // division would trap on). What divides exactly is
+                    // an int; anything else is the two as floats.
+                    let zero = b.ins().icmp_imm_s(IntCC::Equal, yi, 0);
+                    let ok = b.create_block();
+                    b.ins().brif(zero, fb, &[], ok, &[]);
+                    b.switch_to_block(ok);
+                    let least = b.ins().icmp_imm_s(IntCC::Equal, xi, i64::MIN);
+                    let minus_one = b.ins().icmp_imm_s(IntCC::Equal, yi, -1);
+                    let over = b.ins().band(least, minus_one);
+                    let fits = b.create_block();
+                    b.ins().brif(over, fb, &[], fits, &[]);
+                    b.switch_to_block(fits);
+                    let rem = b.ins().srem(xi, yi);
+                    let exact = b.ins().icmp_imm_s(IntCC::Equal, rem, 0);
+                    let whole = b.create_block();
+                    let part = b.create_block();
+                    b.ins().brif(exact, whole, &[], part, &[]);
+                    b.switch_to_block(part);
+                    let xf = b.ins().fcvt_from_sint(types::F64, xi);
+                    let yf = b.ins().fcvt_from_sint(types::F64, yi);
+                    let q = b.ins().fdiv(xf, yf);
+                    self.write(b, pc, next, d.a, Opd::Float(q));
+                    b.ins().jump(join, &[]);
+                    b.switch_to_block(whole);
+                    b.ins().sdiv(xi, yi)
                 }
                 _ => {
                     // `%`: a zero divisor is the interpreter's error;
@@ -2300,22 +2338,14 @@ fn class_of(f: &BcFunction, flow: &Flow, types: &Types, d: &DecodedInstr) -> Cla
                     None => return Class::Interp,
                 },
             };
-            let div = matches!(d.op, Op::DIV | Op::DIVK);
             let rem = matches!(d.op, Op::MOD | Op::MODK);
             if no_number(x) || no_number(y) {
                 // The interpreter's error, or its string.
-                Class::Interp
-            } else if div && x == Ty::Int && y == Ty::Int {
-                // An int by an int is exact or a float: the
-                // interpreter's.
                 Class::Interp
             } else if rem && (x == Ty::Float || y == Ty::Float) {
                 Class::Interp
             } else if number(x) && number(y) {
                 dst(d.a)
-            } else if div && (x == Ty::Int || y == Ty::Int) {
-                // Inline only when the other is a float.
-                Class::Guess(50)
             } else {
                 Class::Guess(90)
             }

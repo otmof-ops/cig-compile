@@ -1221,10 +1221,12 @@ fn stage_c_compiles_what_it_can_and_the_program_runs_the_same() {
             ),
             "{j}"
         );
-        // One entry (`fib`), and no body: the script has no loop.
+        // One entry (`fib`), and no body: the script has no loop, and
+        // neither function's own code would run faster as machine code
+        // (both were weighed).
         assert_eq!(
             (&n["top"], &n["bodies"], &n["typed"], &n["weighed"]),
-            (&false.into(), &0.into(), &1.into(), &0.into()),
+            (&false.into(), &0.into(), &1.into(), &2.into()),
             "{j}"
         );
         assert!(n["bytes"].as_u64().is_some_and(|b| b > 0), "{j}");
@@ -1273,7 +1275,7 @@ fn stage_c_says_why_a_script_has_no_native_code() {
         ),
         (
             "text",
-            "it has no loop, and none of its functions compiles on its own (`greet`: it is called with a string)",
+            "it has no loop, and none of its functions has native code of its own (`greet`: it is called with a string)",
             "hi you\n",
         ),
     ] {
