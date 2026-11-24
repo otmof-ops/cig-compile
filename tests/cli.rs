@@ -1439,6 +1439,49 @@ fn a_loop_of_arithmetic_gets_a_body_and_the_program_runs_the_same() {
     assert_eq!(differing(&checked), ["section native"]);
 }
 
+/// A loop that reads and writes a list of numbers by an int gets a body
+/// too: the list's elements are read where they lie. The program runs
+/// the same with its native code and without, at every budget tried,
+/// and when the list holds something machine code may not copy.
+#[test]
+fn a_loop_over_a_list_of_numbers_gets_a_body_and_the_program_runs_the_same() {
+    let s = Sandbox::new();
+    // A sieve to 200: reads and writes of one list by an int, in a
+    // loop inside a loop. Then the same list with a string in it.
+    s.write(
+        "sieve.cig",
+        "roll is = []\nfor i in 0..201 {\n  is.push(true)\n}\nroll p = 2\nwhile p * p <= 200 {\n  if is[p] {\n    roll m = p * p\n    while m <= 200 {\n      is[m] = false\n      m += p\n    }\n  }\n  p += 1\n}\nroll c = 0\nroll i = 2\nwhile i <= 200 {\n  if is[i] { c += 1 }\n  i += 1\n}\nexhale c\nis[7] = \"seven\"\nroll w = 0\nroll j = 2\nwhile j <= 200 {\n  if is[j] { w += 1 }\n  j += 1\n}\nexhale w, is[7]\n",
+    );
+    let built = s.cc(&["build", "sieve.cig", "--stage", "c"]);
+    let out = ok(&built);
+    if !NATIVE {
+        assert!(out.contains("stage b)"), "{out}");
+        return;
+    }
+    assert!(
+        out.contains("stage c)") && out.contains("\n  native the top level compiled\n"),
+        "{out}"
+    );
+    let said = ok(&s.prog(&exe_name("sieve"), &[]));
+    assert_eq!(said, "46\n46 seven\n");
+    let run = |native: bool, args: &[&str]| {
+        let mut c = Command::new(s.exe("sieve"));
+        s.env(&mut c);
+        if !native {
+            c.env("CIG_NATIVE", "0");
+        }
+        let o = c.args(args).output().unwrap();
+        (o.status.code(), text(&o.stdout), text(&o.stderr))
+    };
+    for budget in ["1", "200", "205", "450", "700", "1500", "100000"] {
+        assert_eq!(
+            run(true, &["--max-steps", budget]),
+            run(false, &["--max-steps", budget]),
+            "--max-steps {budget}"
+        );
+    }
+}
+
 /// A program built with a body for every function (the compiler's test
 /// build) records that, and `verify` compiles it again the same way:
 /// the rule is the section's, not the environment's.

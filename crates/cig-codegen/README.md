@@ -146,8 +146,9 @@ body. What is machine code is a question of time alone.
   `add`, `sub`, `mul`, `mod` and their `k` forms on ints, and those
   and `div` on a number and a float; `neg`, `not`; `eq`, `lt`, `le`,
   their `k` forms and their jump forms; `test`, `testn`, `testset`;
-  `forprep` and `forloop` with a step of 1. A form is the
-  interpreter's result for the operands it covers. For any others (an
+  `forprep` and `forloop` with a step of 1; `getindex` and `setindex`
+  of a list by an int, for an element that is a number, a bool or
+  null. A form is the interpreter's result for the operands it covers. For any others (an
   overflow, a zero divisor, a string, a write over a register that
   holds a list) it calls the runtime's `again(ctx, pc)` before it has
   written anything, and the interpreter runs that one instruction.
@@ -174,6 +175,30 @@ rules keep that exact:
    `Defect(pc)`;
 3. a held register's place in the frame never holds a value that owns
    memory, so writing it back frees nothing.
+
+### A list's elements, where they lie
+
+A register that holds a list is never held in a machine register: the
+list is shared and counted, and only the interpreter copies or frees
+one. Machine code reads and writes its **elements**:
+
+- **It asks the runtime once** (`list(ctx, reg)`) where the list's
+  elements lie and how many there are, and keeps the answer (a
+  **view**) in two machine registers.
+- **A view holds until machine code next calls a function of the
+  runtime that runs the interpreter** (`run`, `again`), which may grow
+  the list or put another value in its register. After such a call no
+  list is in view, and the next read asks again. A loop that is native
+  whole asks once, however many turns it makes.
+- **A read** takes an int index the list has an element at (an index
+  below zero counts from the end, which is the interpreter's to work
+  out) and an element that owns no memory: a number, a bool, null. It
+  copies the tag and the payload to the register.
+- **A write** takes the same, a value that owns no memory, and an old
+  element that owns none, so nothing is freed and nothing is shared.
+- **Anything else is the interpreter's**, through `again`: a map or a
+  string in the register, an index past the end (its error), a string
+  read out of a list or written into one.
 
 ### Where machine code pays (`src/plan.rs`)
 
@@ -202,16 +227,32 @@ x86-64 laptop and rounded:
 | a stretch (a call into the runtime and back) | 120 |
 | leaving a body | 50 |
 | entering a body | 250 |
+| a list's element read or written as machine code | 10 |
+| the same in the interpreter | 40 |
+| asking the runtime where a list's elements lie | 100 |
 
 An inline form whose operands the type pass proved is always taken.
 One that tests its operands when it runs is a **guess**: it is
-counted as failing a share of the time (5% for a plain write, 25%
-for arithmetic on values of unknown type, half for a move), each
-failure a call. A guess next to instructions the interpreter runs
-anyway joins their stretch, where a failure costs nothing. The
-runtime bounds what a wrong guess can cost: a body whose guesses
-keep failing is no longer entered there, and the bytecode has the
-loop back.
+counted as failing a share of the time (3% for a plain write, 10%
+for arithmetic on values of unknown type or a list read by a proven
+int, 30% for a move), each failure a call. A guess next to
+instructions the interpreter runs anyway joins their stretch, where a
+failure costs nothing.
+
+**The estimates lean towards a guess holding**, because the runtime
+bounds what it costs when it does not: a body whose guesses keep
+failing is no longer entered there, and the bytecode has the loop
+back within microseconds. So a loop is planned for the values its
+instructions usually see (numbers in a list read by an int), and a
+loop that sees others (strings in it) runs as it would have with no
+body.
+
+**A list in view is part of the search.** An index form is native
+only where the list's elements are in view, and bringing them into
+view costs one call. In a loop that is native whole the view outlives
+the turn, so it costs nothing a turn; after a stretch it is asked for
+again, so one read between two instructions the interpreter runs
+joins their stretch, and eight reads after one share one view.
 
 A body's **resume points** are the native instructions the
 interpreter can arrive at: the start of a native loop, the
@@ -259,7 +300,9 @@ and hold its native code to the result, byte for byte.
   whole, a loop the interpreter runs anyway is left to it whole, a
   guess joins the stretch beside it, a call is not worth leaving for
   among little work and is among much, a native loop draws its outer
-  loop in.
+  loop in; a loop that writes a list and counts is native whole with
+  the list in view, an index after a stretch pays for its view each
+  turn, and a loop native whole keeps its outer loop's lists in view.
 - `tests/bodies.rs` (the bodies): which functions get one and where
   it is entered under each rule; the same bytes on two compiles and a
   fingerprint for each machine; and, on Linux, bodies mapped and
@@ -267,7 +310,10 @@ and hold its native code to the result, byte for byte.
   to its end in machine code in each mode, one entered part way, the
   step budget, an overflow, operands an inline form does not cover, a
   stretch, a stop the body hands back, and a register that is not of
-  its proven type.
+  its proven type; a list of numbers read where it lies and asked for
+  once, an element machine code may not copy, an index with no
+  element, a register that holds no list, and a list written in place
+  until a string is in the way.
 
 Whole programs are held to the tree-walker by the differential suite
 at the workspace root, which builds each one at stage `c`, and, with

@@ -185,11 +185,12 @@ not run. The compiler itself is released for the same machines.
   bytecode on cig's VM ([how fast](#how-fast-a-program-runs)), and becomes
   the default once it passes its speed gates
   ([#31](https://github.com/otmof-ops/cig-compile/issues/31)).
-- **Native code is for arithmetic, so far.** `--stage c` (on `main`, in
-  no release yet) compiles two things on Linux: a loop whose work is
-  arithmetic, wherever it stands (the top level included), and a function
-  whose every value is an int, a float, a bool or null. A loop that reads
-  a list, a map or a string each turn, or calls a function, is left to
+- **Native code is for arithmetic and lists of numbers, so far.**
+  `--stage c` (on `main`, in no release yet) compiles two things on
+  Linux: a loop whose work is arithmetic and reads and writes of a list's
+  elements by an int, wherever it stands (the top level included), and a
+  function whose every value is an int, a float, a bool or null. A loop
+  that reads a map or a string each turn, or calls a function, is left to
   the bytecode, which runs it faster than native code that has to hand
   every other instruction back; it runs as stage `b` does
   ([#32](https://github.com/otmof-ops/cig-compile/issues/32),

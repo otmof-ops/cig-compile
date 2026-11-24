@@ -199,7 +199,7 @@ that cough and roll back), runs each one, and shrinks a differ to the
 fewest statements that still differ. Every pull request runs 100 from
 a fixed seed; nightly runs a thousand on Linux, macOS and Windows.
 
-A **typed corpus** (`tests/corpus/typed/`, 37 programs) corners
+A **typed corpus** (`tests/corpus/typed/`, 38 programs) corners
 arithmetic. Each program keeps its arithmetic inside functions that
 take and return only ints, floats, bools and null, the functions stage
 `c` compiles to native code ([decision 0005](decisions/0005-what-goes-native-first.md)),
@@ -211,7 +211,13 @@ smallest int, float division by `0.0`, a NaN reaching an ordering, a
 NaN as a condition, an int beside the float it rounds to, the truth of
 each type, the call depth at the limit and one past it (`E506`), a
 range wider than the limit (`E512`), and the step budget spent inside
-a function, inside a nested call and outside any loop. Every error is
+a function, inside a nested call and outside any loop. Two programs
+are for what a body compiles: a range written as a value (the case the
+checked build found the type pass wrong on), and a list's elements
+read and written by an int: numbers of each kind, a write over what
+was there, one list under two names, elements that are strings, lists
+and maps, a list that grows inside the loop that reads it, a map and a
+string in the list's place, and indexes past the end and below zero. Every error is
 there caught, with its kind, message and line printed, and uncaught.
 The suite compares each at every stage it runs.
 
