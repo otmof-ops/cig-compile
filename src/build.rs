@@ -44,15 +44,71 @@ pub struct Built {
     pub warnings: Vec<String>,
 }
 
-/// What of a script has native code: how many of its functions do, how
-/// many run as bytecode alone, and why each row of argument types that
-/// was not compiled was not. The top level is no function: it is never
-/// compiled, and never counted.
+/// What of a script has native code: how many of its functions do (a
+/// body, an entry for a row of argument types, or both), how many run
+/// as bytecode alone, and why each row of argument types that got no
+/// entry got none. The top level is no function to a person reading the
+/// count: `top` says whether it has a body.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Counted {
     pub compiled: usize,
     pub left: usize,
     pub why: Vec<String>,
+    /// The top level has a body.
+    pub top: bool,
+    /// How many functions have a body, the top level among them.
+    pub bodies: usize,
+    /// How many functions have an entry for some row of argument types.
+    pub typed: usize,
+    /// The native code's length in bytes.
+    pub bytes: usize,
+    /// How many functions, the top level among them, have a loop and
+    /// no body: the compiler weighed their loops and left them to the
+    /// bytecode, which runs them faster than machine code that has to
+    /// call the interpreter at every other instruction.
+    pub weighed: usize,
+}
+
+/// Which functions a build gives a body, and how a body keeps its
+/// registers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Bodies {
+    pub rule: cig_native::Rule,
+    pub mode: cig_codegen::Mode,
+}
+
+impl Bodies {
+    /// What a build makes: a body for every function with a loop, with
+    /// registers of proven type held in machine registers.
+    ///
+    /// `CIGCOMPILE_BODIES` changes it, for the compiler's own tests:
+    /// `none`, `loops` or `every` for which functions, and
+    /// `every-frame` or `every-checked` to give every function a body
+    /// that keeps every register in the frame (the second also holds
+    /// each type the compiler proved to the register's real value). A
+    /// program records which functions were given one; `verify` reads
+    /// the same variable for how.
+    pub fn from_env() -> Bodies {
+        use cig_codegen::Mode;
+        use cig_native::Rule;
+        let (rule, mode) = match std::env::var("CIGCOMPILE_BODIES").as_deref() {
+            Ok("none") => (Rule::None, Mode::Promoted),
+            Ok("every") => (Rule::Every, Mode::Promoted),
+            Ok("every-frame") => (Rule::Every, Mode::Frame),
+            Ok("every-checked") => (Rule::Every, Mode::Checked),
+            _ => (Rule::Loops, Mode::Promoted),
+        };
+        Bodies { rule, mode }
+    }
+
+    /// The rule a section was built with, and the mode
+    /// `CIGCOMPILE_BODIES` names: what `verify` compiles again with.
+    pub fn for_rule(rule: cig_native::Rule) -> Bodies {
+        Bodies {
+            rule,
+            mode: Bodies::from_env().mode,
+        }
+    }
 }
 
 /// The stage of the program at `path`, from its record.
@@ -181,16 +237,19 @@ pub struct Native {
 
 /// The bytecode and the native code of a stage `c` program: the script
 /// lowered as [`bytecode_of`] lowers it, the types of its functions
-/// inferred across calls (`cigscript::lower::cir::infer`), and every
-/// specialization that qualifies compiled for `arch` (`cig_codegen`).
-/// The native code is compiled from the IR the bytecode was lowered from
-/// and names that module by its hash. `section` is empty when no
-/// specialization qualifies; `left` then says why not, one by one.
+/// inferred across calls (`cigscript::lower::cir::infer`), every
+/// specialization that qualifies compiled for `arch` as an entry, and a
+/// body for every function `bodies` gives one (`cig_codegen`). The
+/// entries are compiled from the IR the bytecode was lowered from, the
+/// bodies from the bytecode itself, and the section names that module
+/// by its hash. `section` is empty when nothing was compiled; `why`
+/// then says why no row of argument types got an entry, one by one.
 pub fn native_of(
     source: &str,
     file: &str,
     opt: u8,
     arch: cig_native::Arch,
+    bodies: Bodies,
 ) -> Result<(Vec<u8>, Native), NotB> {
     let said = |d: cigscript::diagnostics::Diagnostic| NotB {
         what: d.message,
@@ -233,11 +292,21 @@ pub fn native_of(
         .ok_or_else(|| bug("the module has no header".to_string()))?;
     // The generator's own defects are errors it returns; a panic under it
     // (Cranelift's) is one too, and is said as one.
-    let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        cig_codegen::compile(&lowered.cir, &types, &index, module, arch)
+    let parsed = cigscript::cig_bytecode::parse_module(&lowered.bytes)
+        .map_err(|e| bug(format!("the module it made does not read ({e})")))?;
+    let (mut made, bodied) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let made = cig_codegen::compile(&lowered.cir, &types, &index, module, arch)?;
+        let bodied = cig_codegen::bodies_as(&parsed, bodies.rule, arch, bodies.mode)?;
+        Ok::<_, cig_codegen::Error>((made, bodied))
     }))
     .map_err(|_| bug("the code generator panicked".to_string()))?
     .map_err(|e| bug(e.to_string()))?;
+    // The functions with a body, by their index in the module.
+    let with_body: BTreeSet<u32> = bodied.bodies.iter().map(|b| b.func).collect();
+    let weighed = bodied.report.iter().filter(|o| o.weighed).count();
+    bodied
+        .join(&mut made.section)
+        .map_err(|e| bug(e.to_string()))?;
     let name = |f: cigscript::lower::cir::ir::FuncId| {
         lowered
             .cir
@@ -246,18 +315,22 @@ pub fn native_of(
             .and_then(|f| f.name.clone())
             .unwrap_or_else(|| "a function without a name".to_string())
     };
-    // A function has native code when one of its rows of argument types
-    // compiled. The top level (function 0) is never compiled, and is not
+    // A function has native code when it has a body, or an entry for one
+    // of its rows of argument types. The top level (function 0) is not
     // one of the script's functions to a person reading the count; nor is
     // a function of the IR that the module does not hold (one nothing
     // makes).
     let top = cigscript::lower::cir::ir::FuncId(0);
     let functions: BTreeSet<_> = lowered.funcs.iter().filter(|f| **f != top).collect();
-    let compiled: BTreeSet<_> = made
+    let typed: BTreeSet<_> = made
         .report
         .iter()
         .filter(|o| o.compiled)
         .map(|o| o.func)
+        .collect();
+    let compiled: BTreeSet<_> = functions
+        .iter()
+        .filter(|f| typed.contains(**f) || index.get(**f).is_some_and(|at| with_body.contains(at)))
         .collect();
     let counted = Counted {
         compiled: compiled.len(),
@@ -268,8 +341,13 @@ pub fn native_of(
             .filter(|o| !o.compiled && o.func != top)
             .map(|o| format!("`{}`: {}", name(o.func), o.why))
             .collect(),
+        top: with_body.contains(&0),
+        bodies: with_body.len(),
+        typed: typed.len(),
+        bytes: made.section.code.len(),
+        weighed,
     };
-    let section = match made.section.entries.is_empty() {
+    let section = match made.section.entries.is_empty() && made.section.bodies.is_empty() {
         true => Vec::new(),
         false => made
             .section
@@ -387,16 +465,24 @@ pub fn stage_of(
             Err(why) => bytecode_of(source, &file, opts.opt)
                 .map(|code| b(code, Some(stage_b(why))))
                 .map_err(|n| refused(&n, Stage::C)),
-            Ok(arch) => match native_of(source, &file, opts.opt, arch) {
+            Ok(arch) => match native_of(source, &file, opts.opt, arch, Bodies::from_env()) {
                 Err(n) => Err(refused(&n, Stage::C)),
                 Ok((code, native)) if native.section.is_empty() => {
+                    // No loop got a body (there is none, or none would
+                    // run faster as native code), and no function got
+                    // an entry.
                     let c = &native.counted;
+                    let loops = match c.weighed {
+                        0 => "it has no loop",
+                        _ => "none of its loops would run faster as native code",
+                    };
                     let why = match (c.left, c.why.first()) {
-                        (0, _) => "all its code is at the top level, and native code is compiled for functions".to_string(),
+                        (0, _) if c.weighed == 0 => "it has no loop and no function, so native code has nothing to add".to_string(),
+                        (0, _) => format!("{loops}, and it has no function"),
                         (_, Some(first)) => {
-                            format!("none of its functions compiles to native code ({first})")
+                            format!("{loops}, and none of its functions compiles on its own ({first})")
                         }
-                        (_, None) => "none of its functions compiles to native code (native code is entered from a call by name, and no call by name reaches one)".to_string(),
+                        (_, None) => format!("{loops}, and none of its functions compiles on its own (such a function is entered from a call by name, and no call by name reaches one)"),
                     };
                     Ok(b(code, Some(stage_b(why))))
                 }
@@ -853,7 +939,7 @@ fn say(ctx: &Ctx, b: &Built, target: &Target, runtime: &Runtime) {
                 "sha256": b.sha256,
                 "written": b.written,
                 "stage": b.stage.map(Stage::as_str),
-                "native": b.native.as_ref().map(|n| serde_json::json!({"compiled": n.compiled, "left": n.left, "why": n.why})),
+                "native": b.native.as_ref().map(|n| serde_json::json!({"compiled": n.compiled, "left": n.left, "why": n.why, "top": n.top, "bodies": n.bodies, "typed": n.typed, "bytes": n.bytes, "weighed": n.weighed})),
                 "warnings": b.warnings.iter().map(|w| w.trim_end()).collect::<Vec<_>>(),
             })
         );
@@ -873,17 +959,28 @@ fn say(ctx: &Ctx, b: &Built, target: &Target, runtime: &Runtime) {
         println!("up to date: {} ({size})", b.job.out.display());
     }
     if let Some(n) = &b.native {
-        let functions = match n.compiled {
-            1 => "1 function".to_string(),
-            n => format!("{n} functions"),
-        };
-        let rest = match n.left {
-            0 => String::new(),
-            n => format!(", {n} left to the bytecode"),
-        };
-        println!("  native {functions} compiled{rest}");
+        println!("  native {}", native_line(n));
     }
     println!("  sha256 {}", b.sha256);
+}
+
+/// What of a program has native code, in a line: `the top level and 2
+/// functions compiled, 1 left to the bytecode`.
+pub fn native_line(n: &Counted) -> String {
+    let count = |n: usize| match n {
+        1 => "1 function".to_string(),
+        n => format!("{n} functions"),
+    };
+    let what = match (n.top, n.compiled) {
+        (true, 0) => "the top level".to_string(),
+        (true, c) => format!("the top level and {}", count(c)),
+        (false, c) => count(c),
+    };
+    let rest = match n.left {
+        0 => String::new(),
+        n => format!(", {n} left to the bytecode"),
+    };
+    format!("{what} compiled{rest}")
 }
 
 /// Write `bytes` at `out` unless they are there already. A new program is

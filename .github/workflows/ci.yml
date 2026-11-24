@@ -106,10 +106,13 @@ jobs:
       # 100 generated programs ride along, and 100 typed ones (their
       # arithmetic in functions that stage c compiles to native code), from
       # a fixed seed so a pull request's run repeats;
-      # differential-random.yml takes a new seed nightly.
+      # differential-random.yml takes a new seed nightly. DIFF_BODIES adds
+      # two more builds of each stage c program, with a body for every
+      # function (decision 0008): every inline form and every claim of the
+      # type pass, on every script.
       - name: the differential suite (#7)
         shell: bash
-        run: DIFF_RANDOM=1:100 DIFF_TYPED_RANDOM=1:100 CIGSCRIPT_SRC="$PWD/cigscript-src" cargo test --release --test differential
+        run: DIFF_BODIES=every-checked,every DIFF_RANDOM=1:100 DIFF_TYPED_RANDOM=1:100 CIGSCRIPT_SRC="$PWD/cigscript-src" cargo test --release --test differential
       - name: the budgets stage A can meet (#14)
         shell: bash
         # On Linux the runtime built here links glibc, so cig's static

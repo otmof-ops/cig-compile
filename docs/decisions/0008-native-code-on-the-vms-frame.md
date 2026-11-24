@@ -3,7 +3,7 @@
 
 # 0008: Native code for every function: it runs on the VM's frame, and the bytecode goes on wherever it stops
 
-- Status: accepted, 2026-11-24. Revisited with its numbers when each step below lands.
+- Status: accepted, 2026-11-24. Revisited with its numbers when each step below lands; the first bodies changed three things, which [the last section](#what-the-first-bodies-showed-and-what-changed) records.
 - Issues: #32 (stage C), #34 (stage D), #35 (values), #33 (the optimizer), #40 (hardened programs); otmof-ops/cig-script#256 (cig-cherry)
 - Research: [study 04](../research/studies/04-spidermonkey-cacheir-and-warp.md) (entries 9 and 17), [study 12](../research/studies/12-v8-and-javascriptcore-tiers.md) (entries 8 and 11), [study 03](../research/studies/03-wasmtime-ahead-of-time-and-winch.md) (entries 7, 8 and 12), [study 14](../research/studies/14-compiling-fast.md); otmof-ops/cig-script `docs/research/luajit.md`, entry B7
 - Related: [0005](0005-what-goes-native-first.md) (typed specializations), [0006](0006-native-code-in-a-program.md) (the section, the loader, leaving), [0007](0007-where-the-pieces-live.md) (crates)
@@ -128,3 +128,22 @@
 - **A body that makes its function slower.** Each step is measured on the shared set against stage `b`; a program that loses is fixed by the rule of section 9 or by the step being held back, and the figure is published either way.
 - **A difference from the tree-walker** that the differential suite can show, in any program, at any step. There is no acceptable number of those.
 - **The round trip's cost,** if measurement shows calls dominate what is left: then a call from body to body without the VM moves up the order.
+
+## What the first bodies showed, and what changed
+
+The first build made a body for every function with a loop, with every instruction that has an inline form native and every resume point of section 2. It was right on all 25 programs of the shared set at its first full run, in every mode, and **14 of the 25 were slower than their stage `b` programs**, by up to 2.04 times. Three causes, and what each changed:
+
+- **Between two resume points the VM ran a function with a body one instruction at a time,** on its general path. It now runs it on its fast loop, as a function without a body: a second copy of that loop, on the machine that has bodies, so a program without them runs the code it ran before (stage `b`'s instruction counts moved by under 0.1%). That alone took `fannkuch` from 1.85 to 1.08 and `richards` from 2.04 to 1.19.
+- **Crossing between native code and the interpreter costs several instructions' worth, and a loop of mixed work crosses at every other instruction.** A stretch is about 12 ns here, leaving a body and entering it again about 30 ns, and an instruction saves about 2 ns by being native. So "it has a loop" (section 9) is not when native code has something to add. **Section 9's rule is now a plan:** each loop, innermost first, is settled by what its own instructions cost a turn as native code, as stretches or left to the VM, the cheapest answers found exactly, with "all of it is the interpreter's" always among them. A function none of whose loops pays gets no body. The plan and its figures are in the generator's [README](../../crates/cig-codegen/README.md); the differential suite still builds every case with a body for every function, now as two more programs a script (one with every proven type checked).
+- **Section 2's resume points are the compiler's to choose,** and a body lists only the ones its native code starts at: the start of a native loop, the instruction after a call inside one. The VM stops its fast loop before each and enters there. A body need not be entered at its function's start, and the section no longer asks for it.
+
+**A test of an operand's tag is a guess, and it is counted.** Section 5 stands for a held register: proven, never guessed. An inline form on a register of unknown type (section 4) tests the tag and has the interpreter run the instruction when the test fails, and that failure is a call, where the interpreter alone would have spent 2 ns. So:
+
+- **the plan counts such a form as failing a share of the time,** and lets it join a stretch beside it, where failing costs nothing;
+- **the runtime counts the failures** (a third function of its table, `again`, runs the one instruction) and **gives a body up** at the resume point it was entered at when more than one in 16 steps fails over 64 failures. The bytecode then has the loop. What a wrong guess can cost is bounded at a few microseconds a loop.
+
+**The checked build earned its place on its first full run.** The suite's second test build compares every type the pass proved with the register's real tag (section 5's check, at every instruction instead of where a value comes from the frame). Over 3,032 rows it differed on three of the hundred random programs, and the pass was wrong: a range written as a value is checked by a `forprep` whose jump goes to the very next instruction, the pass kept the rule of the path that writes the loop's variable, and so took that register for an int after an empty range that leaves it alone. Where an instruction's two ways on reach the same pc, a register now has a type only when both give it. No program built by the rule a build uses differed, and none would have computed wrongly (a held register is checked where it is read from the frame, and the run stops); the run would have stopped with an internal error on a script that was right.
+
+This is the exit that speculation needs ("What is not decided here"), built small: a guess that fails goes back to the interpreter at an exact instruction, and one that keeps failing is given up.
+
+**With the plan, no program of the 25 is slower than its stage `b` program** (0.91 to 1.05 of its time, whole processes, start-up included), and `fib`, `loop` and `mandel` take 0.13, 0.28 and 0.14 of it. The other programs' loops are left to the bytecode: what they need is in "What is not decided here" (lists, fields) and section 7 (calls), and the plan will take each loop native the day its instructions have inline forms that pay.

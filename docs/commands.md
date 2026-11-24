@@ -445,6 +445,15 @@ message.
 - `CIGCOMPILE_OFFLINE` — when set and not `0`, no release is ever
   fetched: a runtime not kept here already exits `E1001`, and the
   message says `CIGCOMPILE_OFFLINE forbids fetching it`.
+- `CIGCOMPILE_BODIES` — for the compiler's own tests: which functions
+  a stage `c` build gives a body. `loops` (what a build makes without
+  it): the loops that pay. `none`: entries alone. `every`: a body for
+  every function, with machine code for every instruction that has
+  any, whether it pays or not; `every-frame` and `every-checked` are
+  that with every register kept in the frame, the second also holding
+  each type the compiler proved to the register's real value. A
+  program records which it was built with, and `cigcompile verify`
+  compiles again with the same.
 - `CIGSCRIPT_HOME` — where cig keeps its state. The build index lives
   in `<home>/cache/compile/`, and fetched runtimes under
   `<home>/cigcompile/runtimes/`. Defaults to `~/.cigscript`.
@@ -533,12 +542,16 @@ its **stage**:
   `--interp` (a run flag) runs the script on the tree-walker instead; a
   damaged bytecode is refused (`E1050`), never run as the script.
 - **stage `c`** — a stage `b` program with native code beside its
-  bytecode (the `native` section): machine code for the functions whose
-  every value is an int, a float, a bool or null, each compiled for the
-  argument types the script calls it with. cig's VM calls it where a
-  call's arguments are of those types and runs the bytecode everywhere
-  else. The program does the same thing either way: its output, its
-  errors and their positions, where the step budget stops it.
+  bytecode (the `native` section), of two kinds. A **body** is the
+  machine code of a function's loops, the top level's included, run on
+  the frame cig's VM made for the call; whatever in the loop has no
+  machine code the interpreter runs, on that same frame. An **entry**
+  is a whole function whose every value is an int, a float, a bool or
+  null, compiled for the argument types the script calls it with. The
+  VM enters a body at its loops and calls an entry where a call's
+  arguments are of its types, and runs the bytecode everywhere else.
+  The program does the same thing either way: its output, its errors
+  and their positions, where the step budget stops it.
 - **stage `a`** — the program carries the script alone, and the
   tree-walker runs it.
 
@@ -557,30 +570,53 @@ error[E1010 usage]: tool.cig cannot be a stage b program: a `pack` root that run
 
 `--stage c` asks for native code where it can be had. It is had when
 the program is for Linux on x86-64 or aarch64, its runtime runs stage
-`c` programs (a cig says which stages it runs), and at least one of the
-script's functions compiles. The build that writes the program says how
-many did (one that finds it up to date says that, and no more):
+`c` programs (a cig says which stages it runs), and something of the
+script is faster as native code: a loop, or a function on numbers. The
+build that writes the program says what got it (one that finds it up to
+date says that, and no more):
 
 ```
 compiled tool.cig -> tool (17.0 MB, cig 1.25.0 for x86_64-unknown-linux-musl, stage c)
-  native 3 functions compiled, 2 left to the bytecode
+  native the top level and 3 functions compiled, 2 left to the bytecode
 ```
 
 Otherwise it makes the stage `b` program, which is the same program
 without native code, and says why in a note:
 
 ```
-note: tool.cig is a stage b program: none of its functions compiles to native code (`total`: line 4: a list or a map)
+note: tool.cig is a stage b program: none of its loops would run faster as native code, and none of its functions compiles on its own (`total`: line 4: a list or a map)
 ```
 
-What compiles today: a function that works on numbers and bools, with
-`if`, `while`, `for i in a..b` and calls to other such functions. What
-does not: a function that touches a string, a list, a map, a closure or
-a variable another function shares, calls a builtin, divides an int by
-an int, or uses `try` or `burn`; and the script's top level. Each stays
-bytecode, and `--json` lists the reason for each
-(`"native": {"compiled": 3, "left": 2, "why": [...]}`) and carries the
-note, which it does not print, in `"warnings"`.
+**What gets native code today.**
+
+- **A loop whose work is arithmetic** on ints, floats and bools:
+  counters, sums, comparisons, `for i in a..b`, `while`, in any
+  function and at the top level. The loop's native code runs on the
+  function's own registers, so it may sit beside anything: what it has
+  no machine code for (a string, a list, a map, a builtin, a `try`, a
+  `burn`) the interpreter runs.
+- **A function on numbers and bools alone**, with `if`, `while`,
+  `for i in a..b` and calls to other such functions, compiled whole for
+  the argument types it is called with.
+
+**What stays bytecode, and why.** Native code is a few nanoseconds an
+instruction faster than the interpreter, and going from one to the
+other costs several times that. A loop that reads a list, calls a
+function and adds two numbers each turn would cross over at every
+other instruction and run slower than its bytecode, so the compiler
+weighs each loop and compiles only the ones that come out ahead. A
+program built at stage `c` is never slower than the same program at
+stage `b` by the compiler's own figures, and the runtime bounds what
+it can be wrong by: native code whose tests of its operands keep
+failing is no longer entered, and the bytecode has the loop back.
+
+`--json` lists the reason for each function without an entry
+(`"native": {"compiled": 3, "left": 2, "why": [...], "top": true,
+"bodies": 2, "typed": 2, "weighed": 1, "bytes": 5120}`: whether the top
+level has a body, how many functions have a body and how many an entry,
+how many had their loops weighed and left to the bytecode, and the
+native code's length) and carries the note, which it does not print, in
+`"warnings"`.
 
 A stage `c` program's native code is machine code, not something a
 reader can check as it can the script: `cigcompile verify` compiles the

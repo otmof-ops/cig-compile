@@ -5,6 +5,50 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **Stage `c`: native code for loops, on the VM's own frame**
+  ([decision 0008](docs/decisions/0008-native-code-on-the-vms-frame.md);
+  #32, #34). `cigcompile build --stage c` now compiles a loop whose work
+  is arithmetic wherever it stands, the script's top level included, and
+  not only whole functions on numbers. The machine code (a **body**) runs
+  on the frame cig's VM made for the function, so it can sit beside
+  anything: an instruction it has no machine code for (a string, a list,
+  a map, a builtin, a `try`, a `burn`) the interpreter runs on the same
+  frame, and the bytecode goes on wherever the body stops.
+  - **What a program does is unchanged.** Every error is the
+    interpreter's, the step budget stops on the same step, and
+    `CIG_NATIVE=0` runs the bytecode alone. The differential suite holds
+    every script to `cig run` at stage `c`, and again as two test builds
+    with a body for every function (`DIFF_BODIES`, on every pull request
+    and nightly), one of which compares each type the compiler proved
+    with the register's real value at every instruction that uses it.
+  - **Types for speed (stage D's first step).** A type pass over the
+    bytecode proves each register's type at each instruction; inside a
+    body a register proven an int, a float or a bool is kept in a machine
+    register, and no tag is read or written. The checked test build
+    found the pass wrong on its first full run, in 3 of 100 random
+    programs: after a range written as a value (`str((0..n))`) it took a
+    register for an int that an empty range leaves untouched. Fixed, and
+    kept as a program of the typed corpus.
+  - **Only where it pays.** Native code saves about two nanoseconds an
+    instruction and going between it and the interpreter costs several
+    times that, so each loop is weighed and compiled only when it comes
+    out ahead; a loop that reads a list or calls a function each turn
+    stays bytecode. By the compiler's figures a stage `c` program is
+    never slower than its stage `b` program, and the runtime bounds what
+    a wrong guess can cost. First reading, whole processes, on one
+    laptop: `fib`, `loop` and `mandel` take 0.13, 0.28 and 0.14 of their
+    stage `b` time, and none of the 25 programs of the shared set is
+    slower (0.91 to 1.05).
+  - **What a build says.** `native the top level and 2 functions
+    compiled, 1 left to the bytecode`; a script with no loop that pays
+    and no function on numbers is the stage `b` program, with a note
+    that says which (`none of its loops would run faster as native
+    code, ...`). `--json`'s `native` gains `top`, `bodies`, `typed`,
+    `weighed` and `bytes`. `cigcompile verify` holds a body to a fresh
+    compile by the rule the program records.
+  - **Needs** cig's source at the commit this compiler now pins (in no
+    release of cig yet): `cig-native` interface 2.
+
 - **Stage `c`: native code for functions on numbers** (#32, #34).
   `cigcompile build --stage c` compiles the functions whose every value
   is an int, a float, a bool or null to machine code, ahead of time, and

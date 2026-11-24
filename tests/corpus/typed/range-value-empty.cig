@@ -1,0 +1,27 @@
+# A range written as a value, `(a..b)`, is checked by the same instruction
+# that starts a counted loop, with a jump that goes to the very next
+# instruction: with turns it writes a register (the loop's variable), and
+# with none it writes nothing. A compiler that takes the first for both
+# believes that register holds an int after an empty range, when it still
+# holds what the loop above left there (here, a string from a method
+# call). Found by the suite's checked build on a random program.
+roll w = 0
+while w < 3 {
+  w += 1
+  exhale str((0..1)).replace("smoke", "-")
+  exhale ((2 - len((0..4))) + -15), str((0..1).sort())
+  exhale "ash", str((0..3)).upper()
+}
+exhale (w - 16), str((0..0)).contains("tin")
+exhale str((0..1))
+
+# The same inside a function, on a register the function reuses.
+pull spans(n) {
+  roll out = ""
+  for i in 0..n {
+    out = out + str((i..i)).upper() + str((0..i))
+  }
+  snuff out + str((n..0))
+}
+exhale spans(0)
+exhale spans(3)

@@ -1002,16 +1002,15 @@ mod format2 {
                         "it reads; there is no script to compile it again from".to_string(),
                     );
                 };
-                match crate::build::native_of(&s, &r.file, level, arch) {
+                // With the rule the section says it was built with.
+                let bodies = crate::build::Bodies::for_rule(t.rule);
+                match crate::build::native_of(&s, &r.file, level, arch, bodies) {
                     Ok((_, fresh)) if fresh.section == *code => (
                         "ok",
                         format!(
                             "{} bytes, {}, and is what {what} compiles to at -O{level} for {}",
                             code.len(),
-                            match t.entries.len() {
-                                1 => "1 entry".to_string(),
-                                n => format!("{n} entries"),
-                            },
+                            crate::verify::holds(t.entries.len(), t.bodies.len()),
                             r.target
                         ),
                     ),
@@ -1189,5 +1188,22 @@ mod format2 {
             },
         );
         finish(parts, &ids, name.as_deref(), signed)
+    }
+}
+
+/// What a native section holds, in words: `2 bodies and 1 entry`.
+fn holds(entries: usize, bodies: usize) -> String {
+    let count = |n: usize, one: &str, many: &str| match n {
+        1 => format!("1 {one}"),
+        n => format!("{n} {many}"),
+    };
+    match (bodies, entries) {
+        (0, e) => count(e, "entry", "entries"),
+        (b, 0) => count(b, "body", "bodies"),
+        (b, e) => format!(
+            "{} and {}",
+            count(b, "body", "bodies"),
+            count(e, "entry", "entries")
+        ),
     }
 }

@@ -185,12 +185,15 @@ not run. The compiler itself is released for the same machines.
   bytecode on cig's VM ([how fast](#how-fast-a-program-runs)), and becomes
   the default once it passes its speed gates
   ([#31](https://github.com/otmof-ops/cig-compile/issues/31)).
-- **Native code is for functions on numbers, so far.** `--stage c` (on
-  `main`, in no release yet) compiles the functions whose every value is
-  an int, a float, a bool or null, on Linux; a script's top level, and
-  anything that touches a string, a list or a map, runs as stage `b` does
+- **Native code is for arithmetic, so far.** `--stage c` (on `main`, in
+  no release yet) compiles two things on Linux: a loop whose work is
+  arithmetic, wherever it stands (the top level included), and a function
+  whose every value is an int, a float, a bool or null. A loop that reads
+  a list, a map or a string each turn, or calls a function, is left to
+  the bytecode, which runs it faster than native code that has to hand
+  every other instruction back; it runs as stage `b` does
   ([#32](https://github.com/otmof-ops/cig-compile/issues/32),
-  [what goes native first](docs/decisions/0005-what-goes-native-first.md)).
+  [native code on the VM's frame](docs/decisions/0008-native-code-on-the-vms-frame.md)).
 - **The box is Linux's.** A program's boxed hop is refused or falls back
   elsewhere, as `cig`'s is (`E777`, `E763`).
 - **Signing is SSH's.** Apple Developer ID and Windows Authenticode need

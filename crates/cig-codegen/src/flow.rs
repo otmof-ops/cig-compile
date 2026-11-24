@@ -166,7 +166,7 @@ pub fn flow(f: &Function) -> Result<Flow, String> {
     // Loop heads: targets of backward jumps.
     let mut loop_heads: BTreeSet<u32> = BTreeSet::new();
     for d in code.iter().flatten() {
-        if let Some(target) = branch_target(d) {
+        if let Some(target) = target_of(d) {
             if target <= d.pc {
                 loop_heads.insert(target);
             }
@@ -181,7 +181,7 @@ pub fn flow(f: &Function) -> Result<Flow, String> {
         let next = d.pc + d.width;
         match d.op {
             Op::JMP | Op::LOOP => {
-                if let Some(t) = branch_target(d) {
+                if let Some(t) = target_of(d) {
                     leader_set.insert(t);
                 }
                 // Nothing falls through a jump: what follows starts a
@@ -198,7 +198,7 @@ pub fn flow(f: &Function) -> Result<Flow, String> {
             | Op::FORPREP
             | Op::FORLOOP
             | Op::ITERNEXT => {
-                if let Some(t) = branch_target(d) {
+                if let Some(t) = target_of(d) {
                     leader_set.insert(t);
                 }
                 leader_set.insert(next);
@@ -276,7 +276,7 @@ fn successors(d: &DecodedInstr, handlers: &[HandlerFlow]) -> Vec<u32> {
     match d.op {
         Op::RET | Op::TAILCALL | Op::THROW => {}
         Op::JMP | Op::LOOP => {
-            if let Some(t) = branch_target(d) {
+            if let Some(t) = target_of(d) {
                 out.push(t);
             }
         }
@@ -291,7 +291,7 @@ fn successors(d: &DecodedInstr, handlers: &[HandlerFlow]) -> Vec<u32> {
         | Op::FORLOOP
         | Op::ITERNEXT => {
             out.push(next);
-            if let Some(t) = branch_target(d) {
+            if let Some(t) = target_of(d) {
                 if t != next {
                     out.push(t);
                 }
@@ -318,9 +318,9 @@ fn successors(d: &DecodedInstr, handlers: &[HandlerFlow]) -> Vec<u32> {
     out
 }
 
-/// The branch target of an instruction that carries one, or `None`. The
+/// The jump target of an instruction that carries one, or `None`. The
 /// offset is in instruction words from the pc after the first word.
-fn branch_target(d: &DecodedInstr) -> Option<u32> {
+pub fn target_of(d: &DecodedInstr) -> Option<u32> {
     match d.op {
         // AsBx jumps: offset is `b_s`.
         Op::JMP | Op::LOOP | Op::TEST | Op::TESTN | Op::FORPREP | Op::FORLOOP | Op::ITERNEXT => {

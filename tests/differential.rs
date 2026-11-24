@@ -13,6 +13,15 @@
 //! `DIFF_AS=cigar` builds each script as a mild `.cigar` file (the same text,
 //! named `.cigar`, cigar-script#7) and holds the program to the same
 //! `cig run` of the `.cig`: every CigScript script compiles as mild unchanged.
+//! `DIFF_BODIES=<build>[,<build>]` builds each script's stage c program
+//! again as each of the compiler's test builds (`CIGCOMPILE_BODIES`:
+//! `every`, a body for every function, entered at every resume point;
+//! `every-frame`, the same with every register kept in the frame;
+//! `every-checked`, that with each type the compiler proved held to the
+//! register's real value; `none`, entries alone) and holds each to the
+//! same `cig run`, modes and step budgets alike. A build makes bodies
+//! only where they pay; these make them everywhere, so every inline
+//! form and every way into a body runs on every script.
 
 #[path = "differential/gen.rs"]
 mod gen;
@@ -594,6 +603,29 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
             ),
         }
     }
+    // The compiler's test builds of the same stage c program
+    // (DIFF_BODIES), each one more program held to the reference.
+    if programs.len() >= 2 {
+        for (mode, stage) in bodies_builds() {
+            let mut c = Command::new(&tools.cc);
+            env(&mut c);
+            let prog_m = prog_at(&format!("c-{mode}"));
+            let built = run(c
+                .env("CIGCOMPILE_BODIES", mode)
+                .args(["build", &build_name, "--stage", "c", "-o"])
+                .arg(&prog_m));
+            match built.code {
+                Some(0) if built.stderr.contains("is a stage b program") => {}
+                Some(0) => programs.push((stage, prog_m)),
+                _ => report(
+                    tally,
+                    &format!("{} (built at stage {stage})", case.script),
+                    false,
+                    || format!("built at stage b, and at stage {stage}: {built:?}"),
+                ),
+            }
+        }
+    }
     // The interpreter against itself, once for each mode.
     let mut controlled: Vec<String> = Vec::new();
     let only_budgets = std::env::var("DIFF_BUDGETS").is_ok_and(|v| v == "only");
@@ -717,6 +749,30 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
             the_step_budget_stops_on_the_same_line(tools, case, stage, at, &lay_out, &env, tally);
         }
     }
+}
+
+/// The compiler's test builds `DIFF_BODIES` names: what
+/// `CIGCOMPILE_BODIES` is set to, and what the program is called in a
+/// row. A name it does not know stops the suite: a typo must not pass
+/// for a run.
+fn bodies_builds() -> Vec<(&'static str, &'static str)> {
+    let Ok(asked) = std::env::var("DIFF_BODIES") else {
+        return Vec::new();
+    };
+    asked
+        .split(',')
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(|m| match m {
+            "every" => ("every", "c (a body for every function)"),
+            "every-frame" => ("every-frame", "c (every body on the frame)"),
+            "every-checked" => ("every-checked", "c (every body checked)"),
+            "none" => ("none", "c (no body)"),
+            other => {
+                panic!("DIFF_BODIES names `{other}`: every, every-frame, every-checked or none")
+            }
+        })
+        .collect()
 }
 
 /// cig-compile#31: `--max-steps` stops the stage b program, and the
