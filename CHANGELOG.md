@@ -35,17 +35,21 @@ project follows semantic versioning.
     out ahead; a loop that reads a list or calls a function each turn
     stays bytecode. By the compiler's figures a stage `c` program is
     never slower than its stage `b` program, and the runtime bounds what
-    a wrong guess can cost. First reading, whole processes, on one
-    laptop: `fib`, `loop` and `mandel` take 0.13, 0.28 and 0.14 of their
-    stage `b` time, and none of the 25 programs of the shared set is
-    slower (0.91 to 1.05).
+    a wrong guess can cost.
   - **Lists of numbers.** A body reads and writes a list's elements
     where they lie (`xs[i]`, `xs[i] = v`, by an int, for numbers, bools
     and null): it asks the runtime once where they are and keeps that
     in view until it next hands an instruction to the interpreter.
     Anything else in the list's place, or in the list, is the
-    interpreter's. First reading: `fannkuch` takes 0.27 of its stage `b`
-    time and `sieve` 0.75.
+    interpreter's.
+  - **Measured** on 2026-11-24, both built from `main`, whole
+    processes pinned to one core, every number computed twice
+    ([the paper](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCHMARKS-2026-11-24.md)):
+    where a program has native code it takes 0.52 of its stage `b` time
+    (`mandel` 0.18, `fib` 0.26, `fannkuch` 0.30, `loop` 0.50, `sieve`
+    0.78), and 0.78 over all 21 compute programs: faster on 7, level on
+    14, slower on none. A stage `c` program takes 0.66 of CPython
+    3.12's time over those programs and 1.37 times Lua 5.4's.
   - **What a build says.** `native the top level and 2 functions
     compiled, 1 left to the bytecode`; a script with no loop that pays
     and no function on numbers is the stage `b` program, with a note

@@ -2,6 +2,15 @@
 
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
+> **Since this was written**, stage `c` compiles loops too, the top
+> level's included, and a list's elements (decision
+> [0008](decisions/0008-native-code-on-the-vms-frame.md)): 8 of the 21
+> compute programs of the shared set now have native code, not `fib`
+> alone. The whole set, measured with stage `c` as a side beside five
+> other languages, is
+> [the paper of 2026-11-24](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCHMARKS-2026-11-24.md).
+> What follows is the first measurement as it was made.
+
 What native code does for the functions stage `c` compiles today, on
 three small programs whose work is inside such functions, beside the
 same programs in Lua, LuaJIT and CPython. It is the first measurement
