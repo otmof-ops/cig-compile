@@ -39,6 +39,13 @@ project follows semantic versioning.
     laptop: `fib`, `loop` and `mandel` take 0.13, 0.28 and 0.14 of their
     stage `b` time, and none of the 25 programs of the shared set is
     slower (0.91 to 1.05).
+  - **Lists of numbers.** A body reads and writes a list's elements
+    where they lie (`xs[i]`, `xs[i] = v`, by an int, for numbers, bools
+    and null): it asks the runtime once where they are and keeps that
+    in view until it next hands an instruction to the interpreter.
+    Anything else in the list's place, or in the list, is the
+    interpreter's. First reading: `fannkuch` takes 0.27 of its stage `b`
+    time and `sieve` 0.75.
   - **What a build says.** `native the top level and 2 functions
     compiled, 1 left to the bytecode`; a script with no loop that pays
     and no function on numbers is the stage `b` program, with a note

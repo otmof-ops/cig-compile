@@ -34,6 +34,13 @@
 //! a call. A guess next to instructions the interpreter runs anyway
 //! joins their stretch, where a failure costs nothing.
 //!
+//! The estimates lean towards the guess holding, because the runtime
+//! bounds what it costs when it does not: a body whose guesses keep
+//! failing is no longer entered there, and the bytecode has the loop
+//! back within microseconds. So a loop is planned for the values its
+//! instructions usually see, and a loop that sees others runs as it
+//! would have with no body.
+//!
 //! ## How it is decided
 //!
 //! Loop by loop, innermost first ([`Rule::Loops`]). A loop's own
@@ -66,6 +73,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use cig_native::Rule;
 use cigscript::cig_bytecode::instr::DecodedInstr;
 use cigscript::cig_bytecode::module::RESERVED_U32;
+use cigscript::cig_bytecode::opcode::Op;
 
 use crate::flow::{self, Flow};
 
@@ -78,6 +86,12 @@ pub(crate) enum Class {
     /// is how often it is taken to cover them, in a hundred: an
     /// estimate.
     Guess(u8),
+    /// An inline read or write of a list's element. It tests its
+    /// operands as a guess does (the number is how often it is taken to
+    /// cover them), and it needs the list's elements in view: the
+    /// runtime says where they lie, and that holds until machine code
+    /// next calls the runtime.
+    Index(u8),
     /// No inline form: the interpreter's.
     Interp,
     /// `call`: the VM's own instruction makes the frame.
@@ -109,6 +123,13 @@ pub(crate) struct Costs {
     pub out: u32,
     /// The VM enters a body.
     pub enter: u32,
+    /// Machine code asks the runtime where a list's elements lie.
+    pub view: u32,
+    /// A list's element read or written as machine code, and by the
+    /// interpreter: it borrows the list, checks the index and copies
+    /// the value, which is more than its plain instructions do.
+    pub index_native: u32,
+    pub index_interp: u32,
     /// How many turns a loop is taken to make each time it is reached:
     /// what entering and leaving it are spread over.
     pub turns: u32,
@@ -121,6 +142,9 @@ pub(crate) const COSTS: Costs = Costs {
     stretch: 120,
     out: 50,
     enter: 250,
+    view: 100,
+    index_native: 10,
+    index_interp: 40,
     turns: 8,
 };
 
@@ -169,13 +193,31 @@ pub(crate) fn plan(
         Rule::Every => every(flow, class),
         Rule::Loops => loops(flow, code, class),
     };
+    let mut how = how;
+    let mut leaders: BTreeSet<u32> = flow.leaders.iter().copied().collect();
+    // The interpreter goes on past the `nop`s that follow an index
+    // instruction (they carry its parts' positions), so they are run by
+    // whoever runs it, and the pc after them starts a block: it is
+    // where the bytecode stands when the interpreter ran the
+    // instruction for an inline form that did not cover its operands.
+    for d in code.iter().flatten() {
+        let Some(past) = past_nops(code, d) else {
+            continue;
+        };
+        let answer = how.get(&d.pc).copied().unwrap_or(How::Leave);
+        for (_, h) in how.range_mut(d.pc + d.width..past) {
+            *h = answer;
+        }
+        if past < end {
+            leaders.insert(past);
+        }
+    }
     let resumes = match rule {
         Rule::None => Vec::new(),
         // Every way in the bytecode has.
         Rule::Every => flow.resumes.clone(),
         Rule::Loops => resumes(flow, &how),
     };
-    let mut leaders: BTreeSet<u32> = flow.leaders.iter().copied().collect();
     leaders.extend(resumes.iter().copied());
     let mut last = None;
     for (pc, h) in &how {
@@ -192,13 +234,31 @@ pub(crate) fn plan(
     }
 }
 
+/// For an index instruction (`getindex`, `setindex`): the pc the
+/// interpreter goes on at when it has run it, past the `nop`s after it
+/// that carry its parts' positions (at most one for a read, two for a
+/// write). `None` for any other instruction.
+pub(crate) fn past_nops(code: &[Option<DecodedInstr>], d: &DecodedInstr) -> Option<u32> {
+    let most = match d.op {
+        Op::GETINDEX => 1,
+        Op::SETINDEX => 2,
+        _ => return None,
+    };
+    let next = d.pc + d.width;
+    let mut pc = next;
+    while pc < next + most && matches!(code.get(pc as usize), Some(Some(n)) if n.op == Op::NOP) {
+        pc += 1;
+    }
+    Some(pc)
+}
+
 /// [`Rule::Every`]: whatever has an inline form is native.
 fn every(flow: &Flow, class: &BTreeMap<u32, Class>) -> BTreeMap<u32, How> {
     flow.pcs
         .iter()
         .map(|pc| {
             let how = match class.get(pc).copied().unwrap_or(Class::Interp) {
-                Class::Sure | Class::Guess(_) => How::Native,
+                Class::Sure | Class::Guess(_) | Class::Index(_) => How::Native,
                 Class::Interp => How::Stretch,
                 Class::Call | Class::Exit => How::Leave,
             };
@@ -308,8 +368,10 @@ fn loops(
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Inner {
     /// Its answer starts native: the outer loop's machine code runs
-    /// into it.
-    Native,
+    /// into it. `whole` when all of it is native, so it calls the
+    /// runtime for nothing and a list in view before it is in view
+    /// after it.
+    Native { whole: bool },
     /// The interpreter's whole, with no call in it: a stretch of the
     /// outer loop's machine code can hold it.
     Quiet,
@@ -327,43 +389,67 @@ enum Item {
     Loop(u32, u32, Inner),
 }
 
+/// Native, with no list known to be in view.
 const NATIVE: usize = 0;
-const STRETCH: usize = 1;
-const LEAVE: usize = 2;
-const STATES: [usize; 3] = [NATIVE, STRETCH, LEAVE];
+/// Native, with the lists the loop indexes in view: nothing has called
+/// the runtime since each was asked for.
+const VIEWED: usize = 1;
+const STRETCH: usize = 2;
+const LEAVE: usize = 3;
+const STATES: [usize; 4] = [NATIVE, VIEWED, STRETCH, LEAVE];
 /// More than any plan costs, and far from overflowing when added.
 const NEVER: u32 = u32::MAX / 8;
 
+fn is_native(state: usize) -> bool {
+    state == NATIVE || state == VIEWED
+}
+
+/// The item is an inline index form: the one thing that can bring a
+/// list into view.
+fn takes_view(item: &Item) -> bool {
+    matches!(item, Item::Own(_, Class::Index(_)))
+}
+
 /// What an item costs in a state: [`NEVER`] when it cannot be in it.
 fn item_cost(item: &Item, state: usize, c: &Costs) -> u32 {
+    let miss = |p: u8| c.stretch * (100 - u32::from(p.min(100))) / 100;
     match (item, state) {
-        (Item::Own(_, Class::Sure), NATIVE) => c.native,
-        (Item::Own(_, Class::Guess(p)), NATIVE) => {
-            c.native + c.stretch * (100 - u32::from((*p).min(100))) / 100
-        }
+        (Item::Own(_, Class::Sure), NATIVE | VIEWED) => c.native,
+        (Item::Own(_, Class::Guess(p)), NATIVE | VIEWED) => c.native + miss(*p),
+        (Item::Own(_, Class::Index(p)), VIEWED) => c.index_native + miss(*p),
+        (Item::Own(_, Class::Index(_)), NATIVE) => NEVER,
+        (Item::Own(_, Class::Index(_)), _) => c.index_interp,
         (Item::Own(_, Class::Sure | Class::Guess(_)), _) => c.interp,
-        (Item::Own(_, Class::Interp), NATIVE) => NEVER,
+        (Item::Own(_, Class::Interp), NATIVE | VIEWED) => NEVER,
         (Item::Own(_, Class::Interp), _) => 0,
         (Item::Own(_, Class::Call | Class::Exit), LEAVE) => 0,
         (Item::Own(_, Class::Call | Class::Exit), _) => NEVER,
-        (Item::Loop(_, _, Inner::Native), NATIVE) => 0,
-        (Item::Loop(_, _, Inner::Native), _) => NEVER,
-        (Item::Loop(_, _, Inner::Quiet), NATIVE) => NEVER,
+        (Item::Loop(_, _, Inner::Native { .. }), NATIVE) => 0,
+        (Item::Loop(_, _, Inner::Native { whole: true }), VIEWED) => 0,
+        (Item::Loop(_, _, Inner::Native { .. }), _) => NEVER,
+        (Item::Loop(_, _, Inner::Quiet), NATIVE | VIEWED) => NEVER,
         (Item::Loop(_, _, Inner::Quiet), _) => 0,
         (Item::Loop(_, _, Inner::Out), LEAVE) => 0,
         (Item::Loop(_, _, Inner::Out), _) => NEVER,
     }
 }
 
-/// What going from an item in state `from` to the next in state `to`
-/// costs.
-fn step_cost(from: usize, to: usize, c: &Costs) -> u32 {
+/// What going from an item in state `from` to the item `next` in state
+/// `to` costs. A list comes into view only at an inline index form,
+/// for one call of the runtime.
+fn step_cost(from: usize, to: usize, next: &Item, c: &Costs) -> u32 {
+    let view = match takes_view(next) {
+        true => c.view,
+        false => NEVER,
+    };
     match (from, to) {
-        (NATIVE, STRETCH) => c.stretch,
-        (NATIVE, LEAVE) => c.out,
+        (NATIVE | VIEWED, STRETCH) => c.stretch,
+        (NATIVE | VIEWED, LEAVE) => c.out,
         (LEAVE, NATIVE) => c.enter,
+        (LEAVE, VIEWED) => c.enter.saturating_add(view),
         // Out of the body, a stretch is no different from the rest.
         (LEAVE, STRETCH) => NEVER,
+        (NATIVE | STRETCH, VIEWED) => view,
         _ => 0,
     }
 }
@@ -385,33 +471,35 @@ fn cheapest(items: &[Item], c: &Costs) -> (Vec<usize>, u32) {
     let tax = (c.enter + c.out) / c.turns.max(1);
     // Whether an instruction of the loop's own is native in the plan
     // so far is part of the state: `cost[state][native]`.
-    let own_native = |item: &Item, state: usize| matches!(item, Item::Own(..)) && state == NATIVE;
-    for start in [LEAVE, NATIVE, STRETCH] {
+    let own_native = |item: &Item, state: usize| matches!(item, Item::Own(..)) && is_native(state);
+    for start in [LEAVE, NATIVE, VIEWED, STRETCH] {
         let here = item_cost(first, start, c);
         if here >= NEVER {
             continue;
         }
-        let mut cost = [[NEVER; 2]; 3];
+        let mut cost = [[NEVER; 2]; 4];
         cost[start][usize::from(own_native(first, start))] = here;
         // For each item after the first: where its `[state][native]`
         // came from.
-        let mut came: Vec<[[(usize, usize); 2]; 3]> = Vec::with_capacity(items.len());
+        let mut came: Vec<[[(usize, usize); 2]; 4]> = Vec::with_capacity(items.len());
         for item in &items[1..] {
-            let mut next = [[NEVER; 2]; 3];
-            let mut from = [[(LEAVE, 0); 2]; 3];
+            let mut next = [[NEVER; 2]; 4];
+            let mut from = [[(LEAVE, 0); 2]; 4];
             for to in STATES {
                 let here = item_cost(item, to, c);
                 if here >= NEVER {
                     continue;
                 }
                 for prev in STATES {
+                    let step = step_cost(prev, to, item, c);
+                    if step >= NEVER {
+                        continue;
+                    }
                     for flag in [0, 1] {
                         if cost[prev][flag] >= NEVER {
                             continue;
                         }
-                        let total = cost[prev][flag]
-                            .saturating_add(step_cost(prev, to, c))
-                            .saturating_add(here);
+                        let total = cost[prev][flag].saturating_add(step).saturating_add(here);
                         let now = flag | usize::from(own_native(item, to));
                         if total < next[to][now] {
                             next[to][now] = total;
@@ -429,7 +517,7 @@ fn cheapest(items: &[Item], c: &Costs) -> (Vec<usize>, u32) {
                 if cost[last][flag] >= NEVER {
                     continue;
                 }
-                let back = step_cost(last, start, c);
+                let back = step_cost(last, start, first, c);
                 if back >= NEVER {
                     continue;
                 }
@@ -491,23 +579,32 @@ fn settle(
     let (states, _) = cheapest(&items, &COSTS);
     let mut any_native = false;
     let mut leaves = false;
+    // Native whole: every instruction of its own, and every loop in it.
+    let mut whole = !items.is_empty();
     for (item, state) in items.iter().zip(&states) {
         match item {
             Item::Own(pc, c) => {
                 let answer = match *state {
-                    NATIVE => How::Native,
+                    NATIVE | VIEWED => How::Native,
                     STRETCH => How::Stretch,
                     _ => How::Leave,
                 };
                 any_native |= answer == How::Native;
+                whole &= answer == How::Native;
                 leaves |= *c == Class::Call;
                 how.insert(*pc, answer);
             }
             Item::Loop(start, end, kind) => {
                 match kind {
-                    Inner::Native => any_native = true,
-                    Inner::Out => leaves = true,
-                    Inner::Quiet => {}
+                    Inner::Native { whole: all } => {
+                        any_native = true;
+                        whole &= *all;
+                    }
+                    Inner::Out => {
+                        leaves = true;
+                        whole = false;
+                    }
+                    Inner::Quiet => whole = false,
                 }
                 // A quiet loop held by a stretch of this one is part of
                 // that stretch, whole.
@@ -520,7 +617,7 @@ fn settle(
         }
     }
     if how.get(&l.start) == Some(&How::Native) {
-        Inner::Native
+        Inner::Native { whole }
     } else if any_native || leaves {
         Inner::Out
     } else {
@@ -605,7 +702,7 @@ mod tests {
         // a native loop: out of the body it would be entered every turn.
         let items = vec![
             Item::Own(0, Class::Sure),
-            Item::Loop(1, 9, Inner::Native),
+            Item::Loop(1, 9, Inner::Native { whole: true }),
             Item::Own(9, Class::Sure),
             Item::Own(10, Class::Sure),
         ];
@@ -623,6 +720,58 @@ mod tests {
     }
 
     #[test]
+    fn a_loop_that_writes_a_list_and_counts_is_native_whole_with_the_list_in_view() {
+        // `while m <= n { is[m] = false; m += p }`: a compare, a write
+        // of an element, an add, a jump. Nothing in it calls the
+        // runtime, so the list is asked for once and stays in view.
+        let items = own(&[Class::Sure, Class::Index(90), Class::Sure, Class::Sure]);
+        let (states, cost) = cheapest(&items, &COSTS);
+        assert_eq!(states, vec![VIEWED; 4]);
+        let miss = COSTS.stretch * 10 / 100;
+        assert_eq!(
+            cost,
+            3 * COSTS.native + COSTS.index_native + miss + (COSTS.enter + COSTS.out) / COSTS.turns
+        );
+    }
+
+    #[test]
+    fn an_index_after_a_stretch_pays_for_its_view_each_turn() {
+        // One element read among instructions the interpreter runs
+        // anyway: asking where the list lies every turn costs more
+        // than the read saves, so it joins the stretch.
+        let mut classes = vec![Class::Sure; 20];
+        classes.extend([Class::Interp, Class::Index(90), Class::Interp]);
+        let (states, _) = cheapest(&own(&classes), &COSTS);
+        assert_eq!(&states[20..], &[STRETCH; 3]);
+        // Several reads after one stretch share the one view.
+        let mut classes = vec![Class::Sure; 20];
+        classes.push(Class::Interp);
+        classes.extend([Class::Index(90); 8]);
+        let (states, _) = cheapest(&own(&classes), &COSTS);
+        assert_eq!(states[20], STRETCH);
+        assert_eq!(&states[21..], &[VIEWED; 8]);
+    }
+
+    #[test]
+    fn a_loop_native_whole_keeps_its_outer_loops_lists_in_view() {
+        let around = |inner: Inner| {
+            vec![
+                Item::Own(0, Class::Index(90)),
+                Item::Own(1, Class::Sure),
+                Item::Loop(2, 9, inner),
+                Item::Own(9, Class::Sure),
+            ]
+        };
+        // Whole: the outer loop's read is in view every turn.
+        let (states, whole) = cheapest(&around(Inner::Native { whole: true }), &COSTS);
+        assert_eq!(states, vec![VIEWED; 4]);
+        // With a stretch inside, the view is asked for again each turn.
+        let (states, part) = cheapest(&around(Inner::Native { whole: false }), &COSTS);
+        assert!(is_native(states[2]) && states[0] == VIEWED, "{states:?}");
+        assert_eq!(part, whole + COSTS.view);
+    }
+
+    #[test]
     fn nothing_native_is_a_candidate_whatever_the_ring_holds() {
         for classes in [
             vec![Class::Interp; 4],
@@ -631,7 +780,7 @@ mod tests {
             Vec::new(),
         ] {
             let (states, _) = cheapest(&own(&classes), &COSTS);
-            assert!(states.iter().all(|s| *s != NATIVE), "{classes:?}");
+            assert!(states.iter().all(|s| !is_native(*s)), "{classes:?}");
         }
     }
 }

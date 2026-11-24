@@ -86,6 +86,9 @@ const CTX_HELPERS: i32 = core::mem::offset_of!(cig_native::Context, helpers) as 
 const CTX_NEST: i32 = core::mem::offset_of!(cig_native::Context, nest) as i32;
 const HLP_RUN: i32 = core::mem::offset_of!(cig_native::Helpers, run) as i32;
 const HLP_AGAIN: i32 = core::mem::offset_of!(cig_native::Helpers, again) as i32;
+const HLP_LIST: i32 = core::mem::offset_of!(cig_native::Helpers, list) as i32;
+const CTX_LEFT: i32 = core::mem::offset_of!(cig_native::Context, left) as i32;
+const CTX_RIGHT: i32 = core::mem::offset_of!(cig_native::Context, right) as i32;
 
 /// The widest counted loop the interpreter runs (`range_fits`): a wider
 /// one is the interpreter's to refuse.
@@ -378,6 +381,12 @@ fn compile_one(
     again_sig.params.push(AbiParam::new(types::I32));
     again_sig.returns.push(AbiParam::new(types::I64));
     let again_sig = b.import_signature(again_sig);
+    // `list(ctx, reg) -> u32`.
+    let mut list_sig = Signature::new(call_conv);
+    list_sig.params.push(AbiParam::new(ptr));
+    list_sig.params.push(AbiParam::new(types::I32));
+    list_sig.returns.push(AbiParam::new(types::I32));
+    let list_sig = b.import_signature(list_sig);
 
     let entry = b.create_block();
     b.append_block_params_for_function_params(entry);
@@ -392,6 +401,30 @@ fn compile_one(
     b.def_var(frame, null);
     let zero = b.ins().iconst(types::I64, 0);
     b.def_var(steps, zero);
+    // A view for each register a native index form takes its list
+    // from: whether its elements are in view, where the first lies and
+    // how many there are. Nothing is in view when the body is entered.
+    let mut views = BTreeMap::new();
+    for d in code.iter().flatten() {
+        let list = match d.op {
+            Op::GETINDEX => d.b_u,
+            Op::SETINDEX => d.a,
+            _ => continue,
+        };
+        if plan.how(d.pc) != How::Native || views.contains_key(&list) {
+            continue;
+        }
+        let view = View {
+            known: b.declare_var(types::I8),
+            first: b.declare_var(ptr),
+            count: b.declare_var(types::I64),
+        };
+        let no = b.ins().iconst(types::I8, 0);
+        b.def_var(view.known, no);
+        b.def_var(view.first, null);
+        b.def_var(view.count, zero);
+        views.insert(list, view);
+    }
 
     let blocks: BTreeMap<u32, CbBlock> = plan
         .leaders
@@ -409,6 +442,8 @@ fn compile_one(
         ptr,
         run_sig,
         again_sig,
+        list_sig,
+        views,
         ctx,
         frame,
         steps,
@@ -536,6 +571,18 @@ enum Cond {
     If(CbValue),
 }
 
+/// A list's elements as machine code has them in view: the runtime said
+/// where the first lies and how many there are, and that holds until
+/// machine code next calls a function of the runtime that runs the
+/// interpreter (it may grow the list, or put another in the register).
+#[derive(Clone, Copy)]
+struct View {
+    /// 1 while the two below hold.
+    known: Variable,
+    first: Variable,
+    count: Variable,
+}
+
 /// An edge block: the block, the registers it writes to the frame
 /// (each with the type it is held as), and the block it goes on to.
 type EdgeBlock = (CbBlock, Vec<(u32, Ty)>, CbBlock);
@@ -550,6 +597,9 @@ struct Emit<'a> {
     ptr: CbType,
     run_sig: SigRef,
     again_sig: SigRef,
+    list_sig: SigRef,
+    /// The view of each register a native index form takes a list from.
+    views: BTreeMap<u32, View>,
     ctx: Variable,
     frame: Variable,
     steps: Variable,
@@ -729,12 +779,194 @@ impl Emit<'_> {
 
     // ----- the context -------------------------------------------------------
 
+    /// What the body takes from the context again when the interpreter
+    /// has run: the frame's address and the steps left. No list is in
+    /// view after it: the interpreter may have grown one, or put
+    /// another value in its register.
     fn reload_context(&self, b: &mut FunctionBuilder) {
         let ctx = b.use_var(self.ctx);
         let frame = b.ins().load(self.ptr, flags(), ctx, CTX_FRAME);
         b.def_var(self.frame, frame);
         let steps = b.ins().load(types::I64, flags(), ctx, CTX_STEPS_LEFT);
         b.def_var(self.steps, steps);
+        for view in self.views.values() {
+            let no = b.ins().iconst(types::I8, 0);
+            b.def_var(view.known, no);
+        }
+    }
+
+    /// The elements of the list in register `r`: the address of the
+    /// first and how many there are. They are asked of the runtime when
+    /// they are not in view, and it goes to `fb` when the register
+    /// holds no list machine code may read where it lies (it holds
+    /// something else, or the list is borrowed).
+    ///
+    /// `list` reads that one register, which is in the frame: a
+    /// register that holds a list is never held in a machine register.
+    /// It runs no instruction, so the other views and the frame's
+    /// address stand.
+    fn view(
+        &mut self,
+        b: &mut FunctionBuilder,
+        r: u32,
+        fb: CbBlock,
+    ) -> Result<(CbValue, CbValue), String> {
+        let view = *self
+            .views
+            .get(&r)
+            .ok_or_else(|| format!("no view was made for register {r}"))?;
+        let have = b.create_block();
+        let ask = b.create_block();
+        let known = b.use_var(view.known);
+        b.ins().brif(known, have, &[], ask, &[]);
+        b.switch_to_block(ask);
+        b.set_cold_block(ask);
+        let ctx = b.use_var(self.ctx);
+        let helpers = b.ins().load(self.ptr, flags(), ctx, CTX_HELPERS);
+        let list = b.ins().load(self.ptr, flags(), helpers, HLP_LIST);
+        let reg = b.ins().iconst(types::I32, i64::from(r));
+        let call = b.ins().call_indirect(self.list_sig, list, &[ctx, reg]);
+        let got = b.inst_results(call)[0];
+        let yes = b.create_block();
+        b.ins().brif(got, yes, &[], fb, &[]);
+        b.switch_to_block(yes);
+        let first = b.ins().load(self.ptr, flags(), ctx, CTX_LEFT);
+        let count = b.ins().load(types::I64, flags(), ctx, CTX_RIGHT);
+        b.def_var(view.first, first);
+        b.def_var(view.count, count);
+        let one = b.ins().iconst(types::I8, 1);
+        b.def_var(view.known, one);
+        b.ins().jump(have, &[]);
+        b.switch_to_block(have);
+        Ok((b.use_var(view.first), b.use_var(view.count)))
+    }
+
+    /// The address of element `index` of the list whose elements are
+    /// in view, an int index: to `fb` when the list has no such
+    /// element (a negative index is one of those: it is compared as an
+    /// unsigned number).
+    fn element(
+        &mut self,
+        b: &mut FunctionBuilder,
+        list: u32,
+        index: CbValue,
+        fb: CbBlock,
+    ) -> Result<CbValue, String> {
+        let (first, count) = self.view(b, list, fb)?;
+        let inside = b.ins().icmp(IntCC::UnsignedLessThan, index, count);
+        let ok = b.create_block();
+        b.ins().brif(inside, ok, &[], fb, &[]);
+        b.switch_to_block(ok);
+        let offset = b.ins().imul_imm_s(index, value::SIZE as i64);
+        Ok(b.ins().iadd(first, offset))
+    }
+
+    /// An index operand as an int: to `fb` when it is not one.
+    fn index_of(&mut self, b: &mut FunctionBuilder, x: Opd, fb: CbBlock) -> CbValue {
+        match self.is_int(b, x) {
+            Cond::Always => {}
+            Cond::If(c) => {
+                let ok = b.create_block();
+                b.ins().brif(c, ok, &[], fb, &[]);
+                b.switch_to_block(ok);
+            }
+            Cond::Never => {
+                let dead = b.create_block();
+                b.ins().jump(fb, &[]);
+                b.switch_to_block(dead);
+            }
+        }
+        self.int_of(b, x)
+    }
+
+    /// `getindex A, B, C`: `R(A) = R(B)[R(C)]` for a list, an int
+    /// index it has an element at, and an element that owns no memory
+    /// (a number, a bool, null): the element is copied, tag and
+    /// payload. Anything else is the interpreter's: a map, a string, an
+    /// index past the end (its error), an element that is a string or
+    /// a list (it is shared, and only the interpreter counts shares).
+    fn getindex(&mut self, b: &mut FunctionBuilder, d: &DecodedInstr) -> Result<(), String> {
+        let pc = d.pc;
+        let fb = b.create_block();
+        let join = b.create_block();
+        self.guard_dst(b, pc, d.a, fb);
+        let x = self.operand(b, pc, d.c);
+        let index = self.index_of(b, x, fb);
+        let at = self.element(b, d.b_u, index, fb)?;
+        let tag = b.ins().load(types::I8, flags(), at, value::TAG as i32);
+        let owns = b.ins().icmp_imm_s(
+            IntCC::UnsignedGreaterThanOrEqual,
+            tag,
+            i64::from(value::OWNS),
+        );
+        let plain = b.create_block();
+        b.ins().brif(owns, fb, &[], plain, &[]);
+        b.switch_to_block(plain);
+        let bits = b.ins().load(types::I64, flags(), at, value::PAYLOAD as i32);
+        // The type pass has `R(A)` as anything after a read: it is in
+        // the frame.
+        let frame = b.use_var(self.frame);
+        let to = Self::slot(d.a);
+        b.ins().store(flags(), tag, frame, to + value::TAG as i32);
+        b.ins()
+            .store(flags(), bits, frame, to + value::PAYLOAD as i32);
+        b.ins().jump(join, &[]);
+        self.fall_back(b, d, fb, join)?;
+        b.switch_to_block(join);
+        Ok(())
+    }
+
+    /// `setindex A, B, C`: `R(A)[R(B)] = R(C)` for a list, an int index
+    /// it has an element at, a value that owns no memory, and an
+    /// element that owns none (so nothing is freed and nothing shared):
+    /// the value is stored where the element lies.
+    fn setindex(&mut self, b: &mut FunctionBuilder, d: &DecodedInstr) -> Result<(), String> {
+        let pc = d.pc;
+        let fb = b.create_block();
+        let join = b.create_block();
+        let x = self.operand(b, pc, d.b_u);
+        let index = self.index_of(b, x, fb);
+        // The value, as a tag and a payload.
+        let v = self.operand(b, pc, d.c);
+        let (tag, payload) = match v {
+            Opd::Null => (b.ins().iconst(types::I8, i64::from(value::NULL)), None),
+            Opd::Bool(x) => (
+                b.ins().iconst(types::I8, i64::from(value::BOOL)),
+                Some(b.ins().ireduce(types::I8, x)),
+            ),
+            Opd::Int(x) => (b.ins().iconst(types::I8, i64::from(value::INT)), Some(x)),
+            Opd::Float(x) => (b.ins().iconst(types::I8, i64::from(value::FLOAT)), Some(x)),
+            Opd::Reg(r) => {
+                let t = self.tag(b, r);
+                let owns = b.ins().icmp_imm_s(
+                    IntCC::UnsignedGreaterThanOrEqual,
+                    t,
+                    i64::from(value::OWNS),
+                );
+                let plain = b.create_block();
+                b.ins().brif(owns, fb, &[], plain, &[]);
+                b.switch_to_block(plain);
+                (t, Some(self.bits(b, r)))
+            }
+        };
+        let at = self.element(b, d.a, index, fb)?;
+        let old = b.ins().load(types::I8, flags(), at, value::TAG as i32);
+        let owns = b.ins().icmp_imm_s(
+            IntCC::UnsignedGreaterThanOrEqual,
+            old,
+            i64::from(value::OWNS),
+        );
+        let plain = b.create_block();
+        b.ins().brif(owns, fb, &[], plain, &[]);
+        b.switch_to_block(plain);
+        b.ins().store(flags(), tag, at, value::TAG as i32);
+        if let Some(p) = payload {
+            b.ins().store(flags(), p, at, value::PAYLOAD as i32);
+        }
+        b.ins().jump(join, &[]);
+        self.fall_back(b, d, fb, join)?;
+        b.switch_to_block(join);
+        Ok(())
     }
 
     fn flush_steps(&self, b: &mut FunctionBuilder) {
@@ -1190,7 +1422,13 @@ impl Emit<'_> {
         b.set_cold_block(fb);
         let (pc, next) = (d.pc, d.pc + d.width);
         let stop = self.again(b, pc);
-        let mut exits = vec![(next, join)];
+        let mut exits = Vec::new();
+        // The interpreter goes on past the `nop`s after an index
+        // instruction: that pc starts a block (the plan made it one).
+        if let Some(past) = plan::past_nops(self.code, d).filter(|p| *p != next && *p < self.end) {
+            exits.push((past, self.block(past)?));
+        }
+        exits.push((next, join));
         if let Some(t) = flow::target_of(d).filter(|t| *t != next && *t != pc && *t < self.end) {
             exits.push((t, self.block(t)?));
         }
@@ -1333,6 +1571,8 @@ impl Emit<'_> {
             Op::TESTSET => self.testset(b, d),
             Op::FORPREP => self.forprep(b, d),
             Op::FORLOOP => self.forloop(b, d),
+            Op::GETINDEX => self.getindex(b, d),
+            Op::SETINDEX => self.setindex(b, d),
             other => Err(format!("{other:?} has no inline form")),
         }
     }
@@ -1994,8 +2234,10 @@ impl Emit<'_> {
 /// The estimates beside a guess are of scripts as they are written: a
 /// register written over usually held a number or nothing before; a
 /// value of unknown type that is added or ordered is usually a number;
-/// one that is moved or compared for equality is as often a string, a
-/// list or a map.
+/// one that is moved or compared for equality is more often a string, a
+/// list or a map. They lean towards the guess holding: the runtime
+/// gives up a body whose guesses keep failing, so a wrong estimate
+/// costs microseconds, where a guess not taken costs the loop.
 fn class_of(f: &BcFunction, flow: &Flow, types: &Types, d: &DecodedInstr) -> Class {
     match d.op {
         Op::CALL => return Class::Call,
@@ -2024,7 +2266,7 @@ fn class_of(f: &BcFunction, flow: &Flow, types: &Types, d: &DecodedInstr) -> Cla
     // memory, and tests for that otherwise.
     let dst = |r: u32| match tag_of(ty(r)) {
         Some(_) => Class::Sure,
-        None => Class::Guess(95),
+        None => Class::Guess(97),
     };
     let number = |t: Ty| matches!(t, Ty::Int | Ty::Float);
     let no_number = |t: Ty| matches!(t, Ty::Null | Ty::Bool);
@@ -2037,7 +2279,7 @@ fn class_of(f: &BcFunction, flow: &Flow, types: &Types, d: &DecodedInstr) -> Cla
         },
         Op::MOV if d.a == d.b_u => Class::Sure,
         Op::MOV => match ty(d.b_u) {
-            Ty::Any => Class::Guess(50),
+            Ty::Any => Class::Guess(70),
             _ => dst(d.a),
         },
         Op::ADD
@@ -2073,18 +2315,18 @@ fn class_of(f: &BcFunction, flow: &Flow, types: &Types, d: &DecodedInstr) -> Cla
                 dst(d.a)
             } else if div && (x == Ty::Int || y == Ty::Int) {
                 // Inline only when the other is a float.
-                Class::Guess(40)
+                Class::Guess(50)
             } else {
-                Class::Guess(75)
+                Class::Guess(90)
             }
         }
         Op::NEG => match ty(d.b_u) {
             t if number(t) => dst(d.a),
-            Ty::Any => Class::Guess(75),
+            Ty::Any => Class::Guess(90),
             _ => Class::Interp,
         },
         Op::NOT => match ty(d.b_u) {
-            Ty::Any => Class::Guess(80),
+            Ty::Any => Class::Guess(90),
             _ => dst(d.a),
         },
         Op::EQ | Op::EQK => {
@@ -2097,7 +2339,7 @@ fn class_of(f: &BcFunction, flow: &Flow, types: &Types, d: &DecodedInstr) -> Cla
             };
             // Only two values of unknown type can both own memory.
             match (ty(d.b_u), y) {
-                (Ty::Any, Ty::Any) => Class::Guess(60),
+                (Ty::Any, Ty::Any) => Class::Guess(80),
                 _ => dst(d.a),
             }
         }
@@ -2115,11 +2357,11 @@ fn class_of(f: &BcFunction, flow: &Flow, types: &Types, d: &DecodedInstr) -> Cla
             } else if number(x) && number(y) {
                 dst(d.a)
             } else {
-                Class::Guess(75)
+                Class::Guess(90)
             }
         }
         Op::EQJ | Op::NEJ => match (ty(d.a), ty(d.b_u)) {
-            (Ty::Any, Ty::Any) => Class::Guess(60),
+            (Ty::Any, Ty::Any) => Class::Guess(80),
             _ => Class::Sure,
         },
         Op::LTJ | Op::LEJ => {
@@ -2129,15 +2371,15 @@ fn class_of(f: &BcFunction, flow: &Flow, types: &Types, d: &DecodedInstr) -> Cla
             } else if number(x) && number(y) {
                 Class::Sure
             } else {
-                Class::Guess(75)
+                Class::Guess(90)
             }
         }
         Op::TEST | Op::TESTN => match ty(d.a) {
-            Ty::Any => Class::Guess(80),
+            Ty::Any => Class::Guess(90),
             _ => Class::Sure,
         },
         Op::TESTSET => match ty(d.b_u) {
-            Ty::Any => Class::Guess(60),
+            Ty::Any => Class::Guess(80),
             _ if d.a == d.b_u => Class::Sure,
             _ => dst(d.a),
         },
@@ -2151,6 +2393,21 @@ fn class_of(f: &BcFunction, flow: &Flow, types: &Types, d: &DecodedInstr) -> Cla
                 Class::Guess(90)
             }
         }
+        // A list's element, by an int: a proven int index is most often
+        // into a list of numbers; an index of unknown type is as often
+        // a map's key.
+        Op::GETINDEX => match ty(d.c) {
+            Ty::Int => Class::Index(90),
+            Ty::Any => Class::Index(60),
+            _ => Class::Interp,
+        },
+        Op::SETINDEX => match (ty(d.b_u), ty(d.c)) {
+            (Ty::Null | Ty::Bool | Ty::Float, _) => Class::Interp,
+            (Ty::Int, Ty::Any) => Class::Index(80),
+            (Ty::Int, _) => Class::Index(90),
+            (_, Ty::Any) => Class::Index(50),
+            (_, _) => Class::Index(60),
+        },
         _ => Class::Interp,
     }
 }

@@ -112,6 +112,75 @@ fn add_args() -> Module {
     ))
 }
 
+/// `fn(xs) { total = 0; for i in 0..4 { total = total + xs[i] }; return total }`.
+///
+/// ```text
+/// 0 loadint R1, 0      total
+/// 1 loadint R2, 0      the window
+/// 2 loadint R3, 4
+/// 3 loadint R4, 1
+/// 4 forprep R2 -> 10
+/// 5 steps 1, 1         <- the loop
+/// 6 getindex R6, R0, R5
+/// 7 nop                the read's position
+/// 8 add R1, R1, R6
+/// 9 forloop R2 -> 5
+/// 10 ret R1
+/// ```
+fn sum_list() -> Module {
+    module(function(
+        7,
+        1,
+        vec![
+            Instr::asbx(Op::LOADINT, 1, 0),
+            Instr::asbx(Op::LOADINT, 2, 0),
+            Instr::asbx(Op::LOADINT, 3, 4),
+            Instr::asbx(Op::LOADINT, 4, 1),
+            Instr::asbx(Op::FORPREP, 2, 5),
+            steps(1, 1),
+            Instr::abc(Op::GETINDEX, 6, 0, 5),
+            Instr::abc(Op::NOP, 0, 0, 0),
+            Instr::abc(Op::ADD, 1, 1, 6),
+            Instr::asbx(Op::FORLOOP, 2, -5),
+            Instr::abc(Op::RET, 1, 0, 0),
+        ],
+    ))
+}
+
+/// `fn(xs) { for i in 0..4 { xs[i] = i } }`, the write followed by the
+/// two `nop`s that carry its positions.
+fn fill_list() -> Module {
+    module(function(
+        6,
+        1,
+        vec![
+            Instr::asbx(Op::LOADINT, 1, 0),
+            Instr::asbx(Op::LOADINT, 2, 4),
+            Instr::asbx(Op::LOADINT, 3, 1),
+            Instr::asbx(Op::FORPREP, 1, 5),
+            steps(1, 1),
+            Instr::abc(Op::SETINDEX, 0, 4, 4),
+            Instr::abc(Op::NOP, 0, 0, 0),
+            Instr::abc(Op::NOP, 0, 0, 0),
+            Instr::asbx(Op::FORLOOP, 1, -5),
+            Instr::abc(Op::RET, 0, 0, 0),
+        ],
+    ))
+}
+
+#[test]
+fn a_loop_that_reads_a_list_by_an_int_gets_a_body() {
+    let out = bodies(&sum_list(), Rule::Loops, Arch::X86_64).expect("bodies");
+    assert_eq!(out.bodies.len(), 1);
+    assert_eq!(out.bodies[0].resumes, vec![5]);
+    // The loop's five instructions: the step mark, the read, its `nop`,
+    // the add and the `forloop`.
+    assert_eq!(out.report[0].inline, (5, 11));
+    let out = bodies(&fill_list(), Rule::Loops, Arch::X86_64).expect("bodies");
+    assert_eq!(out.bodies[0].resumes, vec![4]);
+    assert_eq!(out.report[0].inline, (5, 10));
+}
+
 #[test]
 fn the_rule_none_gives_no_function_a_body() {
     let out = bodies(&sum_loop(), Rule::None, Arch::X86_64).expect("bodies");
@@ -263,6 +332,10 @@ mod runs {
         /// What `again` returns, one a call, in order.
         again_returns: Vec<Stop>,
         again_calls: Vec<u32>,
+        /// The registers `list` was asked for, in order.
+        list_calls: Vec<u32>,
+        /// The frame the body runs on: where `list` finds a register.
+        frame: Option<(*mut Value, usize)>,
     }
 
     impl Host for Recording {
@@ -271,8 +344,23 @@ mod runs {
             assert!(!self.run_returns.is_empty(), "run was not expected");
             self.run_returns.remove(0)
         }
-        fn list(&mut self, _ctx: &mut Context, _reg: u32) -> bool {
-            panic!("no body asks for a list's elements yet");
+        fn list(&mut self, ctx: &mut Context, reg: u32) -> bool {
+            self.list_calls.push(reg);
+            let (frame, len) = self.frame.expect("a frame");
+            assert!((reg as usize) < len);
+            // SAFETY: `enter` set `frame` to the frame the body runs on,
+            // which outlives the body's run and is touched by nothing
+            // else while a helper runs.
+            let value = unsafe { &*frame.add(reg as usize) };
+            let Value::List(list) = value else {
+                return false;
+            };
+            let Ok(mut elements) = list.try_borrow_mut() else {
+                return false;
+            };
+            ctx.left = elements.as_mut_ptr() as u64;
+            ctx.right = elements.len() as u64;
+            true
         }
         fn again(&mut self, _ctx: &mut Context, pc: u32) -> Stop {
             self.again_calls.push(pc);
@@ -329,6 +417,7 @@ mod runs {
             .unwrap_or_else(|| panic!("pc {pc} is no resume point of {:?}", rows[0].resumes));
         let mut ctx = Context::new(steps, 10);
         ctx.frame = frame.as_mut_ptr().cast();
+        host.frame = Some((frame.as_mut_ptr(), frame.len()));
         let stop = code
             .enter(0, at as u32, &mut ctx, host)
             .expect("a body and a resume point it has");
@@ -519,6 +608,178 @@ mod runs {
         let (stop, _) = enter(&code, &rows, 0, &mut frame, 100, &mut host);
         assert_eq!(stop, Stop::Raised(1));
         assert!(matches!(frame[2], Value::Null));
+    }
+
+    fn list_of(values: Vec<Value>) -> Value {
+        Value::List(std::rc::Rc::new(std::cell::RefCell::new(values)))
+    }
+
+    fn elements(v: &Value) -> Vec<String> {
+        match v {
+            Value::List(l) => l.borrow().iter().map(Value::repr).collect(),
+            other => panic!("not a list: {}", other.repr()),
+        }
+    }
+
+    /// The frame of `sum_list` at the loop's start, turn `i`.
+    fn summing(xs: Value, total: i64, i: i64) -> Vec<Value> {
+        vec![
+            xs,
+            Value::Int(total),
+            Value::Int(i),
+            Value::Int(4),
+            Value::Int(1),
+            Value::Int(i),
+            Value::Null,
+        ]
+    }
+
+    #[test]
+    fn a_list_of_numbers_is_read_where_it_lies_and_asked_for_once() {
+        for mode in [Mode::Promoted, Mode::Frame, Mode::Checked] {
+            let (code, rows) = load(&sum_list(), Rule::Loops, mode);
+            let mut frame = summing(list_of(ints(&[10, 20, 30, 40])), 0, 0);
+            let mut host = Recording::default();
+            let (stop, ctx) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+            assert_eq!(stop, Stop::At(10), "{mode:?}");
+            assert!(
+                matches!(frame[1], Value::Int(100)),
+                "{mode:?}: {}",
+                frame[1].repr()
+            );
+            assert_eq!(ctx.steps_left, 996, "{mode:?}");
+            // Four reads, one question: nothing called the runtime in
+            // between, so the list stayed in view.
+            assert_eq!(host.list_calls, vec![0], "{mode:?}");
+            assert!(host.again_calls.is_empty() && host.run_calls.is_empty());
+        }
+        // Floats come out as floats, and the add takes them.
+        let (code, rows) = load(&sum_list(), Rule::Loops, Mode::Promoted);
+        let floats = vec![
+            Value::Float(0.5),
+            Value::Float(1.5),
+            Value::Int(2),
+            Value::Float(4.0),
+        ];
+        let mut frame = summing(list_of(floats), 0, 0);
+        let mut host = Recording::default();
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        // The total is anything once an element of unknown type is
+        // added to it, so the add reads both tags: an int and a float
+        // are two floats.
+        assert_eq!(stop, Stop::At(10));
+        assert!(host.again_calls.is_empty());
+        assert!(
+            matches!(frame[1], Value::Float(v) if v == 8.0),
+            "{}",
+            frame[1].repr()
+        );
+    }
+
+    #[test]
+    fn an_element_machine_code_may_not_copy_is_the_interpreters() {
+        let (code, rows) = load(&sum_list(), Rule::Loops, Mode::Promoted);
+        // The third element is a string: it is shared, and only the
+        // interpreter counts shares.
+        let xs = list_of(vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::Str("three".into()),
+            Value::Int(4),
+        ]);
+        let mut frame = summing(xs, 0, 0);
+        let mut host = Recording {
+            // The interpreter ran the read and stands past its `nop`.
+            again_returns: vec![Stop::At(8)],
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(host.again_calls, vec![6], "the read of the string");
+        // The body went on from past the `nop`, to the loop's end. (The
+        // scripted interpreter wrote nothing, so the add saw the second
+        // element again: 1 + 2 + 2 + 4.)
+        assert_eq!(stop, Stop::At(10));
+        assert!(matches!(frame[1], Value::Int(9)), "{}", frame[1].repr());
+        // No list is in view once the interpreter has run: the fourth
+        // read asked for it again.
+        assert_eq!(host.list_calls, vec![0, 0]);
+    }
+
+    #[test]
+    fn an_index_the_list_has_no_element_at_is_the_interpreters() {
+        let (code, rows) = load(&sum_list(), Rule::Loops, Mode::Promoted);
+        // Three elements, four turns: the last read is past the end.
+        let mut frame = summing(list_of(ints(&[1, 2, 3])), 0, 0);
+        let mut host = Recording {
+            again_returns: vec![Stop::Raised(6)],
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(host.again_calls, vec![6]);
+        assert_eq!(stop, Stop::Raised(6), "the interpreter's error");
+        assert!(matches!(frame[1], Value::Int(6)), "{}", frame[1].repr());
+        // A register that holds no list at all.
+        let mut frame = summing(Value::Str("abcd".into()), 0, 0);
+        host.again_calls.clear();
+        host.again_returns = vec![Stop::At(6)];
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(
+            (stop, host.again_calls.as_slice()),
+            (Stop::At(6), [6].as_slice())
+        );
+    }
+
+    #[test]
+    fn a_list_is_written_where_it_lies_when_nothing_has_to_be_freed() {
+        let filling = |xs: Value| {
+            vec![
+                xs,
+                Value::Int(0),
+                Value::Int(4),
+                Value::Int(1),
+                Value::Int(0),
+                Value::Null,
+            ]
+        };
+        for mode in [Mode::Promoted, Mode::Frame, Mode::Checked] {
+            let (code, rows) = load(&fill_list(), Rule::Loops, mode);
+            let mut frame = filling(list_of(vec![
+                Value::Null,
+                Value::Bool(true),
+                Value::Float(2.5),
+                Value::Int(-1),
+            ]));
+            let mut host = Recording::default();
+            let (stop, _) = enter(&code, &rows, 4, &mut frame, 1_000, &mut host);
+            assert_eq!(stop, Stop::At(9), "{mode:?}");
+            assert_eq!(elements(&frame[0]), ["0", "1", "2", "3"], "{mode:?}");
+            assert_eq!(host.list_calls, vec![0], "{mode:?}");
+            assert!(host.again_calls.is_empty());
+        }
+        // An element that is a string is not written over inline: the
+        // interpreter frees it. It stands past the write's two `nop`s
+        // after, and the loop goes on from there, asking for the list
+        // again.
+        let (code, rows) = load(&fill_list(), Rule::Loops, Mode::Promoted);
+        let mut frame = filling(list_of(vec![
+            Value::Int(9),
+            Value::Str("old".into()),
+            Value::Int(9),
+            Value::Int(9),
+        ]));
+        let mut host = Recording {
+            again_returns: vec![Stop::At(8)],
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 4, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(9));
+        assert_eq!(host.again_calls, vec![5]);
+        assert_eq!(elements(&frame[0]), ["0", "\"old\"", "2", "3"]);
+        assert_eq!(
+            host.list_calls,
+            vec![0, 0],
+            "asked again after the interpreter ran"
+        );
     }
 
     #[test]

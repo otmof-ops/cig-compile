@@ -61,6 +61,10 @@ const CORPUS: &[(&str, &str)] = &[
         include_str!("../corpus/typed/range-value-empty.cig"),
     ),
     (
+        "list-elements",
+        include_str!("../corpus/typed/list-elements.cig"),
+    ),
+    (
         "loop-break-continue",
         include_str!("../corpus/typed/loop-break-continue.cig"),
     ),

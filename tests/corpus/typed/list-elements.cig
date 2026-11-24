@@ -1,0 +1,160 @@
+# A list's elements read and written by an int, in loops: what a stage
+# `c` program does where the list lies. Each loop here is one a body
+# compiles, and each case is something its machine code hands to the
+# interpreter or must get exactly right: numbers of each kind, a write
+# over what was there, one list under two names, an element that is a
+# string, a list or a map, a string written over a number, a list that
+# grows inside the loop that reads it, a list of lists, a map and a
+# string in the list's place, and an index the list has no element at.
+
+# Numbers of each kind, read and summed.
+roll xs = [1, 2, 3, 4, 5]
+roll total = 0
+for i in 0..5 {
+  total += xs[i]
+}
+exhale total
+
+roll fs = [0.5, 1.5, 2, true, null]
+for i in 0..5 {
+  exhale i, fs[i]
+}
+
+# Written where it lies: ints over ints, then a bool, a float and null.
+roll ys = [0, 0, 0, 0]
+for i in 0..4 {
+  ys[i] = i * i
+}
+exhale ys
+for i in 0..4 {
+  if i % 2 == 0 {
+    ys[i] = true
+  } else {
+    ys[i] = 0.5 + i
+  }
+}
+ys[3] = null
+exhale ys
+
+# A swap in place: the same list read and written in one turn.
+roll p = [5, 4, 3, 2, 1]
+roll lo = 0
+roll hi = 4
+while lo < hi {
+  stick t = p[lo]
+  p[lo] = p[hi]
+  p[hi] = t
+  lo += 1
+  hi -= 1
+}
+exhale p
+
+# Two names, one list.
+roll a = [1, 2, 3]
+roll b = a
+for i in 0..3 {
+  b[i] = a[i] * 10
+}
+exhale a, b
+
+# Elements machine code may not copy: a string, a list, a map.
+roll mixed = [1, "two", [3], {four: 4}, 5]
+for i in 0..5 {
+  stick v = mixed[i]
+  exhale i, v
+}
+
+# A string written over a number, and numbers over that.
+roll zs = [1, 2, 3]
+for i in 0..3 {
+  if i == 1 {
+    zs[i] = "mid"
+  } else {
+    zs[i] = zs[i] + 1
+  }
+}
+exhale zs
+for i in 0..3 {
+  zs[i] = i
+}
+exhale zs
+
+# The list grows inside the loop that reads it.
+roll g = [1]
+roll n = 0
+while n < 6 {
+  g.push(g[n] * 2)
+  n += 1
+}
+exhale g, len(g)
+
+# A list of lists.
+roll grid = [[1, 2], [3, 4]]
+roll s = 0
+for i in 0..2 {
+  for j in 0..2 {
+    s += grid[i][j]
+    grid[i][j] = s
+  }
+}
+exhale s, grid
+
+# A map where a list would be, by a string and by an int.
+roll m = {a: 1, b: 2}
+for k in ["a", "b"] {
+  exhale m[k]
+}
+for i in 0..2 {
+  try {
+    exhale m[i]
+  } ashtray e {
+    exhale "map", i, e.kind, e.message
+  }
+}
+
+# A string where a list would be.
+stick word = "ash"
+for i in 0..3 {
+  try {
+    exhale word[i]
+  } ashtray e {
+    exhale "string", i, e.kind, e.message
+  }
+}
+
+# An index the list has no element at: past the end, and negative.
+for i in [2, 3, -4] {
+  try {
+    exhale xs[i + 2]
+  } ashtray e {
+    exhale "read", i, e.kind, e.message
+  }
+  try {
+    xs[i + 3] = 0
+    exhale "wrote", i
+  } ashtray e {
+    exhale "write", i, e.kind, e.message
+  }
+}
+exhale xs
+
+# Inside a function, on its parameters.
+pull dot(u, v, n) {
+  roll acc = 0.0
+  for i in 0..n {
+    acc += u[i] * v[i]
+  }
+  snuff acc
+}
+exhale dot([1.0, 2.0, 3.0], [4.0, 5.0, 6.0], 3)
+exhale dot([1, 2, 3], [4, 5, 6], 3)
+
+pull fill(out, n, v) {
+  for i in 0..n {
+    out[i] = v
+  }
+  snuff out
+}
+exhale fill([0, 0, 0], 3, 7)
+exhale fill([0, 0, 0], 3, "x")
+exhale fill(["a", "b", "c"], 3, 1)
