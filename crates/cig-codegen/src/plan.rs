@@ -53,8 +53,21 @@
 //! what the bytecode costs: the plan is never worse than that by its
 //! own figures.
 //!
-//! Code outside every loop runs once a call, and is left to the
-//! interpreter.
+//! Then the function's own code, outside every loop, in the same way:
+//! a line of items from the call to the return, with the loops as
+//! items, entered from the interpreter and left to it. A function is
+//! called any number of times, so its straight code is weighed as a
+//! loop's is; the top level runs once, and only its loops are.
+//!
+//! ## Calls
+//!
+//! A `call` is the VM's instruction: it makes the frame. It is either
+//! left to the VM's own loop (the body returns at it, and is entered
+//! again after it), or **carried**: it is part of a stretch, and the
+//! runtime's `run` makes the call and runs the callee to its return
+//! under the body, entering the callee's own body where it has one.
+//! Carrying costs the stretch and a little more; leaving costs the
+//! body's way out and its way in again.
 //!
 //! With [`Rule::Every`] nothing is weighed: every instruction that has
 //! an inline form is native, the rest are stretches, and every resume
@@ -94,7 +107,8 @@ pub(crate) enum Class {
     Index(u8),
     /// No inline form: the interpreter's.
     Interp,
-    /// `call`: the VM's own instruction makes the frame.
+    /// `call`: the VM's own instruction makes the frame, in the VM's
+    /// loop with the body left, or under the body in a stretch.
     Call,
     /// `ret` and `tailcall`: the frame ends.
     Exit,
@@ -130,6 +144,19 @@ pub(crate) struct Costs {
     /// the value, which is more than its plain instructions do.
     pub index_native: u32,
     pub index_interp: u32,
+    /// The VM enters a body at its function's first instruction, on
+    /// the frame a call has just made: nothing is held in a machine
+    /// register there, so nothing is read back from the frame.
+    pub begin: u32,
+    /// A call carried through in a stretch, beyond the stretch itself:
+    /// the runtime's loop is started once more under the body.
+    pub carry: u32,
+    /// How much of a failed guess's call is counted, in a hundred. A
+    /// guess that fails at the rate beside it costs that share of a
+    /// stretch each time; one that keeps failing is given up by the
+    /// runtime and costs nothing more, so over a run a guess costs less
+    /// than its rate says.
+    pub guess: u32,
     /// How many turns a loop is taken to make each time it is reached:
     /// what entering and leaving it are spread over.
     pub turns: u32,
@@ -145,8 +172,23 @@ pub(crate) const COSTS: Costs = Costs {
     view: 100,
     index_native: 10,
     index_interp: 40,
+    begin: 70,
+    carry: 40,
+    guess: 40,
     turns: 8,
 };
+
+/// What a plan is asked for beyond its rule.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Asked {
+    /// The function's own code outside its loops is weighed too: for
+    /// every function but the top level, which runs once.
+    pub straight: bool,
+    /// With [`Rule::Every`]: a call is carried in a stretch. Otherwise
+    /// every call is left to the VM's own loop, so that both ways of
+    /// making a call run in the tests' builds.
+    pub carry: bool,
+}
 
 /// A function's plan.
 #[derive(Debug, Clone)]
@@ -187,11 +229,12 @@ pub(crate) fn plan(
     code: &[Option<DecodedInstr>],
     class: &BTreeMap<u32, Class>,
     end: u32,
+    asked: Asked,
 ) -> Plan {
     let how = match rule {
         Rule::None => flow.pcs.iter().map(|pc| (*pc, How::Leave)).collect(),
-        Rule::Every => every(flow, class),
-        Rule::Loops => loops(flow, code, class),
+        Rule::Every => every(flow, class, asked.carry),
+        Rule::Loops => loops(flow, code, class, asked.straight),
     };
     let mut how = how;
     let mut leaders: BTreeSet<u32> = flow.leaders.iter().copied().collect();
@@ -252,14 +295,16 @@ pub(crate) fn past_nops(code: &[Option<DecodedInstr>], d: &DecodedInstr) -> Opti
     Some(pc)
 }
 
-/// [`Rule::Every`]: whatever has an inline form is native.
-fn every(flow: &Flow, class: &BTreeMap<u32, Class>) -> BTreeMap<u32, How> {
+/// [`Rule::Every`]: whatever has an inline form is native, and a call
+/// is carried in a stretch when `carry` says so.
+fn every(flow: &Flow, class: &BTreeMap<u32, Class>, carry: bool) -> BTreeMap<u32, How> {
     flow.pcs
         .iter()
         .map(|pc| {
             let how = match class.get(pc).copied().unwrap_or(Class::Interp) {
                 Class::Sure | Class::Guess(_) | Class::Index(_) => How::Native,
                 Class::Interp => How::Stretch,
+                Class::Call if carry => How::Stretch,
                 Class::Call | Class::Exit => How::Leave,
             };
             (*pc, how)
@@ -350,16 +395,23 @@ fn loops_of(code: &[Option<DecodedInstr>]) -> Vec<Loop> {
     nest(&flat, &mut at, u32::MAX)
 }
 
-/// [`Rule::Loops`]: each loop's cheapest answers, innermost first; the
-/// rest is the interpreter's.
+/// [`Rule::Loops`]: each loop's cheapest answers, innermost first; then,
+/// with `straight`, the function's own code around its loops. The rest
+/// is the interpreter's.
 fn loops(
     flow: &Flow,
     code: &[Option<DecodedInstr>],
     class: &BTreeMap<u32, Class>,
+    straight: bool,
 ) -> BTreeMap<u32, How> {
     let mut how: BTreeMap<u32, How> = flow.pcs.iter().map(|pc| (*pc, How::Leave)).collect();
-    for l in loops_of(code) {
-        settle(&l, flow, class, &mut how);
+    let outer = loops_of(code);
+    let kinds: Vec<Inner> = outer
+        .iter()
+        .map(|l| settle(l, flow, class, &mut how))
+        .collect();
+    if straight {
+        settle_line(&outer, &kinds, flow, class, &mut how);
     }
     how
 }
@@ -372,11 +424,11 @@ enum Inner {
     /// runtime for nothing and a list in view before it is in view
     /// after it.
     Native { whole: bool },
-    /// The interpreter's whole, with no call in it: a stretch of the
-    /// outer loop's machine code can hold it.
+    /// The interpreter's whole: a stretch of the outer loop's machine
+    /// code can hold it, its calls carried.
     Quiet,
-    /// The interpreter's, and it leaves the body (a call), or it is
-    /// native in part: the outer loop is out of its body around it.
+    /// Native in part, and not from its start: its body is entered
+    /// inside it, so the outer loop is out of its body around it.
     Out,
 }
 
@@ -412,7 +464,7 @@ fn takes_view(item: &Item) -> bool {
 
 /// What an item costs in a state: [`NEVER`] when it cannot be in it.
 fn item_cost(item: &Item, state: usize, c: &Costs) -> u32 {
-    let miss = |p: u8| c.stretch * (100 - u32::from(p.min(100))) / 100;
+    let miss = |p: u8| c.stretch * (100 - u32::from(p.min(100))) * c.guess / 10_000;
     match (item, state) {
         (Item::Own(_, Class::Sure), NATIVE | VIEWED) => c.native,
         (Item::Own(_, Class::Guess(p)), NATIVE | VIEWED) => c.native + miss(*p),
@@ -422,8 +474,13 @@ fn item_cost(item: &Item, state: usize, c: &Costs) -> u32 {
         (Item::Own(_, Class::Sure | Class::Guess(_)), _) => c.interp,
         (Item::Own(_, Class::Interp), NATIVE | VIEWED) => NEVER,
         (Item::Own(_, Class::Interp), _) => 0,
-        (Item::Own(_, Class::Call | Class::Exit), LEAVE) => 0,
-        (Item::Own(_, Class::Call | Class::Exit), _) => NEVER,
+        // The VM's own loop makes it for nothing more; under the body
+        // the runtime's loop is started once more.
+        (Item::Own(_, Class::Call), LEAVE) => 0,
+        (Item::Own(_, Class::Call), STRETCH) => c.carry,
+        (Item::Own(_, Class::Call), _) => NEVER,
+        (Item::Own(_, Class::Exit), LEAVE) => 0,
+        (Item::Own(_, Class::Exit), _) => NEVER,
         (Item::Loop(_, _, Inner::Native { .. }), NATIVE) => 0,
         (Item::Loop(_, _, Inner::Native { whole: true }), VIEWED) => 0,
         (Item::Loop(_, _, Inner::Native { .. }), _) => NEVER,
@@ -437,16 +494,22 @@ fn item_cost(item: &Item, state: usize, c: &Costs) -> u32 {
 /// What going from an item in state `from` to the item `next` in state
 /// `to` costs. A list comes into view only at an inline index form,
 /// for one call of the runtime.
-fn step_cost(from: usize, to: usize, next: &Item, c: &Costs) -> u32 {
+fn step_cost(from: usize, to: usize, next: &Item, c: &Costs, begins: bool) -> u32 {
     let view = match takes_view(next) {
         true => c.view,
         false => NEVER,
     };
+    // Into the body: at a function's first instruction, or anywhere
+    // else.
+    let enter = match begins {
+        true => c.begin,
+        false => c.enter,
+    };
     match (from, to) {
         (NATIVE | VIEWED, STRETCH) => c.stretch,
         (NATIVE | VIEWED, LEAVE) => c.out,
-        (LEAVE, NATIVE) => c.enter,
-        (LEAVE, VIEWED) => c.enter.saturating_add(view),
+        (LEAVE, NATIVE) => enter,
+        (LEAVE, VIEWED) => enter.saturating_add(view),
         // Out of the body, a stretch is no different from the rest.
         (LEAVE, STRETCH) => NEVER,
         (NATIVE | STRETCH, VIEWED) => view,
@@ -482,7 +545,10 @@ fn cheapest(items: &[Item], c: &Costs) -> (Vec<usize>, u32) {
         // For each item after the first: where its `[state][native]`
         // came from.
         let mut came: Vec<[[(usize, usize); 2]; 4]> = Vec::with_capacity(items.len());
-        for item in &items[1..] {
+        // A line starts with its end item: the step out of it is the
+        // step into the function.
+        let line = matches!(first, Item::Own(ENDS, _));
+        for (at, item) in items[1..].iter().enumerate() {
             let mut next = [[NEVER; 2]; 4];
             let mut from = [[(LEAVE, 0); 2]; 4];
             for to in STATES {
@@ -491,7 +557,7 @@ fn cheapest(items: &[Item], c: &Costs) -> (Vec<usize>, u32) {
                     continue;
                 }
                 for prev in STATES {
-                    let step = step_cost(prev, to, item, c);
+                    let step = step_cost(prev, to, item, c, line && at == 0);
                     if step >= NEVER {
                         continue;
                     }
@@ -517,7 +583,7 @@ fn cheapest(items: &[Item], c: &Costs) -> (Vec<usize>, u32) {
                 if cost[last][flag] >= NEVER {
                     continue;
                 }
-                let back = step_cost(last, start, first, c);
+                let back = step_cost(last, start, first, c, false);
                 if back >= NEVER {
                     continue;
                 }
@@ -577,13 +643,26 @@ fn settle(
         }
     }
     let (states, _) = cheapest(&items, &COSTS);
+    let (any_native, whole) = answer(&items, &states, how);
+    if how.get(&l.start) == Some(&How::Native) {
+        Inner::Native { whole }
+    } else if any_native {
+        Inner::Out
+    } else {
+        Inner::Quiet
+    }
+}
+
+/// Write a ring's or a line's answers to `how`. Returns whether
+/// anything of it is native (an instruction of its own, or a loop
+/// inside it that is native at all), and whether all of it is.
+fn answer(items: &[Item], states: &[usize], how: &mut BTreeMap<u32, How>) -> (bool, bool) {
     let mut any_native = false;
-    let mut leaves = false;
     // Native whole: every instruction of its own, and every loop in it.
     let mut whole = !items.is_empty();
-    for (item, state) in items.iter().zip(&states) {
+    for (item, state) in items.iter().zip(states) {
         match item {
-            Item::Own(pc, c) => {
+            Item::Own(pc, _) => {
                 let answer = match *state {
                     NATIVE | VIEWED => How::Native,
                     STRETCH => How::Stretch,
@@ -591,8 +670,9 @@ fn settle(
                 };
                 any_native |= answer == How::Native;
                 whole &= answer == How::Native;
-                leaves |= *c == Class::Call;
-                how.insert(*pc, answer);
+                if let Some(h) = how.get_mut(pc) {
+                    *h = answer;
+                }
             }
             Item::Loop(start, end, kind) => {
                 match kind {
@@ -601,13 +681,13 @@ fn settle(
                         whole &= *all;
                     }
                     Inner::Out => {
-                        leaves = true;
+                        any_native = true;
                         whole = false;
                     }
                     Inner::Quiet => whole = false,
                 }
-                // A quiet loop held by a stretch of this one is part of
-                // that stretch, whole.
+                // A quiet loop held by a stretch is part of that
+                // stretch, whole.
                 if *kind == Inner::Quiet && *state == STRETCH {
                     for (_, h) in how.range_mut(*start..*end) {
                         *h = How::Stretch;
@@ -616,14 +696,57 @@ fn settle(
             }
         }
     }
-    if how.get(&l.start) == Some(&How::Native) {
-        Inner::Native { whole }
-    } else if any_native || leaves {
-        Inner::Out
-    } else {
-        Inner::Quiet
-    }
+    (any_native, whole)
 }
+
+/// A pc no instruction has: the line's two ends, where the interpreter
+/// has the frame.
+const ENDS: u32 = u32::MAX;
+
+/// Settle a function's own code outside its loops (`outer`, settled
+/// already, each with what it is to the code around it): a line from
+/// the call to the return. It is the search a loop's ring gets, with
+/// one item more that only the interpreter can have: so the line
+/// starts and ends out of the body, entering costs once where the
+/// first native item is and leaving once after the last, and nothing
+/// is spread over turns.
+fn settle_line(
+    outer: &[Loop],
+    kinds: &[Inner],
+    flow: &Flow,
+    class: &BTreeMap<u32, Class>,
+    how: &mut BTreeMap<u32, How>,
+) {
+    let mut items = vec![Item::Own(ENDS, Class::Exit)];
+    let mut loops = outer.iter().zip(kinds).peekable();
+    let mut skip_to = 0;
+    for pc in flow.pcs.iter().copied() {
+        if pc < skip_to {
+            continue;
+        }
+        if let Some((l, kind)) = loops.peek().filter(|(l, _)| l.start == pc) {
+            items.push(Item::Loop(l.start, l.end, **kind));
+            skip_to = l.end;
+            loops.next();
+            continue;
+        }
+        match class.get(&pc).copied().unwrap_or(Class::Interp) {
+            // A return ends the line wherever it stands: it weighs
+            // nothing and holds its neighbors to nothing.
+            Class::Exit => {}
+            c => items.push(Item::Own(pc, c)),
+        }
+    }
+    let (states, _) = cheapest(&items, &LINE);
+    answer(&items, &states, how);
+}
+
+/// What a line weighs: a ring's figures, with nothing spread over
+/// turns (entering and leaving are in the line itself).
+const LINE: Costs = Costs {
+    turns: u32::MAX,
+    ..COSTS
+};
 
 #[cfg(test)]
 mod tests {
@@ -683,17 +806,101 @@ mod tests {
     }
 
     #[test]
-    fn a_call_among_little_work_is_not_worth_leaving_and_entering_for() {
+    fn a_call_among_little_work_is_left_to_the_interpreter_with_its_loop() {
         let mut classes = vec![Class::Sure; 6];
         classes.push(Class::Call);
         let (states, _) = cheapest(&own(&classes), &COSTS);
         assert_eq!(states, vec![LEAVE; 7]);
-        // With enough work around it, it is.
+    }
+
+    #[test]
+    fn a_call_among_much_work_is_carried_under_the_body() {
         let mut classes = vec![Class::Sure; 30];
         classes.push(Class::Call);
-        let (states, _) = cheapest(&own(&classes), &COSTS);
+        let (states, cost) = cheapest(&own(&classes), &COSTS);
         assert_eq!(&states[..30], &[NATIVE; 30]);
-        assert_eq!(states[30], LEAVE);
+        assert_eq!(states[30], STRETCH, "carried, not left");
+        assert_eq!(
+            cost,
+            30 * COSTS.native
+                + COSTS.stretch
+                + COSTS.carry
+                + (COSTS.enter + COSTS.out) / COSTS.turns
+        );
+        // What loads the callee is the interpreter's too (a variable
+        // of another function): the two are one stretch.
+        let mut classes = vec![Class::Sure; 30];
+        classes.extend([Class::Interp, Class::Call]);
+        let (states, with_load) = cheapest(&own(&classes), &COSTS);
+        assert_eq!(&states[30..], &[STRETCH; 2]);
+        assert_eq!(with_load, cost);
+    }
+
+    /// The states of a function's own line of `classes`, call to
+    /// return.
+    fn line(classes: &[Class]) -> Vec<usize> {
+        let mut items = vec![Item::Own(ENDS, Class::Exit)];
+        items.extend(own(classes));
+        let (states, _) = cheapest(&items, &LINE);
+        assert_eq!(
+            states[0], LEAVE,
+            "the interpreter has the frame at the call"
+        );
+        states[1..].to_vec()
+    }
+
+    #[test]
+    fn a_functions_straight_code_is_native_when_there_is_enough_of_it() {
+        // Entering and leaving are paid once a call: the least number
+        // of proven instructions that pays for them.
+        let pays = (1..)
+            .find(|n| n * COSTS.native + COSTS.begin + COSTS.out < n * COSTS.interp)
+            .unwrap();
+        assert_eq!(
+            line(&vec![Class::Sure; pays as usize]),
+            vec![NATIVE; pays as usize]
+        );
+        let short = (pays - 1) as usize;
+        assert_eq!(line(&vec![Class::Sure; short]), vec![LEAVE; short]);
+    }
+
+    #[test]
+    fn a_function_is_entered_at_its_first_native_instruction() {
+        // It starts with what the interpreter runs anyway (it loads a
+        // variable of another function): the VM's loop runs that, and
+        // the body is entered after it.
+        let mut classes = vec![Class::Interp];
+        classes.extend([Class::Sure; 40]);
+        let states = line(&classes);
+        assert_eq!(states[0], LEAVE);
+        assert_eq!(&states[1..], &[NATIVE; 40]);
+    }
+
+    #[test]
+    fn a_call_in_a_functions_straight_code_is_carried() {
+        let mut classes = vec![Class::Sure; 40];
+        classes.insert(20, Class::Call);
+        let states = line(&classes);
+        assert_eq!(states[20], STRETCH);
+        assert!(states
+            .iter()
+            .enumerate()
+            .all(|(i, s)| i == 20 || *s == NATIVE));
+    }
+
+    #[test]
+    fn a_loop_of_calls_alone_is_quiet_and_an_outer_stretch_holds_it() {
+        // Nothing of it is native, so nothing is entered inside it.
+        let items = own(&[Class::Interp, Class::Call, Class::Sure]);
+        let (states, _) = cheapest(&items, &COSTS);
+        assert_eq!(states, vec![LEAVE; 3]);
+        // Around it, a loop with enough work of its own stays in its
+        // body and runs the inner loop as one stretch.
+        let mut outer = own(&[Class::Sure; 30]);
+        outer.push(Item::Loop(30, 40, Inner::Quiet));
+        let (states, _) = cheapest(&outer, &COSTS);
+        assert_eq!(&states[..30], &[NATIVE; 30]);
+        assert_eq!(states[30], STRETCH);
     }
 
     #[test]
@@ -727,7 +934,7 @@ mod tests {
         let items = own(&[Class::Sure, Class::Index(90), Class::Sure, Class::Sure]);
         let (states, cost) = cheapest(&items, &COSTS);
         assert_eq!(states, vec![VIEWED; 4]);
-        let miss = COSTS.stretch * 10 / 100;
+        let miss = COSTS.stretch * 10 * COSTS.guess / 10_000;
         assert_eq!(
             cost,
             3 * COSTS.native + COSTS.index_native + miss + (COSTS.enter + COSTS.out) / COSTS.turns

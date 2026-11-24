@@ -62,11 +62,15 @@ pub struct Counted {
     pub typed: usize,
     /// The native code's length in bytes.
     pub bytes: usize,
-    /// How many functions, the top level among them, have a loop and
-    /// no body: the compiler weighed their loops and left them to the
-    /// bytecode, which runs them faster than machine code that has to
-    /// call the interpreter at every other instruction.
+    /// How many functions, the top level among them, the compiler
+    /// weighed and gave no body: the bytecode runs them faster than
+    /// machine code that has to call the interpreter at every other
+    /// instruction. A function's loops and its straight code are
+    /// weighed; of the top level, which runs once, only its loops.
     pub weighed: usize,
+    /// The top level is one of them: it has a loop, and none of its
+    /// loops would run faster as native code.
+    pub top_weighed: bool,
 }
 
 /// Which functions a build gives a body, and how a body keeps its
@@ -304,6 +308,7 @@ pub fn native_of(
     // The functions with a body, by their index in the module.
     let with_body: BTreeSet<u32> = bodied.bodies.iter().map(|b| b.func).collect();
     let weighed = bodied.report.iter().filter(|o| o.weighed).count();
+    let top_weighed = bodied.report.first().is_some_and(|o| o.weighed);
     bodied
         .join(&mut made.section)
         .map_err(|e| bug(e.to_string()))?;
@@ -346,6 +351,7 @@ pub fn native_of(
         typed: typed.len(),
         bytes: made.section.code.len(),
         weighed,
+        top_weighed,
     };
     let section = match made.section.entries.is_empty() && made.section.bodies.is_empty() {
         true => Vec::new(),
@@ -468,21 +474,27 @@ pub fn stage_of(
             Ok(arch) => match native_of(source, &file, opts.opt, arch, Bodies::from_env()) {
                 Err(n) => Err(refused(&n, Stage::C)),
                 Ok((code, native)) if native.section.is_empty() => {
-                    // No loop got a body (there is none, or none would
-                    // run faster as native code), and no function got
-                    // an entry.
+                    // No loop of the top level got native code (there
+                    // is none, or none would run faster), and no
+                    // function got any: neither an entry for its
+                    // argument types nor a body.
                     let c = &native.counted;
-                    let loops = match c.weighed {
-                        0 => "it has no loop",
-                        _ => "none of its loops would run faster as native code",
+                    let loops = match c.top_weighed {
+                        false => "it has no loop",
+                        true => "none of its loops would run faster as native code",
                     };
                     let why = match (c.left, c.why.first()) {
-                        (0, _) if c.weighed == 0 => "it has no loop and no function, so native code has nothing to add".to_string(),
+                        (0, _) if !c.top_weighed => {
+                            "it has no loop and no function, so native code has nothing to add"
+                                .to_string()
+                        }
                         (0, _) => format!("{loops}, and it has no function"),
                         (_, Some(first)) => {
-                            format!("{loops}, and none of its functions compiles on its own ({first})")
+                            format!("{loops}, and none of its functions has native code of its own ({first})")
                         }
-                        (_, None) => format!("{loops}, and none of its functions compiles on its own (such a function is entered from a call by name, and no call by name reaches one)"),
+                        (_, None) => {
+                            format!("{loops}, and none of its functions has native code of its own")
+                        }
                     };
                     Ok(b(code, Some(stage_b(why))))
                 }

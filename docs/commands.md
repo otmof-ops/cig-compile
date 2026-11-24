@@ -584,7 +584,7 @@ Otherwise it makes the stage `b` program, which is the same program
 without native code, and says why in a note:
 
 ```
-note: tool.cig is a stage b program: none of its loops would run faster as native code, and none of its functions compiles on its own (`total`: line 4: a list or a map)
+note: tool.cig is a stage b program: none of its loops would run faster as native code, and none of its functions has native code of its own (`total`: line 4: a list or a map)
 ```
 
 **What gets native code today.**
@@ -597,16 +597,21 @@ note: tool.cig is a stage b program: none of its loops would run faster as nativ
   function's own registers, so it may sit beside anything: what it has
   no machine code for (a string, a list, a map, a builtin, a `try`, a
   `burn`) the interpreter runs.
+- **A function's own code, loops or not**, when there is enough
+  arithmetic in it to pay for entering it: a helper a hot loop calls.
+  A call inside native code no longer ends it: the runtime makes the
+  call and comes back.
 - **A function on numbers and bools alone**, with `if`, `while`,
   `for i in a..b` and calls to other such functions, compiled whole for
   the argument types it is called with.
 
 **What stays bytecode, and why.** Native code is a few nanoseconds an
 instruction faster than the interpreter, and going from one to the
-other costs several times that. A loop that reads a list, calls a
-function and adds two numbers each turn would cross over at every
+other costs several times that. A loop that reads a map, builds a
+string and adds two numbers each turn would cross over at every
 other instruction and run slower than its bytecode, so the compiler
-weighs each loop and compiles only the ones that come out ahead. A
+weighs each loop, and each function's code around its loops, and
+compiles only what comes out ahead. A
 program built at stage `c` is never slower than the same program at
 stage `b` by the compiler's own figures, and the runtime bounds what
 it can be wrong by: native code whose tests of its operands keep
@@ -616,7 +621,7 @@ failing is no longer entered, and the bytecode has the loop back.
 (`"native": {"compiled": 3, "left": 2, "why": [...], "top": true,
 "bodies": 2, "typed": 2, "weighed": 1, "bytes": 5120}`: whether the top
 level has a body, how many functions have a body and how many an entry,
-how many had their loops weighed and left to the bytecode, and the
+how many the compiler weighed and left to the bytecode, and the
 native code's length) and carries the note, which it does not print, in
 `"warnings"`.
 

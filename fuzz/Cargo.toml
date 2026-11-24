@@ -14,7 +14,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 cigcompile = { path = ".." }
-cigscript = { git = "https://github.com/otmof-ops/cig-script", rev = "5ce75d0f61d77e4017e4743f32aa978c6ef0a282" }
+cigscript = { git = "https://github.com/otmof-ops/cig-script", rev = "5bb62834402be3a5374ceeddee7aeab8b77eb856" }
 
 # Its own workspace: the compiler's build never builds it.
 [workspace]

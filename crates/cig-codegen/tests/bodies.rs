@@ -6,8 +6,8 @@
 //! bytes for either machine, and, on a machine with a loader, what a
 //! body does to a real frame: a loop that runs to its end in machine
 //! code, the step budget, an operand an inline form does not cover, a
-//! stretch the interpreter runs, and a register that is not of its
-//! proven type.
+//! stretch the interpreter runs, a call carried in one, an int divided
+//! by an int, and a register that is not of its proven type.
 //!
 //! What a whole program does with its bodies is the differential
 //! suite's (`tests/differential.rs`, `DIFF_BODIES`): every script, held
@@ -168,6 +168,99 @@ fn fill_list() -> Module {
     ))
 }
 
+/// A loop of twenty proven adds, a list made and called:
+///
+/// ```text
+/// 0 loadint R0, 0      total
+/// 1..3                 the window: 0, 3, 1
+/// 4 forprep R1 -> 29
+/// 5 steps 1, 1         <- the loop
+/// 6..25 add R0, R0, R4
+/// 26 newlist R5        the interpreter's,
+/// 27 call R5           and the VM's
+/// 28 forloop R1 -> 5
+/// 29 ret R0
+/// ```
+fn work_and_call() -> Module {
+    let mut code = vec![
+        Instr::asbx(Op::LOADINT, 0, 0),
+        Instr::asbx(Op::LOADINT, 1, 0),
+        Instr::asbx(Op::LOADINT, 2, 3),
+        Instr::asbx(Op::LOADINT, 3, 1),
+        Instr::asbx(Op::FORPREP, 1, 24),
+        steps(1, 1),
+    ];
+    code.extend(std::iter::repeat_n(Instr::abc(Op::ADD, 0, 0, 4), 20));
+    code.extend([
+        Instr::abc(Op::NEWLIST, 5, 0, 0),
+        Instr::abc(Op::CALL, 5, 0, 0),
+        Instr::asbx(Op::FORLOOP, 1, -24),
+        Instr::abc(Op::RET, 0, 0, 0),
+    ]);
+    module(function(7, 0, code))
+}
+
+/// A module whose top level only makes one function, `child`.
+fn with_child(child: Function) -> Module {
+    let mut main = function(
+        1,
+        0,
+        vec![Instr::abx(Op::CLOSURE, 0, 0), Instr::abc(Op::RET, 0, 0, 0)],
+    );
+    main.children.push(Function {
+        kind: FuncKind::Pull,
+        name: "f".to_string(),
+        ..child
+    });
+    module(main)
+}
+
+#[test]
+fn a_functions_straight_code_gets_a_body_when_there_is_enough_of_it() {
+    // `fn(a) { r = 1; r = r + r, forty times; return r }`: ints the
+    // type pass proves from the second instruction on.
+    let mut code = vec![Instr::asbx(Op::LOADINT, 1, 1)];
+    code.extend(std::iter::repeat_n(Instr::abc(Op::ADD, 1, 1, 1), 40));
+    code.push(Instr::abc(Op::RET, 1, 0, 0));
+    let m = with_child(function(2, 1, code));
+    let out = bodies(&m, Rule::Loops, Arch::X86_64).expect("bodies");
+    assert_eq!(out.bodies.len(), 1);
+    assert_eq!(out.bodies[0].func, 1);
+    assert_eq!(
+        out.bodies[0].resumes,
+        vec![0],
+        "entered at the function's first instruction"
+    );
+    assert_eq!(out.report[1].inline, (41, 42), "all but the return");
+    // The top level runs once: its straight code is the bytecode's.
+    assert_eq!(out.report[0].why, "it has no loop");
+    // Two instructions do not pay for entering and leaving.
+    let short = function(
+        3,
+        2,
+        vec![Instr::abc(Op::ADD, 2, 0, 1), Instr::abc(Op::RET, 2, 0, 0)],
+    );
+    let out = bodies(&with_child(short), Rule::Loops, Arch::X86_64).expect("bodies");
+    assert!(out.bodies.is_empty());
+    assert!(out.report[1].weighed);
+    assert_eq!(out.report[1].why, "it would not run faster as machine code");
+}
+
+#[test]
+fn a_call_among_enough_native_work_is_carried_in_a_stretch() {
+    let out = bodies(&work_and_call(), Rule::Loops, Arch::X86_64).expect("bodies");
+    assert_eq!(out.bodies.len(), 1);
+    // The loop's start, and the instruction after the stretch that
+    // holds the call: where the bytecode comes back to machine code
+    // when the runtime could not carry the call.
+    assert_eq!(out.bodies[0].resumes, vec![5, 28]);
+    assert_eq!(
+        out.report[0].inline,
+        (22, 30),
+        "the step mark, the adds and the `forloop`"
+    );
+}
+
 #[test]
 fn a_loop_that_reads_a_list_by_an_int_gets_a_body() {
     let out = bodies(&sum_list(), Rule::Loops, Arch::X86_64).expect("bodies");
@@ -191,7 +284,8 @@ fn the_rule_none_gives_no_function_a_body() {
 }
 
 #[test]
-fn a_function_without_a_loop_has_no_body() {
+fn a_top_level_without_a_loop_has_no_body() {
+    // It runs once: nothing of it is weighed.
     let out = bodies(&add_args(), Rule::Loops, Arch::X86_64).expect("bodies");
     assert!(out.bodies.is_empty());
     assert_eq!(out.report[0].why, "it has no loop");
@@ -608,6 +702,154 @@ mod runs {
         let (stop, _) = enter(&code, &rows, 0, &mut frame, 100, &mut host);
         assert_eq!(stop, Stop::Raised(1));
         assert!(matches!(frame[2], Value::Null));
+    }
+
+    /// `fn(a, b) { return a / b }`.
+    fn div_args() -> Module {
+        module(function(
+            3,
+            2,
+            vec![Instr::abc(Op::DIV, 2, 0, 1), Instr::abc(Op::RET, 2, 0, 0)],
+        ))
+    }
+
+    /// The frame of `work_and_call` at the loop's start, turn `i` with
+    /// `total` so far.
+    fn working(total: i64, i: i64) -> Vec<Value> {
+        let mut frame = ints(&[total, i, 3, 1, i]);
+        frame.extend([Value::Null, Value::Null]);
+        frame
+    }
+
+    #[test]
+    fn a_call_in_a_native_loop_is_one_run_of_the_interpreter_a_turn() {
+        let (code, rows) = load(&work_and_call(), Rule::Loops, Mode::Promoted);
+        let mut frame = working(0, 0);
+        let mut host = Recording {
+            // The runtime made the list, carried the call to its return
+            // and stands after it, three turns running.
+            run_returns: vec![Stop::At(28); 3],
+            ..Recording::default()
+        };
+        let (stop, ctx) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(
+            host.run_calls,
+            vec![(26, 28); 3],
+            "the list and the call, in one run a turn"
+        );
+        assert!(host.again_calls.is_empty());
+        assert_eq!(stop, Stop::At(29), "the return is the bytecode's");
+        assert_eq!(ctx.steps_left, 997);
+        // Twenty adds of 0, of 1 and of 2.
+        assert!(matches!(frame[0], Value::Int(60)), "{}", frame[0].repr());
+        // The runtime could not carry the call and stands at it: the
+        // body returns that stop, with the frame whole (the turn's
+        // adds are in it), and the VM's own loop makes the call.
+        let mut frame = working(5, 2);
+        host.run_calls.clear();
+        host.run_returns = vec![Stop::At(27)];
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(27));
+        assert_eq!(host.run_calls, vec![(26, 28)]);
+        assert!(matches!(frame[0], Value::Int(45)), "{}", frame[0].repr());
+        // An error the callee raised and nobody under the body caught
+        // is returned as it is.
+        let mut frame = working(0, 0);
+        host.run_returns = vec![Stop::Raised(27)];
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::Raised(27));
+    }
+
+    #[test]
+    fn the_checked_build_leaves_every_call_to_the_vm() {
+        // So the tests' two builds of a script make its calls both
+        // ways: carried under the body, and by the VM's own loop.
+        let (code, rows) = load(&work_and_call(), Rule::Every, Mode::Checked);
+        assert!(rows[0].resumes.contains(&28), "{:?}", rows[0].resumes);
+        let mut frame = working(0, 1);
+        let mut host = Recording {
+            // The interpreter made the list and stands at the call.
+            run_returns: vec![Stop::At(27)],
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(host.run_calls, vec![(26, 27)], "the list alone");
+        assert_eq!(stop, Stop::At(27), "the body is left at the call");
+        // The same function with its registers held carries the call.
+        let (code, rows) = load(&work_and_call(), Rule::Every, Mode::Promoted);
+        let mut frame = working(0, 1);
+        let mut host = Recording {
+            run_returns: vec![Stop::At(27)],
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(host.run_calls, vec![(26, 28)], "the list and the call");
+        assert_eq!(stop, Stop::At(27));
+    }
+
+    #[test]
+    fn an_int_divided_by_an_int_is_an_int_when_it_divides_and_a_float_when_not() {
+        for mode in [Mode::Promoted, Mode::Frame, Mode::Checked] {
+            let (code, rows) = load(&div_args(), Rule::Every, mode);
+            let mut host = Recording::default();
+            let pairs = [
+                (6, 3),
+                (7, 2),
+                (-7, 2),
+                (0, 5),
+                (6, -3),
+                (1, 3),
+                (i64::MIN, 2),
+                (i64::MIN, 3),
+                (i64::MAX, -1),
+                (i64::MAX, i64::MAX),
+                (-1, i64::MIN),
+            ];
+            for (a, b) in pairs {
+                let mut frame = vec![Value::Int(a), Value::Int(b), Value::Null];
+                let (stop, _) = enter(&code, &rows, 0, &mut frame, 100, &mut host);
+                assert_eq!(stop, Stop::At(1), "{mode:?}: {a} / {b}");
+                // The interpreter's rule: what divides exactly is an
+                // int, anything else the two as floats.
+                match a % b == 0 {
+                    true => assert!(
+                        matches!(frame[2], Value::Int(q) if q == a / b),
+                        "{mode:?}: {a} / {b} = {}",
+                        frame[2].repr()
+                    ),
+                    false => assert!(
+                        matches!(frame[2], Value::Float(q) if q.to_bits() == (a as f64 / b as f64).to_bits()),
+                        "{mode:?}: {a} / {b} = {}",
+                        frame[2].repr()
+                    ),
+                }
+            }
+            assert!(host.again_calls.is_empty(), "{mode:?}");
+            // By zero, and the least int by -1 (the one quotient that
+            // does not fit): the interpreter's errors, with nothing
+            // written.
+            for (a, b) in [(1, 0), (0, 0), (i64::MIN, -1)] {
+                let mut frame = vec![Value::Int(a), Value::Int(b), Value::Null];
+                host.again_calls.clear();
+                host.again_returns = vec![Stop::Raised(0)];
+                let (stop, _) = enter(&code, &rows, 0, &mut frame, 100, &mut host);
+                assert_eq!(stop, Stop::Raised(0), "{mode:?}: {a} / {b}");
+                assert_eq!(host.again_calls, vec![0], "{mode:?}: {a} / {b}");
+                assert!(matches!(frame[2], Value::Null), "{mode:?}: {a} / {b}");
+            }
+            // An int by a float and a float by an int are floats, and
+            // a float by zero is the interpreter's.
+            let mut frame = vec![Value::Int(7), Value::Float(2.0), Value::Null];
+            let (stop, _) = enter(&code, &rows, 0, &mut frame, 100, &mut host);
+            assert_eq!(stop, Stop::At(1));
+            assert!(matches!(frame[2], Value::Float(q) if q == 3.5));
+            let mut frame = vec![Value::Float(7.0), Value::Int(0), Value::Null];
+            host.again_calls.clear();
+            host.again_returns = vec![Stop::Raised(0)];
+            let (stop, _) = enter(&code, &rows, 0, &mut frame, 100, &mut host);
+            assert_eq!(stop, Stop::Raised(0));
+            assert_eq!(host.again_calls, vec![0]);
+        }
     }
 
     fn list_of(values: Vec<Value>) -> Value {
