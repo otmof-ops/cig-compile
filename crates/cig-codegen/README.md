@@ -32,6 +32,26 @@ with the VM and returns a non-zero status. The VM then has the
 interpreter's own function make the error from those operands, so an
 error's code, message, hint and position cannot differ.
 
+## What it knows of the bytecode
+
+Two modules read a function of the bytecode module, with no Cranelift
+in them. They are what [decision
+0008](../../docs/decisions/0008-native-code-on-the-vms-frame.md) builds
+a function's native code from.
+
+- **`flow`**: where each instruction can go on to, the targets of
+  backward jumps, the registers that can carry a cell (the `A` of every
+  `cellnew`), the block leaders, and the pcs a function's native code
+  can be entered at (its start, after each call, each loop's start,
+  each `catch` and `finally`).
+- **`types`**: for each register before each instruction, the type it
+  has on every path the bytecode can take: null, a bool, an int, a
+  float, or anything. Every rule is read from what the VM's instruction
+  does when it goes on (an int plus an int is an int, or the
+  instruction raises). An opcode the pass has no rule for makes every
+  register "anything"; so does a `try` anywhere in the function, for
+  every register, and a `cellnew`, for its register.
+
 ## What is compiled
 
 A specialization is a function and one row of argument types. It is
