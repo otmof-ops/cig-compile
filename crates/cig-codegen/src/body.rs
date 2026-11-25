@@ -50,6 +50,24 @@
 //! pass has it as "anything" there, and each path writes the register
 //! to the frame on its way in.
 //!
+//! ## A loop's scratch registers
+//!
+//! An inline write over a register whose old value is not proven tests
+//! that value first, since one that owns memory is the runtime's to
+//! free. In a loop that test would run at every write of every turn,
+//! with a call of the runtime beside it that the loop never makes. So
+//! for each loop the emitter finds the registers that own no memory
+//! anywhere in it ([`PlainLoop`]): those nobody reads again when the
+//! loop is entered, and that every instruction of the loop that writes
+//! them can only leave a number, a bool or null in
+//! ([`live::plain_writer`]). They are freed once, where the loop is
+//! entered from outside ([`Emit::enter_loop`]), and written with a
+//! plain store from then on. A turn of the loop goes to the head past
+//! that entry. A body entered inside the loop, and one that comes back
+//! into it from the interpreter, makes the same registers ready before
+//! it goes on ([`Emit::make_ready`]). [`Mode::Checked`] tests every
+//! such write instead of trusting it.
+//!
 //! ## Determinism
 //!
 //! Functions are compiled in their module pre-order index, nothing
@@ -76,6 +94,7 @@ use cigscript::cig_bytecode::opcode::Op;
 
 use crate::flow::{self, Flow};
 use crate::isa::target as target_isa;
+use crate::live::{self, Live};
 use crate::plan::{self, Class, How, Plan};
 use crate::types::{self as typed, Ty, Types};
 use crate::Error;
@@ -379,6 +398,14 @@ fn compile_one(
     if plan.resumes.is_empty() {
         return Ok(None);
     }
+    // The registers each loop can write with a plain store: a loop
+    // counts where its first pc starts a block, which is where its
+    // registers are made ready.
+    let live = live::live(f, flow);
+    let plain: Vec<PlainLoop> = plain_loops(f, flow, &types, &code, &live)
+        .into_iter()
+        .filter(|l| plan.leaders.contains(&l.start))
+        .collect();
 
     // `fn(ctx: *mut Context, at: u32) -> u64`.
     let mut sig = Signature::new(call_conv);
@@ -490,6 +517,7 @@ fn compile_one(
         .iter()
         .map(|pc| (*pc, b.create_block()))
         .collect();
+    let heads: BTreeMap<u32, CbBlock> = plain.iter().map(|l| (l.start, b.create_block())).collect();
 
     let mut e = Emit {
         f,
@@ -513,6 +541,9 @@ fn compile_one(
         ivar: BTreeMap::new(),
         fvar: BTreeMap::new(),
         blocks,
+        live: &live,
+        plain: &plain,
+        heads,
         edges: BTreeMap::new(),
         later: Vec::new(),
         end,
@@ -548,6 +579,9 @@ fn compile_one(
             .filter(|r| e.held(*pc, *r).is_some())
             .collect();
         e.read_back(&mut b, *pc, &held);
+        // Entered inside a loop: the loop may have been started by the
+        // interpreter, which made nothing ready.
+        e.make_ready(&mut b, *pc, |_| true);
         let to = e.block(*pc)?;
         b.ins().jump(to, &[]);
     }
@@ -558,6 +592,14 @@ fn compile_one(
         let blk = e.block(*from)?;
         b.switch_to_block(blk);
         e.filled = false;
+        // A loop's first block is its entry from outside: its scratch
+        // registers are made ready here, and the loop's own turns come
+        // in past it.
+        if let Some(head) = e.heads.get(from).copied() {
+            e.enter_loop(&mut b, *from);
+            b.ins().jump(head, &[]);
+            b.switch_to_block(head);
+        }
         e.block_body(&mut b, *from, to)?;
         // The block is closed: the edge blocks it asked for can be
         // filled.
@@ -666,6 +708,98 @@ struct MapView {
 /// (each with the type it is held as), and the block it goes on to.
 type EdgeBlock = (CbBlock, Vec<(u32, Ty)>, CbBlock);
 
+/// A loop and the registers that own no memory anywhere in it once it
+/// has been entered: its scratch registers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlainLoop {
+    /// The loop's first pc: the target of its backward jump.
+    start: u32,
+    /// The pc after the loop's last instruction.
+    end: u32,
+    /// The registers, ascending.
+    regs: BTreeSet<u32>,
+}
+
+/// The loops of `f` that have scratch registers, an outer loop before
+/// the loops inside it.
+///
+/// A register is one of a loop's when all of this holds:
+/// - nobody reads it again where the loop starts (`live`), so what it
+///   holds there can be freed;
+/// - every instruction of the loop that writes it can only leave a
+///   value that owns no memory ([`live::plain_writer`]), and no call in
+///   the loop leaves it undefined;
+/// - it carries no cell.
+///
+/// A loop counts only when its first pc is the one way into it: no
+/// instruction outside it goes on to another of its instructions. None
+/// counts in a function with a handler or a burn: an error and a
+/// compensation go to code this cannot follow.
+fn plain_loops(
+    f: &BcFunction,
+    flow: &Flow,
+    types: &Types,
+    code: &[Option<DecodedInstr>],
+    live: &Live,
+) -> Vec<PlainLoop> {
+    let burns = code.iter().flatten().any(|d| {
+        matches!(
+            d.op,
+            Op::BURN_ENTER
+                | Op::BURN_OP
+                | Op::BURN_LEAVE
+                | Op::COMP_ENTER
+                | Op::COMP_LEAVE
+                | Op::TRY_ENTER
+                | Op::TRY_LEAVE
+        )
+    });
+    if flow.handlers || burns || !f.regions.is_empty() || f.requires_burn {
+        return Vec::new();
+    }
+    let konst = |i: u32| types.konst(i);
+    let mut out = Vec::new();
+    for (start, end) in plan::loop_spans(code) {
+        let inside = |pc: u32| (start..end).contains(&pc);
+        // One way in: at its first pc.
+        let one_way_in = flow
+            .succs
+            .iter()
+            .all(|(from, tos)| inside(*from) || tos.iter().all(|to| !inside(*to) || *to == start));
+        if !one_way_in {
+            continue;
+        }
+        // Each register the loop writes: whether every write is plain.
+        let mut written: BTreeMap<u32, bool> = BTreeMap::new();
+        let mut undefined = u32::MAX;
+        for d in code.iter().flatten().filter(|d| inside(d.pc)) {
+            let w = typed::writes(d);
+            for (r, _) in &w.regs {
+                let plain = live::plain_writer(d, *r, types.before(d.pc), &konst);
+                *written.entry(*r).or_insert(true) &= plain;
+            }
+            if let Some(above) = w.above {
+                undefined = undefined.min(above);
+            }
+        }
+        let regs: BTreeSet<u32> = written
+            .into_iter()
+            .filter(|(r, plain)| {
+                *plain
+                    && *r < undefined
+                    && *r < flow.reg_count
+                    && !flow.cells.contains(r)
+                    && !live.before(start, *r)
+            })
+            .map(|(r, _)| r)
+            .collect();
+        if !regs.is_empty() {
+            out.push(PlainLoop { start, end, regs });
+        }
+    }
+    out
+}
+
 struct Emit<'a> {
     f: &'a BcFunction,
     flow: &'a Flow,
@@ -692,6 +826,14 @@ struct Emit<'a> {
     /// A held float's.
     fvar: BTreeMap<u32, Variable>,
     blocks: BTreeMap<u32, CbBlock>,
+    /// The registers that are read again, by pc.
+    live: &'a Live,
+    /// The loops with scratch registers, an outer one before those
+    /// inside it.
+    plain: &'a [PlainLoop],
+    /// For each such loop's first pc, the block its turns go to: the
+    /// loop's head past the entry that makes its registers ready.
+    heads: BTreeMap<u32, CbBlock>,
     /// Each register's type on an edge, as the pass has it.
     edges: BTreeMap<(u32, u32), Vec<Ty>>,
     /// Edge blocks made and not yet filled. A block is filled once the
@@ -1403,7 +1545,17 @@ impl Emit<'_> {
         if to >= self.end {
             return Err(format!("pc {from} goes on past the function's end"));
         }
-        let target = self.block(to)?;
+        // A turn of a loop with scratch registers goes to its head past
+        // the entry: they were made ready when the loop was entered.
+        let turn = self
+            .plain
+            .iter()
+            .find(|l| l.start == to && (l.start..l.end).contains(&from))
+            .and_then(|l| self.heads.get(&l.start).copied());
+        let target = match turn {
+            Some(head) => head,
+            None => self.block(to)?,
+        };
         Ok(self.edge_into(b, from, to, target))
     }
 
@@ -1447,6 +1599,9 @@ impl Emit<'_> {
             })
             .collect();
         self.read_back(b, at, &regs);
+        // The interpreter went into a loop from outside it: nothing
+        // made the loop's scratch registers ready on the way.
+        self.make_ready(b, at, |l| from < l.start);
         b.ins().jump(target, &[]);
         Ok(())
     }
@@ -1649,6 +1804,110 @@ impl Emit<'_> {
         }
     }
 
+    // ----- a loop's scratch registers ---------------------------------------
+
+    /// Whether `r` is a scratch register of a loop `pc` is in: it owns
+    /// no memory there.
+    fn plain_at(&self, pc: u32, r: u32) -> bool {
+        self.plain
+            .iter()
+            .any(|l| (l.start..l.end).contains(&pc) && l.regs.contains(&r))
+    }
+
+    /// Return `Defect(pc)` when `r`'s place in the frame holds a value
+    /// that owns memory: this emitter took it to hold none.
+    fn must_be_plain(&mut self, b: &mut FunctionBuilder, pc: u32, r: u32) {
+        let t = self.tag(b, r);
+        let owns = b
+            .ins()
+            .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, t, i64::from(value::OWNS));
+        let bad = b.create_block();
+        let good = b.create_block();
+        b.set_cold_block(bad);
+        b.ins().brif(owns, bad, &[], good, &[]);
+        b.switch_to_block(bad);
+        let bits = b.ins().iconst(types::I64, Stop::Defect(pc).bits() as i64);
+        b.ins().return_(&[bits]);
+        b.switch_to_block(good);
+    }
+
+    /// Free what `r` holds when it owns memory, leaving null (`clear`):
+    /// nobody reads it again. The body leaves at `pc`, with nothing
+    /// run, where the runtime cannot.
+    fn free_dead(&mut self, b: &mut FunctionBuilder, pc: u32, r: u32) {
+        let t = self.tag(b, r);
+        let owns = b
+            .ins()
+            .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, t, i64::from(value::OWNS));
+        let help = b.create_block();
+        let stuck = b.create_block();
+        let ok = b.create_block();
+        b.set_cold_block(help);
+        b.set_cold_block(stuck);
+        b.ins().brif(owns, help, &[], ok, &[]);
+        b.switch_to_block(help);
+        let reg = b.ins().iconst(types::I32, i64::from(r));
+        let done = self.helper(b, HLP_CLEAR, self.clear_sig, &[reg]);
+        self.forget_view(b, r);
+        b.ins().brif(done, ok, &[], stuck, &[]);
+        b.switch_to_block(stuck);
+        self.leave(b, pc);
+        self.filled = false;
+        b.switch_to_block(ok);
+    }
+
+    /// The entry of the loop that starts at `start`, from outside it:
+    /// each of its scratch registers is freed of what it held. One an
+    /// outer loop has as its own was made ready there; one the pass
+    /// proved a number here holds one.
+    fn enter_loop(&mut self, b: &mut FunctionBuilder, start: u32) {
+        let Some(l) = self.plain.iter().find(|l| l.start == start) else {
+            return;
+        };
+        let regs: Vec<u32> = l.regs.iter().copied().collect();
+        for r in regs {
+            let outer = self
+                .plain
+                .iter()
+                .any(|o| o.start < start && start < o.end && o.regs.contains(&r));
+            if outer || tag_of(self.proven(start, r)).is_some() {
+                continue;
+            }
+            self.free_dead(b, start, r);
+        }
+    }
+
+    /// Native code goes on at `pc` without having come through the
+    /// entry of each loop `through` names that `pc` is inside of (a
+    /// body entered there, or the interpreter back from a run that
+    /// began outside the loop): the loop's scratch registers are made
+    /// ready here. One nobody reads again is freed of what it holds.
+    /// One that is read again was written in this turn of the loop, by
+    /// an instruction that only writes numbers: it is tested, and the
+    /// body returns `Defect(pc)` if it owns memory after all.
+    fn make_ready(
+        &mut self,
+        b: &mut FunctionBuilder,
+        pc: u32,
+        through: impl Fn(&PlainLoop) -> bool,
+    ) {
+        let mut regs = BTreeSet::new();
+        for l in self.plain {
+            if l.start < pc && pc < l.end && through(l) {
+                regs.extend(l.regs.iter().copied());
+            }
+        }
+        for r in regs {
+            if self.held(pc, r).is_some() {
+                continue;
+            }
+            match self.live.before(pc, r) {
+                false => self.free_dead(b, pc, r),
+                true => self.must_be_plain(b, pc, r),
+            }
+        }
+    }
+
     // ----- writing -----------------------------------------------------------
 
     /// Make `r`'s place in the frame one a number can be stored over.
@@ -1665,6 +1924,14 @@ impl Emit<'_> {
     /// ruled out.
     fn over(&mut self, b: &mut FunctionBuilder, pc: u32, r: u32, fb: CbBlock) {
         if tag_of(self.proven(pc, r)).is_some() {
+            return;
+        }
+        // A scratch register of a loop this is in owns nothing: it was
+        // made ready where the loop was entered.
+        if self.plain_at(pc, r) {
+            if self.mode == Mode::Checked {
+                self.must_be_plain(b, pc, r);
+            }
             return;
         }
         let t = self.tag(b, r);
@@ -3151,5 +3418,163 @@ fn both(b: &mut FunctionBuilder, x: Cond, y: Cond) -> Cond {
         (Cond::Never, _) | (_, Cond::Never) => Cond::Never,
         (Cond::Always, c) | (c, Cond::Always) => c,
         (Cond::If(p), Cond::If(q)) => Cond::If(b.ins().band(p, q)),
+    }
+}
+
+#[cfg(test)]
+mod scratch {
+    //! Which registers a loop can write with a plain store
+    //! ([`plain_loops`]).
+
+    use super::*;
+    use cigscript::cig_bytecode::instr::Instr;
+    use cigscript::cig_bytecode::module::{FuncKind, HandlerEntry, SpanBase, RESERVED_U32};
+
+    fn function(reg_count: u32, instrs: Vec<Instr>) -> BcFunction {
+        BcFunction {
+            name: String::new(),
+            kind: FuncKind::Main,
+            reg_count,
+            arity: 0,
+            requires_burn: false,
+            upvalues: Vec::new(),
+            constants: Vec::new(),
+            children: Vec::new(),
+            regions: Vec::new(),
+            handlers: Vec::new(),
+            instrs,
+            span_base: SpanBase::default(),
+            lines: Vec::new(),
+            region_rows: Vec::new(),
+        }
+    }
+
+    fn found(f: &BcFunction) -> Vec<(u32, u32, Vec<u32>)> {
+        let flow = flow::flow(f).expect("flows");
+        let types = typed::infer(f, &flow);
+        let (_, code) = decode_table(&f.instrs).expect("decodes");
+        let live = live::live(f, &flow);
+        plain_loops(f, &flow, &types, &code, &live)
+            .into_iter()
+            .map(|l| (l.start, l.end, l.regs.into_iter().collect()))
+            .collect()
+    }
+
+    /// A counted loop of `turn`, the instructions of one turn, between
+    /// `total = 0` in R0 and `return total`: its window is R1..R3 and
+    /// its variable R4, and the turn starts at pc 5.
+    fn counted(reg_count: u32, turn: Vec<Instr>) -> BcFunction {
+        let n = turn.len() as i16;
+        let mut instrs = vec![
+            Instr::asbx(Op::LOADINT, 0, 0),
+            Instr::asbx(Op::LOADINT, 1, 0),
+            Instr::asbx(Op::LOADINT, 2, 10),
+            Instr::asbx(Op::LOADINT, 3, 1),
+            Instr::asbx(Op::FORPREP, 1, n + 1),
+        ];
+        instrs.extend(turn);
+        instrs.push(Instr::asbx(Op::FORLOOP, 1, -(n + 1)));
+        instrs.push(Instr::abc(Op::RET, 0, 0, 0));
+        function(reg_count, instrs)
+    }
+
+    #[test]
+    fn a_register_a_loop_writes_before_it_reads_it_is_its_scratch() {
+        // R5 = i - 1; total = total + R5.
+        let f = counted(
+            6,
+            vec![Instr::abc(Op::SUB, 5, 4, 3), Instr::abc(Op::ADD, 0, 0, 5)],
+        );
+        assert_eq!(found(&f), [(5, 8, vec![5])]);
+    }
+
+    #[test]
+    fn a_register_the_loop_reads_first_is_not() {
+        // total = total + R5; R5 = i - 1: what R5 held before the loop
+        // is read in the first turn.
+        let f = counted(
+            6,
+            vec![Instr::abc(Op::ADD, 0, 0, 5), Instr::abc(Op::SUB, 5, 4, 3)],
+        );
+        assert_eq!(found(&f), []);
+    }
+
+    #[test]
+    fn a_register_a_sum_of_two_unknowns_is_written_to_is_not() {
+        // R5 = R6 + R7, of which nothing is known: two strings make a
+        // string. R8 = R6 - R7 is a number or an error. (The loop's
+        // variable R4 is one too here: this turn never reads it.)
+        let f = counted(
+            9,
+            vec![Instr::abc(Op::ADD, 5, 6, 7), Instr::abc(Op::SUB, 8, 6, 7)],
+        );
+        assert_eq!(found(&f), [(5, 8, vec![4, 8])]);
+    }
+
+    #[test]
+    fn a_loop_inside_another_has_its_own_and_the_outer_has_them_too() {
+        // for i { R5 = i - 1; for j { R10 = j - i; total += R10 }; total += R5 }
+        let f = function(
+            11,
+            vec![
+                Instr::asbx(Op::LOADINT, 0, 0),
+                Instr::asbx(Op::LOADINT, 1, 0),
+                Instr::asbx(Op::LOADINT, 2, 3),
+                Instr::asbx(Op::LOADINT, 3, 1),
+                Instr::asbx(Op::FORPREP, 1, 12),
+                Instr::abx(Op::STEPS, 1, 1),
+                Instr::abc(Op::SUB, 5, 4, 3),
+                Instr::asbx(Op::LOADINT, 6, 0),
+                Instr::asbx(Op::LOADINT, 7, 2),
+                Instr::asbx(Op::LOADINT, 8, 1),
+                Instr::asbx(Op::FORPREP, 6, 4),
+                Instr::abx(Op::STEPS, 2, 1),
+                Instr::abc(Op::SUB, 10, 9, 4),
+                Instr::abc(Op::ADD, 0, 0, 10),
+                Instr::asbx(Op::FORLOOP, 6, -4),
+                Instr::abc(Op::ADD, 0, 0, 5),
+                Instr::asbx(Op::FORLOOP, 1, -12),
+                Instr::abc(Op::RET, 0, 0, 0),
+            ],
+        );
+        // The outer loop: its scratch value, the inner loop's window
+        // (set before the inner loop reads it) and the inner scratch.
+        // The inner loop's variable is not: a counted loop writes it on
+        // the way into a turn only, so it is not known to be written
+        // before it is read.
+        assert_eq!(
+            found(&f),
+            [(5, 17, vec![5, 6, 7, 8, 10]), (11, 15, vec![10])]
+        );
+    }
+
+    #[test]
+    fn a_call_in_the_loop_leaves_the_registers_above_its_row_out() {
+        // R5 = i - 1; call R6 with no argument; R7 = i - 1.
+        let f = counted(
+            8,
+            vec![
+                Instr::abc(Op::SUB, 5, 4, 3),
+                Instr::abc(Op::CALL, 6, 0, 0),
+                Instr::abc(Op::SUB, 7, 4, 3),
+            ],
+        );
+        assert_eq!(found(&f), [(5, 9, vec![5])]);
+    }
+
+    #[test]
+    fn a_function_with_a_handler_has_none() {
+        let mut f = counted(
+            6,
+            vec![Instr::abc(Op::SUB, 5, 4, 3), Instr::abc(Op::ADD, 0, 0, 5)],
+        );
+        f.handlers = vec![HandlerEntry {
+            pc_start: 5,
+            pc_end: 7,
+            handler_pc: 8,
+            catch_reg: RESERVED_U32,
+            finally_pc: RESERVED_U32,
+        }];
+        assert_eq!(found(&f), []);
     }
 }

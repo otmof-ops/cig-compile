@@ -125,6 +125,13 @@ pub struct Types {
 }
 
 impl Types {
+    /// The type of constant `i` of the function's pool: a bool, an int
+    /// or a float, and anything for a string or a constant the pool
+    /// does not have.
+    pub fn konst(&self, i: u32) -> Ty {
+        self.kty.get(i as usize).copied().unwrap_or(Ty::Any)
+    }
+
     /// Each register's type just before the instruction at `pc` runs, on
     /// every path that reaches it. The slice is `reg_count` long. An
     /// unknown `pc` returns an empty slice.

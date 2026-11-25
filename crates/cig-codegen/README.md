@@ -211,6 +211,36 @@ stand. Each says when it cannot (a register that carries a cell, a
 list something is walking), and then the interpreter runs the
 instruction.
 
+### A loop's scratch registers (`src/live.rs`)
+
+The test before a store, and the call of `clear` beside it, would run
+at every write of every turn of a loop, and the call keeps every float
+the loop holds out of the machine's registers around it, whether it
+runs or not. So the emitter finds each loop's **scratch registers**
+and frees them once:
+
+- **Dead where the loop starts** (`live::live`, a backward pass over
+  the bytecode's flow): nobody reads the register again before
+  something writes it, so what it holds is nobody's to see.
+- **Written only with numbers in the loop** (`live::plain_writer`):
+  every instruction of the loop that writes it can only leave null, a
+  bool, an int or a float, whoever runs it. `-`, `/`, `%`, a negation,
+  a comparison and `not` always; `+` when one operand is proven to be
+  no string and no list; `*` when one is a float or both are proven
+  numbers; a number loaded; a copy of a proven number; a counted
+  loop's own registers.
+- **No cell, no call above it, one way into the loop**, and no handler
+  or burn in the function.
+
+The loop's first block is its entry from outside: it has the runtime
+free each scratch register that owns memory, and a turn of the loop
+jumps to the head past it. In the loop a write to such a register is a
+plain store. A body entered inside the loop, and one the interpreter
+comes back into from a stretch that began outside it, makes the
+registers ready before it goes on: one nobody reads again is freed,
+and one that is read again must hold a number (the body returns
+`Defect(pc)` if it does not). `Mode::Checked` tests every such write.
+
 ### A list's elements, where they lie
 
 A register that holds a list is never held in a machine register: the
@@ -439,6 +469,14 @@ and hold its native code to the result, byte for byte.
   and, on Linux, the generated code run through cig-native's loader:
   results, every way of leaving with its site and operands, steps and
   depth counted mark by mark.
+- `src/live.rs` (which registers are read again, and what an
+  instruction can leave in one): a register's life from its write to
+  its last read, across a loop, through a closure's captures and past
+  a call; every register alive in a function with a handler; each
+  operator's rule, with and without a proven operand.
+- `src/body.rs` (a loop's scratch registers): the one found, the one
+  the loop reads first, the one a sum of two unknowns is written to,
+  two loops one inside the other, a call in the loop, a handler.
 - `src/plan.rs` (the plan): a loop of proven arithmetic is native
   whole, a loop the interpreter runs anyway is left to it whole, a
   guess joins the stretch beside it, a call among little work is left
@@ -466,7 +504,10 @@ and hold its native code to the result, byte for byte.
   runtime; a list of numbers read where it lies and asked for
   once, an element machine code may not copy, an index with no
   element, a register that holds no list, and a list written in place
-  until a string is in the way.
+  until a string is in the way; a loop's scratch registers freed once
+  where it is entered and never again in its turns, nothing asked
+  when none owns memory, a register the runtime cannot free, a body
+  entered inside the loop, and a frame no run makes.
 
 Whole programs are held to the tree-walker by the differential suite
 at the workspace root, which builds each one at stage `c`, and, with

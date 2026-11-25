@@ -46,6 +46,7 @@ mod body;
 pub mod flow;
 mod isa;
 mod link;
+pub mod live;
 mod lower;
 mod plan;
 mod qualify;
