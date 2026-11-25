@@ -84,17 +84,19 @@ and puts everything back, with no cig on the machine:
 - **A stage `b` program** (`cigcompile build --stage b`, the script's bytecode on cig's VM) takes 0.52 of `cig run`'s time, faster on all 21, and 0.82 of CPython 3.13's; it starts in 3.7 ms, where CPython takes 13.5 ms.
 - **A stage `a` program**, the default, runs on the interpreter as `cig run` does (0.93 of its time).
 - **Lua is faster**: a stage `b` program takes 1.97 times Lua 5.4's time and 5.20 times LuaJIT's.
-- **Stage `c`** (`--stage c`, on `main`, in no release yet) adds native code for a script's loops and for its functions on numbers, where that comes out ahead. Measured on 2026-11-24, both built from `main`, on another machine than the table above ([the paper](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCHMARKS-2026-11-24.md)):
+- **Stage `c`** (`--stage c`, on `main`, in no release yet) adds native code for a script's loops, for the lists and records they work on and for its functions on numbers, where that comes out ahead. Measured on 2026-11-25, both built from `main`, on another machine than the table above ([the paper](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCHMARKS-2026-11-25.md)):
 
   | program | stage b, ms | stage c, ms | stage c ÷ stage b | Lua 5.4, ms | CPython 3.12, ms |
   |---|---:|---:|---:|---:|---:|
-  | `mandel` | 40.2 | 7.4 | 0.18 | 16.2 | 53.0 |
-  | `fib` | 16.8 | 4.4 | 0.26 | 4.4 | 12.6 |
-  | `fannkuch` | 40.7 | 12.3 | 0.30 | 22.4 | 33.2 |
-  | `loop` | 9.3 | 4.6 | 0.50 | 4.3 | 21.7 |
-  | `sieve` | 32.8 | 25.5 | 0.78 | 11.1 | 25.2 |
+  | `mandel` | 26.5 | 6.3 | 0.24 | 16.0 | 52.6 |
+  | `fib` | 9.7 | 2.9 | 0.30 | 4.3 | 12.4 |
+  | `fannkuch` | 30.5 | 9.8 | 0.32 | 22.4 | 33.1 |
+  | `sieve` | 26.6 | 14.2 | 0.53 | 11.2 | 25.0 |
+  | `loop` | 5.7 | 3.0 | 0.54 | 4.3 | 21.7 |
+  | `nbody` | 61.0 | 34.0 | 0.56 | 28.9 | 82.9 |
+  | `richards` | 5.5 | 4.8 | 0.88 | 2.7 | 10.6 |
 
-  Where a program has native code it takes 0.52 of its stage `b` time (8 of the 21 compute programs have some), and 0.78 over all 21: faster on 7, level on 14, slower on none. Over the 21, a stage `c` program takes 0.66 of CPython 3.12's time (stage `b`: 0.84), 1.37 times Lua 5.4's (stage `b`: 1.83) and 2.54 times LuaJIT's (stage `b`: 3.40). A loop that calls a function, reads a map's field or builds a string each turn is not compiled yet and runs as stage `b` does.
+  Over the compute programs a stage `c` program takes 0.98 times Lua 5.4's time (stage `b`: 1.36), 0.48 of CPython 3.12's (stage `b`: 0.63) and 1.84 times LuaJIT's (stage `b`: 2.55). A day earlier, on the same machine and the same core, before the VM's calls and start-up were reworked and before stage `c` read lists and records, it took 1.37 times Lua's time and 0.66 of CPython's. 14 of the 21 compute programs have native code, and over all 21 a stage `c` program takes 0.76 of its stage `b` time: faster on 9, level on 11, and slower on 1 (`json-deep`, three milliseconds long, which has no native code: its stage `b` and stage `c` programs are the same file). A loop whose work is calls, strings or dictionary lookups is not faster yet and runs as stage `b` does.
 
 Whole processes, start-up included: the table at the top on a 2018 laptop on battery, with cig 1.24.0 as released; stage `c`'s on a 2025 laptop on mains power, every process pinned to one core.
 

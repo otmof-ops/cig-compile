@@ -5,6 +5,30 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **A stage `c` program calls its bytecode functions at the speed of a
+  stage `b` one** (cig's runtime, the commit pinned here). A program
+  whose top level is native and whose functions are bytecode paid
+  about 63 machine instructions at every call between those functions:
+  the runtime asked the native code's tables about each function that
+  came on top. `spectral` took 1.06 of its stage `b` program's time in
+  a benchmark run for it. The runtime now keeps the answer on each
+  function, and a stage `b` program's calls are cheaper for it too
+  (`fib` runs 0.94 of its instructions, `trees` 0.96). Nothing in
+  cigcompile changes but the pin; `spectral` at stage `c` runs 0.7%
+  more instructions than at stage `b`, where it ran 5.6% more.
+  - **Measured** on 2026-11-25, both built from `main`, whole
+    processes, every side in the same rounds
+    ([the paper](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCHMARKS-2026-11-25.md)):
+    a stage `c` program takes 0.98 times Lua 5.4's time over the
+    compute programs both have (1.37 a day earlier) and 0.48 of
+    CPython 3.12's (0.66). `nbody` takes 0.56 of its stage `b` time
+    (1.00), `sieve` 0.53 (0.78), and the 21 compute programs
+    0.76: faster on 9, level on 11, slower on 1
+    (`json-deep`, which has no native code: its two programs are the
+    same file). The stage `b`
+    program they are held to is itself faster: 1.36 times Lua's
+    time, where it took 1.83.
+
 - **Stage `c`: a record's fields are read where they lie, and the
   runtime runs one instruction at a time for what machine code does
   not** ([decision 0008](docs/decisions/0008-native-code-on-the-vms-frame.md),

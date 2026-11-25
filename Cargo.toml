@@ -14,10 +14,10 @@ exclude = ["main-src", "cigscript-src", "cigo-src", "fuzz"]
 # native code and the inference stage c compiles from. A release of
 # cigcompile pins cig's release tag.
 [workspace.dependencies]
-cigscript = { git = "https://github.com/otmof-ops/cig-script", rev = "88fde221124d26dfbba8cf157d672eee5be63935" }
+cigscript = { git = "https://github.com/otmof-ops/cig-script", rev = "ed7ad3ab7f2d2580d3b1106fee704f1dd2333436" }
 # What a program and its compiler agree on about native code (stage c):
 # the `native` section's layout. cig-script's crate, at cigscript's pin.
-cig-native = { git = "https://github.com/otmof-ops/cig-script", rev = "88fde221124d26dfbba8cf157d672eee5be63935" }
+cig-native = { git = "https://github.com/otmof-ops/cig-script", rev = "ed7ad3ab7f2d2580d3b1106fee704f1dd2333436" }
 
 [package]
 name = "cigcompile"
