@@ -87,6 +87,9 @@ const CTX_NEST: i32 = core::mem::offset_of!(cig_native::Context, nest) as i32;
 const HLP_RUN: i32 = core::mem::offset_of!(cig_native::Helpers, run) as i32;
 const HLP_AGAIN: i32 = core::mem::offset_of!(cig_native::Helpers, again) as i32;
 const HLP_LIST: i32 = core::mem::offset_of!(cig_native::Helpers, list) as i32;
+const HLP_PUSH: i32 = core::mem::offset_of!(cig_native::Helpers, push) as i32;
+const HLP_COPY: i32 = core::mem::offset_of!(cig_native::Helpers, copy) as i32;
+const HLP_CLEAR: i32 = core::mem::offset_of!(cig_native::Helpers, clear) as i32;
 const CTX_LEFT: i32 = core::mem::offset_of!(cig_native::Context, left) as i32;
 const CTX_RIGHT: i32 = core::mem::offset_of!(cig_native::Context, right) as i32;
 
@@ -352,7 +355,7 @@ fn compile_one(
     let mut class = BTreeMap::new();
     let mut after_interp = false;
     for d in code.iter().flatten() {
-        let mut c = class_of(f, flow, &types, d);
+        let mut c = class_of(f, flow, &types, &code, d);
         // A `nop` after an instruction the interpreter runs carries a
         // position for it: the interpreter goes on past it, so it is
         // the interpreter's too.
@@ -401,6 +404,18 @@ fn compile_one(
     list_sig.params.push(AbiParam::new(types::I32));
     list_sig.returns.push(AbiParam::new(types::I32));
     let list_sig = b.import_signature(list_sig);
+    // `push(ctx, list, value, dst) -> u32`, `copy(ctx, dst, src) -> u32`
+    // and `clear(ctx, reg) -> u32`: a context and so many registers.
+    let mut regs_sig = |n: usize| {
+        let mut sig = Signature::new(call_conv);
+        sig.params.push(AbiParam::new(ptr));
+        for _ in 0..n {
+            sig.params.push(AbiParam::new(types::I32));
+        }
+        sig.returns.push(AbiParam::new(types::I32));
+        b.import_signature(sig)
+    };
+    let (push_sig, copy_sig, clear_sig) = (regs_sig(3), regs_sig(2), regs_sig(1));
 
     let entry = b.create_block();
     b.append_block_params_for_function_params(entry);
@@ -423,6 +438,8 @@ fn compile_one(
         let list = match d.op {
             Op::GETINDEX => d.b_u,
             Op::SETINDEX => d.a,
+            // The list `iterprep` made of what the loop walks.
+            Op::ITERNEXT => d.a + 1,
             _ => continue,
         };
         if plan.how(d.pc) != How::Native || views.contains_key(&list) {
@@ -457,6 +474,9 @@ fn compile_one(
         run_sig,
         again_sig,
         list_sig,
+        push_sig,
+        copy_sig,
+        clear_sig,
         views,
         ctx,
         frame,
@@ -616,6 +636,9 @@ struct Emit<'a> {
     run_sig: SigRef,
     again_sig: SigRef,
     list_sig: SigRef,
+    push_sig: SigRef,
+    copy_sig: SigRef,
+    clear_sig: SigRef,
     /// The view of each register a native index form takes a list from.
     views: BTreeMap<u32, View>,
     ctx: Variable,
@@ -807,10 +830,7 @@ impl Emit<'_> {
         b.def_var(self.frame, frame);
         let steps = b.ins().load(types::I64, flags(), ctx, CTX_STEPS_LEFT);
         b.def_var(self.steps, steps);
-        for view in self.views.values() {
-            let no = b.ins().iconst(types::I8, 0);
-            b.def_var(view.known, no);
-        }
+        self.forget_views(b);
     }
 
     /// The elements of the list in register `r`: the address of the
@@ -907,7 +927,6 @@ impl Emit<'_> {
         let pc = d.pc;
         let fb = b.create_block();
         let join = b.create_block();
-        self.guard_dst(b, pc, d.a, fb);
         let x = self.operand(b, pc, d.c);
         let index = self.index_of(b, x, fb);
         let at = self.element(b, d.b_u, index, fb)?;
@@ -921,6 +940,10 @@ impl Emit<'_> {
         b.ins().brif(owns, fb, &[], plain, &[]);
         b.switch_to_block(plain);
         let bits = b.ins().load(types::I64, flags(), at, value::PAYLOAD as i32);
+        // The element is read whole before `R(A)` is made ready: `R(A)`
+        // may hold the list itself (`x = x[i]`), and clearing it may
+        // free the elements.
+        self.over(b, pc, d.a, fb);
         // The type pass has `R(A)` as anything after a read: it is in
         // the frame.
         let frame = b.use_var(self.frame);
@@ -1383,10 +1406,19 @@ impl Emit<'_> {
 
     // ----- writing -----------------------------------------------------------
 
-    /// Branch to `fb` when `r`'s place in the frame holds a value that
-    /// owns memory, which only the interpreter may write over. Nothing
-    /// to test when the pass proved what it holds.
-    fn guard_dst(&mut self, b: &mut FunctionBuilder, pc: u32, r: u32, fb: CbBlock) {
+    /// Make `r`'s place in the frame one a number can be stored over.
+    /// When it holds a value that owns memory, the runtime frees that
+    /// value and leaves null there (`clear`); it goes to `fb` when the
+    /// runtime cannot. Nothing to test when the pass proved what the
+    /// register holds.
+    ///
+    /// It is called where the instruction can no longer fail: after
+    /// every test of its operands and after every operand is read, and
+    /// just before the store. An instruction the interpreter runs
+    /// instead must find the register as it was (it may read it, and it
+    /// may raise and leave it), so nothing is cleared before that is
+    /// ruled out.
+    fn over(&mut self, b: &mut FunctionBuilder, pc: u32, r: u32, fb: CbBlock) {
         if tag_of(self.proven(pc, r)).is_some() {
             return;
         }
@@ -1394,9 +1426,53 @@ impl Emit<'_> {
         let owns = b
             .ins()
             .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, t, i64::from(value::OWNS));
+        let help = b.create_block();
         let ok = b.create_block();
-        b.ins().brif(owns, fb, &[], ok, &[]);
+        b.ins().brif(owns, help, &[], ok, &[]);
+        b.switch_to_block(help);
+        let reg = b.ins().iconst(types::I32, i64::from(r));
+        let done = self.helper(b, HLP_CLEAR, self.clear_sig, &[reg]);
+        self.forget_view(b, r);
+        b.ins().brif(done, ok, &[], fb, &[]);
         b.switch_to_block(ok);
+    }
+
+    /// Call the runtime's function at `at` of its table with the
+    /// context and `args`: its result. For the functions that run no
+    /// instruction (`clear`, `copy`, `push`): the frame's address and
+    /// the steps left stand after them.
+    fn helper(
+        &mut self,
+        b: &mut FunctionBuilder,
+        at: i32,
+        sig: SigRef,
+        args: &[CbValue],
+    ) -> CbValue {
+        let ctx = b.use_var(self.ctx);
+        let helpers = b.ins().load(self.ptr, flags(), ctx, CTX_HELPERS);
+        let f = b.ins().load(self.ptr, flags(), helpers, at);
+        let mut all = vec![ctx];
+        all.extend_from_slice(args);
+        let call = b.ins().call_indirect(sig, f, &all);
+        b.inst_results(call)[0]
+    }
+
+    /// Register `r` no longer holds the list machine code last saw
+    /// there (the runtime put another value in it).
+    fn forget_view(&self, b: &mut FunctionBuilder, r: u32) {
+        if let Some(view) = self.views.get(&r) {
+            let no = b.ins().iconst(types::I8, 0);
+            b.def_var(view.known, no);
+        }
+    }
+
+    /// No list is where machine code last saw it (the runtime added to
+    /// one, which may have moved its elements).
+    fn forget_views(&self, b: &mut FunctionBuilder) {
+        for view in self.views.values() {
+            let no = b.ins().iconst(types::I8, 0);
+            b.def_var(view.known, no);
+        }
     }
 
     /// `R(r) = v`, a known value, when the bytecode goes on at `to`
@@ -1420,6 +1496,14 @@ impl Emit<'_> {
         } else {
             self.store(b, r, v);
         }
+    }
+
+    /// `R(r) = v` where the instruction can no longer fail: the
+    /// register is made ready ([`Emit::over`]), then written.
+    #[allow(clippy::too_many_arguments)]
+    fn put(&mut self, b: &mut FunctionBuilder, pc: u32, to: u32, r: u32, fb: CbBlock, v: Opd) {
+        self.over(b, pc, r, fb);
+        self.write(b, pc, to, r, v);
     }
 
     // ----- the fall back -----------------------------------------------------
@@ -1521,10 +1605,10 @@ impl Emit<'_> {
                 let x = self.operand(b, pc, d.b_u);
                 let fb = b.create_block();
                 let join = b.create_block();
-                self.guard_dst(b, pc, d.a, fb);
                 let truth = self.truth(b, x, fb);
                 let not = b.ins().bxor_imm_s(truth, 1);
                 let v = b.ins().uextend(types::I64, not);
+                self.over(b, pc, d.a, fb);
                 self.write(b, pc, next, d.a, Opd::Bool(v));
                 b.ins().jump(join, &[]);
                 self.fall_back(b, d, fb, join)?;
@@ -1539,13 +1623,13 @@ impl Emit<'_> {
                 };
                 let fb = b.create_block();
                 let join = b.create_block();
-                self.guard_dst(b, pc, d.a, fb);
                 let holds = match d.op {
                     Op::EQ | Op::EQK => self.equal(b, x, y, fb),
                     Op::LT | Op::LTK => self.ordered(b, x, y, false, fb),
                     _ => self.ordered(b, x, y, true, fb),
                 };
                 let v = b.ins().uextend(types::I64, holds);
+                self.over(b, pc, d.a, fb);
                 self.write(b, pc, next, d.a, Opd::Bool(v));
                 b.ins().jump(join, &[]);
                 self.fall_back(b, d, fb, join)?;
@@ -1591,6 +1675,8 @@ impl Emit<'_> {
             Op::FORLOOP => self.forloop(b, d),
             Op::GETINDEX => self.getindex(b, d),
             Op::SETINDEX => self.setindex(b, d),
+            Op::ITERNEXT => self.iternext(b, d),
+            Op::CALLM => self.push(b, d),
             other => Err(format!("{other:?} has no inline form")),
         }
     }
@@ -1624,7 +1710,7 @@ impl Emit<'_> {
     ) -> Result<(), String> {
         let fb = b.create_block();
         let join = b.create_block();
-        self.guard_dst(b, d.pc, dst, fb);
+        self.over(b, d.pc, dst, fb);
         self.write(b, d.pc, d.pc + d.width, dst, v);
         b.ins().jump(join, &[]);
         self.fall_back(b, d, fb, join)?;
@@ -1632,18 +1718,29 @@ impl Emit<'_> {
         Ok(())
     }
 
-    /// `mov A, B` of a frame register: a value that owns no memory is
-    /// copied, tag and payload; any other is the interpreter's.
+    /// `mov A, B` of a frame register. A value that owns no memory,
+    /// over one that owns none, is copied here, tag and payload. Where
+    /// either owns some, the runtime makes the copy (`copy`): it shares
+    /// the one and frees the other, which only it can.
     fn copy(&mut self, b: &mut FunctionBuilder, d: &DecodedInstr, src: u32) -> Result<(), String> {
         let fb = b.create_block();
         let join = b.create_block();
-        self.guard_dst(b, d.pc, d.a, fb);
         let t = self.tag(b, src);
-        let owns = b
-            .ins()
-            .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, t, i64::from(value::OWNS));
+        let mut slow =
+            b.ins()
+                .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, t, i64::from(value::OWNS));
+        if tag_of(self.proven(d.pc, d.a)).is_none() {
+            let old = self.tag(b, d.a);
+            let owns = b.ins().icmp_imm_s(
+                IntCC::UnsignedGreaterThanOrEqual,
+                old,
+                i64::from(value::OWNS),
+            );
+            slow = b.ins().bor(slow, owns);
+        }
+        let help = b.create_block();
         let plain = b.create_block();
-        b.ins().brif(owns, fb, &[], plain, &[]);
+        b.ins().brif(slow, help, &[], plain, &[]);
         b.switch_to_block(plain);
         let bits = self.bits(b, src);
         let frame = b.use_var(self.frame);
@@ -1652,6 +1749,14 @@ impl Emit<'_> {
         b.ins()
             .store(flags(), bits, frame, at + value::PAYLOAD as i32);
         b.ins().jump(join, &[]);
+        // Both registers are in the frame (a register held in a machine
+        // register owns nothing), and the runtime touches no other.
+        b.switch_to_block(help);
+        let to = b.ins().iconst(types::I32, i64::from(d.a));
+        let from = b.ins().iconst(types::I32, i64::from(src));
+        let done = self.helper(b, HLP_COPY, self.copy_sig, &[to, from]);
+        self.forget_view(b, d.a);
+        b.ins().brif(done, join, &[], fb, &[]);
         self.fall_back(b, d, fb, join)?;
         b.switch_to_block(join);
         Ok(())
@@ -1679,7 +1784,6 @@ impl Emit<'_> {
         };
         let fb = b.create_block();
         let join = b.create_block();
-        self.guard_dst(b, pc, d.a, fb);
 
         let ints = {
             let p = self.is_int(b, x);
@@ -1749,7 +1853,7 @@ impl Emit<'_> {
                     let xf = b.ins().fcvt_from_sint(types::F64, xi);
                     let yf = b.ins().fcvt_from_sint(types::F64, yi);
                     let q = b.ins().fdiv(xf, yf);
-                    self.write(b, pc, next, d.a, Opd::Float(q));
+                    self.put(b, pc, next, d.a, fb, Opd::Float(q));
                     b.ins().jump(join, &[]);
                     b.switch_to_block(whole);
                     b.ins().sdiv(xi, yi)
@@ -1769,7 +1873,7 @@ impl Emit<'_> {
                     b.ins().srem(xi, safe)
                 }
             };
-            self.write(b, pc, next, d.a, Opd::Int(v));
+            self.put(b, pc, next, d.a, fb, Opd::Int(v));
             b.ins().jump(join, &[]);
         }
 
@@ -1799,7 +1903,7 @@ impl Emit<'_> {
                         b.ins().fdiv(xf, yf)
                     }
                 };
-                self.write(b, pc, next, d.a, Opd::Float(v));
+                self.put(b, pc, next, d.a, fb, Opd::Float(v));
                 b.ins().jump(join, &[]);
             }
         }
@@ -1813,7 +1917,6 @@ impl Emit<'_> {
         let (pc, next) = (d.pc, d.pc + d.width);
         let fb = b.create_block();
         let join = b.create_block();
-        self.guard_dst(b, pc, d.a, fb);
         let floats = b.create_block();
         match self.is_int(b, x) {
             Cond::Never => {
@@ -1831,7 +1934,7 @@ impl Emit<'_> {
                 b.ins().brif(least, fb, &[], ok, &[]);
                 b.switch_to_block(ok);
                 let v = b.ins().ineg(xi);
-                self.write(b, pc, next, d.a, Opd::Int(v));
+                self.put(b, pc, next, d.a, fb, Opd::Int(v));
                 b.ins().jump(join, &[]);
             }
         }
@@ -1857,7 +1960,7 @@ impl Emit<'_> {
                     _ => b.ins().f64const(0.0),
                 };
                 let v = b.ins().fneg(xf);
-                self.write(b, pc, next, d.a, Opd::Float(v));
+                self.put(b, pc, next, d.a, fb, Opd::Float(v));
                 b.ins().jump(join, &[]);
             }
         }
@@ -2123,19 +2226,20 @@ impl Emit<'_> {
         b.ins().brif(truth, stays, &[], jump, &[]);
         b.switch_to_block(stays);
         if d.a != d.b_u {
-            self.guard_dst(b, pc, d.a, fb);
             match x {
                 Opd::Reg(src) => {
-                    // `truth` has seen that it owns no memory.
+                    // `truth` has seen that it owns no memory. It is
+                    // read before `R(A)` is made ready.
                     let tag = self.tag(b, src);
                     let bits = self.bits(b, src);
+                    self.over(b, pc, d.a, fb);
                     let frame = b.use_var(self.frame);
                     let at = Self::slot(d.a);
                     b.ins().store(flags(), tag, frame, at + value::TAG as i32);
                     b.ins()
                         .store(flags(), bits, frame, at + value::PAYLOAD as i32);
                 }
-                v => self.write(b, pc, next, d.a, v),
+                v => self.put(b, pc, next, d.a, fb, v),
             }
         }
         let on = self.edge_into(b, pc, next, join);
@@ -2219,7 +2323,7 @@ impl Emit<'_> {
         let fits = b.create_block();
         b.ins().brif(wide, fb, &[], fits, &[]);
         b.switch_to_block(fits);
-        self.guard_dst(b, pc, d.a + 3, fb);
+        self.over(b, pc, d.a + 3, fb);
         self.hold_window(b, d, next, start, limit);
         self.write(b, pc, next, d.a + 3, Opd::Int(start));
         let on = self.edge_into(b, pc, next, join);
@@ -2250,8 +2354,10 @@ impl Emit<'_> {
         let on = self.edge_into(b, pc, next, join);
         b.ins().brif(more, again, &[], on, &[]);
         b.switch_to_block(again);
-        self.guard_dst(b, pc, d.a, fb);
-        self.guard_dst(b, pc, d.a + 3, fb);
+        // `R(A)` is one of the window's three ints (the form saw so);
+        // `R(A+3)` is the loop's variable, which the script may have
+        // given anything.
+        self.over(b, pc, d.a + 3, fb);
         self.hold_window(b, d, t, n, limit);
         self.write(b, pc, t, d.a, Opd::Int(n));
         self.write(b, pc, t, d.a + 3, Opd::Int(n));
@@ -2261,6 +2367,140 @@ impl Emit<'_> {
         b.switch_to_block(join);
         Ok(())
     }
+
+    /// `iternext A`: the next item of the list `iterprep` made of what
+    /// the loop walks (`R(A+1)`), by the count in `R(A+2)`. When there
+    /// is one and it owns no memory (a number, a bool, null) it is
+    /// copied to `R(A+3)` and the count goes up; when there is none
+    /// left the loop jumps out, with nothing written. An item that owns
+    /// memory is the interpreter's to share.
+    fn iternext(&mut self, b: &mut FunctionBuilder, d: &DecodedInstr) -> Result<(), String> {
+        let (pc, next) = (d.pc, d.pc + d.width);
+        let fb = b.create_block();
+        let join = b.create_block();
+        let t = flow::target_of(d).ok_or("a jump before the function")?;
+        let x = self.operand(b, pc, d.a + 2);
+        let at = self.index_of(b, x, fb);
+        let (first, count) = self.view(b, d.a + 1, fb)?;
+        // A count below zero is no item either: it is compared as an
+        // unsigned number.
+        let more = b.ins().icmp(IntCC::UnsignedLessThan, at, count);
+        let have = b.create_block();
+        let out = self.edge(b, pc, t)?;
+        b.ins().brif(more, have, &[], out, &[]);
+        b.switch_to_block(have);
+        let offset = b.ins().imul_imm_s(at, value::SIZE as i64);
+        let item = b.ins().iadd(first, offset);
+        let tag = b.ins().load(types::I8, flags(), item, value::TAG as i32);
+        let owns = b.ins().icmp_imm_s(
+            IntCC::UnsignedGreaterThanOrEqual,
+            tag,
+            i64::from(value::OWNS),
+        );
+        let plain = b.create_block();
+        b.ins().brif(owns, fb, &[], plain, &[]);
+        b.switch_to_block(plain);
+        let bits = b
+            .ins()
+            .load(types::I64, flags(), item, value::PAYLOAD as i32);
+        self.over(b, pc, d.a + 3, fb);
+        // The pass has the item as anything: it is in the frame.
+        let frame = b.use_var(self.frame);
+        let to = Self::slot(d.a + 3);
+        b.ins().store(flags(), tag, frame, to + value::TAG as i32);
+        b.ins()
+            .store(flags(), bits, frame, to + value::PAYLOAD as i32);
+        let n = b.ins().iadd_imm_s(at, 1);
+        self.write(b, pc, next, d.a + 2, Opd::Int(n));
+        let on = self.edge_into(b, pc, next, join);
+        b.ins().jump(on, &[]);
+        self.fall_back(b, d, fb, join)?;
+        b.switch_to_block(join);
+        Ok(())
+    }
+
+    /// `callm A, "push", 1`: a list's own `push` of one value. The
+    /// runtime adds `R(A+1)` to the list in `R(A)` and leaves the list
+    /// there, which is what the call gives. Adding an element may move
+    /// them all and the value may own memory, so machine code does not
+    /// do it where the list lies; it asks, and when `R(A)` holds no
+    /// list the runtime can add to, the interpreter runs the call.
+    fn push(&mut self, b: &mut FunctionBuilder, d: &DecodedInstr) -> Result<(), String> {
+        let pc = d.pc;
+        let fb = b.create_block();
+        let join = b.create_block();
+        // The runtime reads the value's register: it is in the frame.
+        self.sync(b, pc);
+        let list = b.ins().iconst(types::I32, i64::from(d.a));
+        let value = b.ins().iconst(types::I32, i64::from(d.a + 1));
+        let done = self.helper(b, HLP_PUSH, self.push_sig, &[list, value, list]);
+        // The list's elements may have moved.
+        self.forget_views(b);
+        b.ins().brif(done, join, &[], fb, &[]);
+        self.fall_back(b, d, fb, join)?;
+        b.switch_to_block(join);
+        Ok(())
+    }
+}
+
+/// Whether `d` is a method call machine code has a form for: a `push`
+/// of one value (`xs.push(v)`), which a list answers.
+fn is_push(f: &BcFunction, d: &DecodedInstr) -> bool {
+    d.op == Op::CALLM
+        && d.c == 1
+        && matches!(f.constants.get(d.b_u as usize), Some(Constant::Str(name)) if name == "push")
+}
+
+/// What a `for` loop's item is, as far as the loop's own instructions
+/// say: how sure machine code can be that it owns no memory.
+///
+/// The item of `for x in xs` is whatever the list holds. An inline
+/// `iternext` copies a number, a bool or null, and anything else is the
+/// interpreter's; a loop whose items are strings or maps would fail
+/// that test every turn. So the instructions after the `iternext` are
+/// read, up to the jump back: an item (or a register it was moved to)
+/// that is the object of a field or an index, or the receiver of a
+/// method, or called, owns memory for certain; one that is added,
+/// multiplied or ordered is most often a number.
+fn item_class(code: &[Option<DecodedInstr>], d: &DecodedInstr) -> Class {
+    let mut names: BTreeSet<u32> = BTreeSet::from([d.a + 3]);
+    let mut number = false;
+    let mut pc = d.pc + d.width;
+    for _ in 0..64 {
+        let Some(Some(i)) = code.get(pc as usize) else {
+            break;
+        };
+        let is = |r: u32| names.contains(&r);
+        match i.op {
+            Op::GETFIELD | Op::GETINDEX if is(i.b_u) => return Class::Interp,
+            Op::SETFIELD | Op::SETINDEX | Op::CALLM | Op::CALL | Op::TAILCALL if is(i.a) => {
+                return Class::Interp
+            }
+            Op::SUB | Op::MUL | Op::DIV | Op::MOD | Op::LT | Op::LE if is(i.b_u) || is(i.c) => {
+                number = true
+            }
+            Op::SUBK | Op::MULK | Op::DIVK | Op::MODK | Op::LTK | Op::LEK | Op::NEG if is(i.b_u) => {
+                number = true
+            }
+            Op::LTJ | Op::LEJ if is(i.a) || is(i.b_u) => number = true,
+            _ => {}
+        }
+        // A register written is no longer the item, unless the item
+        // was moved to it.
+        let moved = i.op == Op::MOV && is(i.b_u);
+        for (r, _) in typed::writes(i).regs {
+            match moved && r == i.a {
+                true => names.insert(r),
+                false => names.remove(&r),
+            };
+        }
+        // The jump back ends the turn.
+        if names.is_empty() || flow::target_of(i).is_some_and(|t| t <= d.pc) {
+            break;
+        }
+        pc += i.width;
+    }
+    Class::Index(if number { 95 } else { 80 })
 }
 
 /// What machine code can do with the instruction `d` ([`Class`]): which
@@ -2276,7 +2516,13 @@ impl Emit<'_> {
 /// list or a map. They lean towards the guess holding: the runtime
 /// gives up a body whose guesses keep failing, so a wrong estimate
 /// costs microseconds, where a guess not taken costs the loop.
-fn class_of(f: &BcFunction, flow: &Flow, types: &Types, d: &DecodedInstr) -> Class {
+fn class_of(
+    f: &BcFunction,
+    flow: &Flow,
+    types: &Types,
+    code: &[Option<DecodedInstr>],
+    d: &DecodedInstr,
+) -> Class {
     match d.op {
         Op::CALL => return Class::Call,
         Op::RET | Op::TAILCALL => return Class::Exit,
@@ -2438,6 +2684,10 @@ fn class_of(f: &BcFunction, flow: &Flow, types: &Types, d: &DecodedInstr) -> Cla
             (_, Ty::Any) => Class::Index(50),
             (_, _) => Class::Index(60),
         },
+        // The next item of a `for` loop over a list.
+        Op::ITERNEXT => item_class(code, d),
+        // `xs.push(v)`: the runtime's own function for it.
+        Op::CALLM if is_push(f, d) => Class::Push,
         _ => Class::Interp,
     }
 }

@@ -16,7 +16,7 @@
 use cig_codegen::{bodies, bodies_as, Mode, Rule};
 use cig_native::Arch;
 use cigscript::cig_bytecode::instr::Instr;
-use cigscript::cig_bytecode::module::{FuncKind, Function, Module, SpanBase};
+use cigscript::cig_bytecode::module::{Constant, FuncKind, Function, Module, SpanBase};
 use cigscript::cig_bytecode::opcode::Op;
 
 fn function(reg_count: u32, arity: u16, instrs: Vec<Instr>) -> Function {
@@ -198,6 +198,88 @@ fn work_and_call() -> Module {
         Instr::abc(Op::RET, 0, 0, 0),
     ]);
     module(function(7, 0, code))
+}
+
+/// `fn(xs) { c = 0; for b in xs { if b { c = c + 1 } }; return c }`.
+///
+/// ```text
+/// 0 loadint R1, 0      c
+/// 1 loadint R6, 1
+/// 2 mov R2, R0         what the loop walks
+/// 3 iterprep R2        R3 = its items, R4 = 0
+/// 4 iternext R2 -> 9   <- the loop: R5 = the next item
+/// 5 steps 1, 1
+/// 6 testn R5 -> 8
+/// 7 add R1, R1, R6
+/// 8 loop -> 4
+/// 9 ret R1
+/// ```
+fn count_true() -> Module {
+    module(function(
+        7,
+        1,
+        vec![
+            Instr::asbx(Op::LOADINT, 1, 0),
+            Instr::asbx(Op::LOADINT, 6, 1),
+            Instr::abc(Op::MOV, 2, 0, 0),
+            Instr::abc(Op::ITERPREP, 2, 0, 0),
+            Instr::asbx(Op::ITERNEXT, 2, 4),
+            steps(1, 1),
+            Instr::asbx(Op::TESTN, 5, 1),
+            Instr::abc(Op::ADD, 1, 1, 6),
+            Instr::asbx(Op::LOOP, 0, -5),
+            Instr::abc(Op::RET, 1, 0, 0),
+        ],
+    ))
+}
+
+/// `fn(xs) { for i in 0..4 { xs.push(i) }; return xs }`, the receiver
+/// and the value moved to the call's registers as the lowering has
+/// them.
+///
+/// ```text
+/// 0..2                 the window: 0, 4, 1
+/// 3 forprep R1 -> 9
+/// 4 steps 1, 1         <- the loop
+/// 5 mov R5, R0         the list
+/// 6 mov R6, R4         the value
+/// 7 callm R5, "push", 1
+/// 8 forloop R1 -> 4
+/// 9 ret R0
+/// ```
+fn push_all() -> Module {
+    let mut f = function(
+        7,
+        1,
+        vec![
+            Instr::asbx(Op::LOADINT, 1, 0),
+            Instr::asbx(Op::LOADINT, 2, 4),
+            Instr::asbx(Op::LOADINT, 3, 1),
+            Instr::asbx(Op::FORPREP, 1, 5),
+            steps(1, 1),
+            Instr::abc(Op::MOV, 5, 0, 0),
+            Instr::abc(Op::MOV, 6, 4, 0),
+            Instr::abc(Op::CALLM, 5, 0, 1),
+            Instr::asbx(Op::FORLOOP, 1, -5),
+            Instr::abc(Op::RET, 0, 0, 0),
+        ],
+    );
+    f.constants = vec![Constant::Str("push".to_string())];
+    module(f)
+}
+
+#[test]
+fn a_loop_over_a_lists_items_and_a_loop_that_pushes_get_bodies() {
+    let out = bodies(&count_true(), Rule::Loops, Arch::X86_64).expect("bodies");
+    assert_eq!(out.bodies[0].resumes, vec![4]);
+    assert_eq!(
+        out.report[0].inline,
+        (5, 10),
+        "the next item, the mark, the test, the add and the jump back"
+    );
+    let out = bodies(&push_all(), Rule::Loops, Arch::X86_64).expect("bodies");
+    assert_eq!(out.bodies[0].resumes, vec![4]);
+    assert_eq!(out.report[0].inline, (5, 10));
 }
 
 /// A module whose top level only makes one function, `child`.
@@ -428,8 +510,26 @@ mod runs {
         again_calls: Vec<u32>,
         /// The registers `list` was asked for, in order.
         list_calls: Vec<u32>,
+        /// What `push`, `copy` and `clear` were asked for, in order.
+        /// Each does what the runtime's does, on the frame.
+        push_calls: Vec<(u32, u32, u32)>,
+        copy_calls: Vec<(u32, u32)>,
+        clear_calls: Vec<u32>,
+        /// `push`, `copy` and `clear` say they cannot, and do nothing.
+        refuses: bool,
         /// The frame the body runs on: where `list` finds a register.
         frame: Option<(*mut Value, usize)>,
+    }
+
+    impl Recording {
+        /// The frame's registers.
+        fn regs(&mut self) -> &mut [Value] {
+            let (frame, len) = self.frame.expect("a frame");
+            // SAFETY: `enter` set `frame` to the frame the body runs on,
+            // which outlives the body's run and is touched by nothing
+            // else while a helper runs.
+            unsafe { std::slice::from_raw_parts_mut(frame, len) }
+        }
     }
 
     impl Host for Recording {
@@ -460,6 +560,38 @@ mod runs {
             self.again_calls.push(pc);
             assert!(!self.again_returns.is_empty(), "again was not expected");
             self.again_returns.remove(0)
+        }
+        fn push(&mut self, _ctx: &mut Context, list: u32, value: u32, dst: u32) -> bool {
+            self.push_calls.push((list, value, dst));
+            if self.refuses {
+                return false;
+            }
+            let regs = self.regs();
+            let Value::List(items) = &regs[list as usize] else {
+                return false;
+            };
+            let items = items.clone();
+            let v = regs[value as usize].clone();
+            items.borrow_mut().push(v);
+            regs[dst as usize] = Value::List(items);
+            true
+        }
+        fn copy(&mut self, _ctx: &mut Context, dst: u32, src: u32) -> bool {
+            self.copy_calls.push((dst, src));
+            if self.refuses {
+                return false;
+            }
+            let regs = self.regs();
+            regs[dst as usize] = regs[src as usize].clone();
+            true
+        }
+        fn clear(&mut self, _ctx: &mut Context, reg: u32) -> bool {
+            self.clear_calls.push(reg);
+            if self.refuses {
+                return false;
+            }
+            self.regs()[reg as usize] = Value::Null;
+            true
         }
     }
 
@@ -651,14 +783,40 @@ mod runs {
             matches!(frame[2], Value::Null),
             "nothing was written inline"
         );
-        // A register that holds a list is not written over inline:
-        // only the interpreter frees what a register held.
+        // A register that holds a string is not written over by
+        // machine code: the runtime frees what it held (`clear`), and
+        // then the sum is stored.
         let mut frame = vec![Value::Int(2), Value::Int(3), Value::Str("held".into())];
+        host.again_calls.clear();
+        let (stop, _) = enter(&code, &rows, 0, &mut frame, 100, &mut host);
+        assert_eq!(stop, Stop::At(1));
+        assert!(host.again_calls.is_empty());
+        assert_eq!(host.clear_calls, vec![2]);
+        assert!(matches!(frame[2], Value::Int(5)), "{}", frame[2].repr());
+        // Where the runtime cannot (the register carries a cell), the
+        // interpreter runs the instruction, and nothing was written.
+        let mut frame = vec![Value::Int(2), Value::Int(3), Value::Str("held".into())];
+        host.refuses = true;
+        host.again_returns = vec![Stop::At(1)];
+        let (stop, _) = enter(&code, &rows, 0, &mut frame, 100, &mut host);
+        assert_eq!(stop, Stop::At(1));
+        assert_eq!(host.again_calls, vec![0]);
+        assert!(matches!(&frame[2], Value::Str(s) if &**s == "held"));
+        // And a string among the operands is the interpreter's before
+        // anything is cleared: it must find the register as it was.
+        let mut frame = vec![
+            Value::Str("a".into()),
+            Value::Int(3),
+            Value::Str("held".into()),
+        ];
+        host.refuses = false;
+        host.clear_calls.clear();
         host.again_calls.clear();
         host.again_returns = vec![Stop::At(1)];
         let (stop, _) = enter(&code, &rows, 0, &mut frame, 100, &mut host);
         assert_eq!(stop, Stop::At(1));
         assert_eq!(host.again_calls, vec![0]);
+        assert!(host.clear_calls.is_empty());
         assert!(matches!(&frame[2], Value::Str(s) if &**s == "held"));
     }
 
@@ -850,6 +1008,187 @@ mod runs {
             assert_eq!(stop, Stop::Raised(0));
             assert_eq!(host.again_calls, vec![0]);
         }
+    }
+
+    /// `fn(a) { b = a; return b }`.
+    fn move_arg() -> Module {
+        module(function(
+            2,
+            1,
+            vec![Instr::abc(Op::MOV, 1, 0, 0), Instr::abc(Op::RET, 1, 0, 0)],
+        ))
+    }
+
+    /// The frame of `count_true` at the loop's start: `items` is what
+    /// `iterprep` made, `at` the count of those taken, `c` the count so
+    /// far.
+    fn counting(items: Value, at: i64, c: i64) -> Vec<Value> {
+        vec![
+            Value::Null,
+            Value::Int(c),
+            Value::Null,
+            items,
+            Value::Int(at),
+            Value::Null,
+            Value::Int(1),
+        ]
+    }
+
+    #[test]
+    fn a_loops_items_are_read_where_they_lie_and_the_list_is_asked_for_once() {
+        for mode in [Mode::Promoted, Mode::Frame, Mode::Checked] {
+            let (code, rows) = load(&count_true(), Rule::Loops, mode);
+            let items = list_of(vec![
+                Value::Bool(true),
+                Value::Bool(false),
+                Value::Int(7),
+                Value::Null,
+                Value::Float(0.5),
+            ]);
+            let mut frame = counting(items, 0, 0);
+            let mut host = Recording::default();
+            let (stop, ctx) = enter(&code, &rows, 4, &mut frame, 1_000, &mut host);
+            assert_eq!(stop, Stop::At(9), "{mode:?}: the loop ran out of items");
+            assert_eq!(host.list_calls, vec![3], "{mode:?}: asked once");
+            assert!(host.again_calls.is_empty() && host.run_calls.is_empty());
+            // True, 7 and 0.5 are truthy.
+            assert!(
+                matches!(frame[1], Value::Int(3)),
+                "{mode:?}: {}",
+                frame[1].repr()
+            );
+            assert!(
+                matches!(frame[4], Value::Int(5)),
+                "{mode:?}: {}",
+                frame[4].repr()
+            );
+            assert_eq!(frame[5].repr(), "0.5", "{mode:?}: the last item");
+            assert_eq!(ctx.steps_left, 995, "{mode:?}: a step a turn");
+        }
+    }
+
+    #[test]
+    fn an_item_that_owns_memory_and_a_window_that_is_no_list_are_the_interpreters() {
+        let (code, rows) = load(&count_true(), Rule::Loops, Mode::Promoted);
+        // A string among the items: only the interpreter shares it. It
+        // is scripted to leave the loop.
+        let items = list_of(vec![Value::Bool(true), Value::Str("s".into())]);
+        let mut frame = counting(items, 0, 0);
+        let mut host = Recording {
+            again_returns: vec![Stop::At(9)],
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 4, &mut frame, 1_000, &mut host);
+        assert_eq!(host.again_calls, vec![4], "the `iternext`, at the string");
+        assert_eq!(stop, Stop::At(9));
+        assert!(matches!(frame[1], Value::Int(1)), "{}", frame[1].repr());
+        assert!(
+            matches!(frame[4], Value::Int(1)),
+            "the count was the frame's when the interpreter was asked: {}",
+            frame[4].repr()
+        );
+        // A count below zero is no item: the loop is over, with nothing
+        // written.
+        let mut frame = counting(list_of(vec![Value::Bool(true)]), -1, 0);
+        let mut host = Recording::default();
+        let (stop, _) = enter(&code, &rows, 4, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(9));
+        assert!(matches!(frame[1], Value::Int(0)) && matches!(frame[5], Value::Null));
+        // No list where `iterprep` left one: the interpreter's error.
+        let mut frame = counting(Value::Int(3), 0, 0);
+        let mut host = Recording {
+            again_returns: vec![Stop::Raised(4)],
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 4, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::Raised(4));
+        assert_eq!(host.again_calls, vec![4]);
+        // The item's register holds a string from a turn the
+        // interpreter ran: the runtime frees it before the next item is
+        // stored there.
+        let mut frame = counting(list_of(vec![Value::Int(2)]), 0, 0);
+        frame[5] = Value::Str("old".into());
+        let mut host = Recording::default();
+        let (stop, _) = enter(&code, &rows, 4, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(9));
+        assert_eq!(host.clear_calls, vec![5]);
+        assert!(matches!(frame[5], Value::Int(2)), "{}", frame[5].repr());
+    }
+
+    #[test]
+    fn a_push_is_the_runtimes_and_a_list_is_moved_by_it() {
+        let (code, rows) = load(&push_all(), Rule::Loops, Mode::Promoted);
+        let xs = list_of(vec![]);
+        let mut frame = vec![
+            xs.clone(),
+            Value::Int(0),
+            Value::Int(4),
+            Value::Int(1),
+            Value::Int(0),
+            Value::Null,
+            Value::Null,
+        ];
+        let mut host = Recording::default();
+        let (stop, _) = enter(&code, &rows, 4, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(9));
+        assert_eq!(elements(&xs), ["0", "1", "2", "3"]);
+        // The list is moved to the call's register by the runtime (it
+        // is shared, and what the register held is freed), and pushed
+        // to by it; the value, an int, is moved by machine code.
+        assert_eq!(host.copy_calls, vec![(5, 0); 4]);
+        assert_eq!(host.push_calls, vec![(5, 6, 5); 4]);
+        assert!(host.again_calls.is_empty() && host.run_calls.is_empty());
+        assert!(matches!(&frame[5], Value::List(_)), "{}", frame[5].repr());
+        // Where the runtime cannot (a register carries a cell, the list
+        // is being walked), the interpreter runs each instruction.
+        let xs = list_of(vec![]);
+        let mut frame = vec![
+            xs.clone(),
+            Value::Int(0),
+            Value::Int(2),
+            Value::Int(1),
+            Value::Int(0),
+            Value::Null,
+            Value::Null,
+        ];
+        let mut host = Recording {
+            refuses: true,
+            again_returns: vec![Stop::At(6), Stop::At(8), Stop::At(6), Stop::At(8)],
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 4, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(9));
+        assert_eq!(host.again_calls, vec![5, 7, 5, 7]);
+        assert!(
+            elements(&xs).is_empty(),
+            "the scripted interpreter does nothing"
+        );
+    }
+
+    #[test]
+    fn a_value_that_owns_memory_is_moved_by_the_runtime_and_a_number_by_machine_code() {
+        let (code, rows) = load(&move_arg(), Rule::Every, Mode::Promoted);
+        // A number over null: two stores.
+        let mut frame = vec![Value::Int(5), Value::Null];
+        let mut host = Recording::default();
+        let (stop, _) = enter(&code, &rows, 0, &mut frame, 100, &mut host);
+        assert_eq!(stop, Stop::At(1));
+        assert!(matches!(frame[1], Value::Int(5)));
+        assert!(host.copy_calls.is_empty() && host.again_calls.is_empty());
+        // A string: the runtime shares it.
+        let mut frame = vec![Value::Str("s".into()), Value::Null];
+        let (stop, _) = enter(&code, &rows, 0, &mut frame, 100, &mut host);
+        assert_eq!(stop, Stop::At(1));
+        assert_eq!(host.copy_calls, vec![(1, 0)]);
+        assert!(matches!(&frame[1], Value::Str(s) if &**s == "s"));
+        // A number over a string: the runtime frees the string.
+        let mut frame = vec![Value::Int(5), Value::Str("old".into())];
+        host.copy_calls.clear();
+        let (stop, _) = enter(&code, &rows, 0, &mut frame, 100, &mut host);
+        assert_eq!(stop, Stop::At(1));
+        assert_eq!(host.copy_calls, vec![(1, 0)]);
+        assert!(matches!(frame[1], Value::Int(5)));
+        assert!(host.again_calls.is_empty(), "no guess failed");
     }
 
     fn list_of(values: Vec<Value>) -> Value {

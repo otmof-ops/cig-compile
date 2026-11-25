@@ -591,9 +591,9 @@ note: tool.cig is a stage b program: none of its loops would run faster as nativ
 
 - **A loop whose work is arithmetic** on ints, floats and bools:
   counters, sums, comparisons, `for i in a..b`, `while`, in any
-  function and at the top level; and **reads and writes of a list's
-  elements by an int** (`xs[i]`, `xs[i] = v`) where the elements are
-  numbers, bools or null. The loop's native code runs on the
+  function and at the top level; **reads and writes of a list's
+  elements by an int** (`xs[i]`, `xs[i] = v`) and **`for x in xs`**
+  where the elements are numbers, bools or null; and **`xs.push(v)`**. The loop's native code runs on the
   function's own registers, so it may sit beside anything: what it has
   no machine code for (a string, a list, a map, a builtin, a `try`, a
   `burn`) the interpreter runs.
