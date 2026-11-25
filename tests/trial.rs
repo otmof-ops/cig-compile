@@ -112,6 +112,7 @@ impl Sandbox {
             .env("TMPDIR", self.path())
             .env("NO_COLOR", "1")
             .env("CIG_SEAL_KEY", "file")
+            .env("CIG_ENGINE", "tree")
             .env("CIG_DOCTOR", "0")
             .env("CIG_REPORTS", "never")
             .env("CIG_INTERNAL_TRACKER_DIR", self.path().join("tracker"))

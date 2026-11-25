@@ -52,7 +52,7 @@ check() { # check <name> <script> <case> <steps separated by |, args space-separ
   for step in $steps; do
     i=$((i+1))
     IFS=' ' read -r -a args <<< "$step"
-    (cd "$ref" && env -i PATH=/usr/bin:/bin CIGSCRIPT_HOME="$ref/.home" NO_COLOR=1 CIG_DOCTOR=0 CIG_SEAL_KEY=file CIG_REPORTS=never \
+    (cd "$ref" && env -i PATH=/usr/bin:/bin CIGSCRIPT_HOME="$ref/.home" NO_COLOR=1 CIG_DOCTOR=0 CIG_SEAL_KEY=file CIG_ENGINE=tree CIG_REPORTS=never \
       "$rt" "${how[@]}" -- "${args[@]}" >"$tmp/r.out" 2>"$tmp/r.err"; echo $? >"$tmp/r.code") || true
     docker run --rm --network none --user "$(id -u):$(id -g)" --tmpfs /tmp \
       -v "$progs:/p:ro" -v "$box:/work" -w /work \

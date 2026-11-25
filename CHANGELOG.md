@@ -5,6 +5,27 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **The pinned cig moves to cig-script `da5cd6f`**, and the tests name
+  the tree-walker.
+  - **What a program gets from it.** A program runs on the runtime it
+    was built with, so these reach programs built from here on: a
+    function's native code is given up on its own steps, not the run's
+    (otmof-ops/cig-script#283); six bulk built-ins, `xs.repeat(n)`,
+    `xs.counts()`, `m.inc(key)`, `xs.count(x)`, `s.count(sub)` and
+    `xs.extend(ys)` (#284); a step counted by one subtraction and a
+    branch, with a step budget or without, and `for x in xs` in the
+    VM's fast loop, which is what runs a stage `b` program and
+    everything of a stage `c` program that has no machine code (#286).
+  - **The reference is named.** `cig run` now picks its engine by
+    itself (`auto`: the VM when a module is kept for the script, the
+    tree-walker when none is, with the module made for the next run
+    by a process left behind, #285). The differential suite's
+    reference is the tree-walker, so every harness here that runs the
+    interpreter says so (`CIG_ENGINE=tree`): the tests, `cigcompile
+    bench`'s interpreted side, `bench/bench.toml` and
+    `ci/nothing-installed.sh`. A compiled program is unchanged by the
+    setting: it never chooses an engine.
+
 - **Stage `c`: a loop's scratch registers are freed once, where the
   loop is entered** ([decision 0008](docs/decisions/0008-native-code-on-the-vms-frame.md),
   "A loop's scratch registers").
