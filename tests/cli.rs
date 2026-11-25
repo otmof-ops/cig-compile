@@ -1248,10 +1248,10 @@ fn stage_c_says_why_a_script_has_no_native_code() {
     let s = Sandbox::new();
     // No loop, no function.
     s.write("plain.cig", "exhale \"hi\"\n");
-    // A loop over a list: every turn is the interpreter's anyway.
+    // A loop that prints: every turn is the interpreter's anyway.
     s.write(
         "walk.cig",
-        "roll xs = [1, 2, 3]\nroll t = \"\"\nfor x in xs {\n  t = t + \"${x}\"\n}\nexhale t\n",
+        "roll xs = [1, 2, 3]\nfor x in xs {\n  exhale x\n}\n",
     );
     // A function on a string.
     s.write(
@@ -1271,7 +1271,7 @@ fn stage_c_says_why_a_script_has_no_native_code() {
         (
             "walk",
             "none of its loops would run faster as native code, and it has no function",
-            "123\n",
+            "1\n2\n3\n",
         ),
         (
             "text",

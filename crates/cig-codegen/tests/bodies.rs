@@ -168,7 +168,7 @@ fn fill_list() -> Module {
     ))
 }
 
-/// A loop of twenty proven adds, a list made and called:
+/// A loop of twenty proven adds, a value printed and called:
 ///
 /// ```text
 /// 0 loadint R0, 0      total
@@ -176,7 +176,7 @@ fn fill_list() -> Module {
 /// 4 forprep R1 -> 29
 /// 5 steps 1, 1         <- the loop
 /// 6..25 add R0, R0, R4
-/// 26 newlist R5        the interpreter's,
+/// 26 exhale R5         the interpreter's,
 /// 27 call R5           and the VM's
 /// 28 forloop R1 -> 5
 /// 29 ret R0
@@ -192,7 +192,7 @@ fn work_and_call() -> Module {
     ];
     code.extend(std::iter::repeat_n(Instr::abc(Op::ADD, 0, 0, 4), 20));
     code.extend([
-        Instr::abc(Op::NEWLIST, 5, 0, 0),
+        Instr::abc(Op::EXHALE, 5, 1, 0),
         Instr::abc(Op::CALL, 5, 0, 0),
         Instr::asbx(Op::FORLOOP, 1, -24),
         Instr::abc(Op::RET, 0, 0, 0),
@@ -280,6 +280,51 @@ fn a_loop_over_a_lists_items_and_a_loop_that_pushes_get_bodies() {
     let out = bodies(&push_all(), Rule::Loops, Arch::X86_64).expect("bodies");
     assert_eq!(out.bodies[0].resumes, vec![4]);
     assert_eq!(out.report[0].inline, (5, 10));
+}
+
+/// `fn(m) { t = 0; for i in 0..4 { t = t + m.x; m.y = t }; return t }`.
+///
+/// ```text
+/// 0 loadint R1, 0      t
+/// 1..3                 the window: 0, 4, 1
+/// 4 forprep R2 -> 10
+/// 5 steps 1, 1         <- the loop
+/// 6 getfield R6, R0, "x"
+/// 7 add R1, R1, R6
+/// 8 setfield R0, "y", R1
+/// 9 forloop R2 -> 5
+/// 10 ret R1
+/// ```
+fn sum_fields() -> Module {
+    let mut f = function(
+        7,
+        1,
+        vec![
+            Instr::asbx(Op::LOADINT, 1, 0),
+            Instr::asbx(Op::LOADINT, 2, 0),
+            Instr::asbx(Op::LOADINT, 3, 4),
+            Instr::asbx(Op::LOADINT, 4, 1),
+            Instr::asbx(Op::FORPREP, 2, 5),
+            steps(1, 1),
+            Instr::abc(Op::GETFIELD, 6, 0, 0),
+            Instr::abc(Op::ADD, 1, 1, 6),
+            Instr::abc(Op::SETFIELD, 0, 1, 1),
+            Instr::asbx(Op::FORLOOP, 2, -5),
+            Instr::abc(Op::RET, 1, 0, 0),
+        ],
+    );
+    f.constants = vec![
+        Constant::Str("x".to_string()),
+        Constant::Str("y".to_string()),
+    ];
+    module(f)
+}
+
+#[test]
+fn a_loop_that_reads_and_writes_a_maps_fields_gets_a_body() {
+    let out = bodies(&sum_fields(), Rule::Loops, Arch::X86_64).expect("bodies");
+    assert_eq!(out.bodies.len(), 1);
+    assert_eq!(out.bodies[0].resumes, vec![5], "entered at the loop");
 }
 
 /// A module whose top level only makes one function, `child`.
@@ -517,6 +562,21 @@ mod runs {
         clear_calls: Vec<u32>,
         /// `push`, `copy` and `clear` say they cannot, and do nothing.
         refuses: bool,
+        /// The pcs `quick` was asked to run, in order.
+        quick_calls: Vec<u32>,
+        /// What `quick` answers, one a call, in order, and the register
+        /// it writes first when it says it ran. When none is left it
+        /// answers 0, having done nothing: the interpreter is asked.
+        quick_returns: Vec<(u32, Option<(u32, Value)>)>,
+        /// The registers `fields` was asked for, in order. It answers
+        /// as the runtime does, from the map on the frame.
+        fields_calls: Vec<u32>,
+        /// What `elem` was asked for, in order. It does what the
+        /// runtime's does, on the frame.
+        elem_calls: Vec<(u32, u32, u32)>,
+        /// The function's site cells, one a pc: what its field
+        /// instructions last found, as the runtime keeps them.
+        sites: Vec<u64>,
         /// The frame the body runs on: where `list` finds a register.
         frame: Option<(*mut Value, usize)>,
     }
@@ -593,6 +653,57 @@ mod runs {
             self.regs()[reg as usize] = Value::Null;
             true
         }
+        fn fields(&mut self, ctx: &mut Context, reg: u32) -> bool {
+            self.fields_calls.push(reg);
+            let Value::Map(map) = &self.regs()[reg as usize] else {
+                return false;
+            };
+            let Ok(mut entries) = map.try_borrow_mut() else {
+                return false;
+            };
+            let shape = entries.shape();
+            if shape == cigscript::shape::NONE {
+                return false;
+            }
+            let mut values = entries.values_mut();
+            let Some(first) = values.next() else {
+                return false;
+            };
+            let first = first as *mut Value as u64;
+            let step = values
+                .next()
+                .map_or(0, |second| second as *mut Value as u64 - first);
+            ctx.left = first;
+            ctx.right = u64::from(shape) | step << 32;
+            true
+        }
+        fn quick(&mut self, _ctx: &mut Context, pc: u32) -> u32 {
+            self.quick_calls.push(pc);
+            if self.quick_returns.is_empty() {
+                return 0;
+            }
+            let (answer, write) = self.quick_returns.remove(0);
+            if let (1, Some((reg, value))) = (answer, write) {
+                self.regs()[reg as usize] = value;
+            }
+            answer
+        }
+        fn elem(&mut self, _ctx: &mut Context, dst: u32, list: u32, index: u32) -> bool {
+            self.elem_calls.push((dst, list, index));
+            let regs = self.regs();
+            let (Value::List(items), Value::Int(n)) = (&regs[list as usize], &regs[index as usize])
+            else {
+                return false;
+            };
+            let Some(v) = usize::try_from(*n)
+                .ok()
+                .and_then(|n| items.borrow().get(n).cloned())
+            else {
+                return false;
+            };
+            regs[dst as usize] = v;
+            true
+        }
     }
 
     /// `m`'s bodies under `rule` and `mode`, mapped and armed, with
@@ -644,20 +755,27 @@ mod runs {
         let mut ctx = Context::new(steps, 10);
         ctx.frame = frame.as_mut_ptr().cast();
         host.frame = Some((frame.as_mut_ptr(), frame.len()));
+        // A cell for every pc a test's function can have.
+        if host.sites.len() < 256 {
+            host.sites.resize(256, 0);
+        }
+        ctx.sites = host.sites.as_ptr();
         let stop = code
             .enter(0, at as u32, &mut ctx, host)
             .expect("a body and a resume point it has");
         (stop, ctx)
     }
 
-    /// Two lists made, then a number loaded, then a return.
-    fn two_lists() -> Module {
+    /// Two values printed, then a number loaded, then a return.
+    /// Printing is the interpreter's alone: the runtime does not run it
+    /// where the frame stands.
+    fn two_prints() -> Module {
         module(function(
             3,
             0,
             vec![
-                Instr::abc(Op::NEWLIST, 0, 0, 0),
-                Instr::abc(Op::NEWLIST, 1, 0, 0),
+                Instr::abc(Op::EXHALE, 0, 1, 0),
+                Instr::abc(Op::EXHALE, 1, 1, 0),
                 Instr::asbx(Op::LOADINT, 2, 7),
                 Instr::abc(Op::RET, 2, 0, 0),
             ],
@@ -840,10 +958,10 @@ mod runs {
 
     #[test]
     fn instructions_with_no_inline_form_are_one_run_of_the_interpreter() {
-        let (code, rows) = load(&two_lists(), Rule::Every, Mode::Promoted);
+        let (code, rows) = load(&two_prints(), Rule::Every, Mode::Promoted);
         let mut frame = vec![Value::Null, Value::Null, Value::Null];
         let mut host = Recording {
-            // The interpreter made both lists and stands after them.
+            // The interpreter printed both and stands after them.
             run_returns: vec![Stop::At(2)],
             ..Recording::default()
         };
@@ -926,12 +1044,12 @@ mod runs {
         assert!(rows[0].resumes.contains(&28), "{:?}", rows[0].resumes);
         let mut frame = working(0, 1);
         let mut host = Recording {
-            // The interpreter made the list and stands at the call.
+            // The interpreter printed and stands at the call.
             run_returns: vec![Stop::At(27)],
             ..Recording::default()
         };
         let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
-        assert_eq!(host.run_calls, vec![(26, 27)], "the list alone");
+        assert_eq!(host.run_calls, vec![(26, 27)], "the print alone");
         assert_eq!(stop, Stop::At(27), "the body is left at the call");
         // The same function with its registers held carries the call.
         let (code, rows) = load(&work_and_call(), Rule::Every, Mode::Promoted);
@@ -941,7 +1059,7 @@ mod runs {
             ..Recording::default()
         };
         let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
-        assert_eq!(host.run_calls, vec![(26, 28)], "the list and the call");
+        assert_eq!(host.run_calls, vec![(26, 28)], "the print and the call");
         assert_eq!(stop, Stop::At(27));
     }
 
@@ -1068,10 +1186,12 @@ mod runs {
     }
 
     #[test]
-    fn an_item_that_owns_memory_and_a_window_that_is_no_list_are_the_interpreters() {
+    fn an_item_that_owns_memory_is_the_runtimes_and_a_window_that_is_no_list_the_interpreters() {
         let (code, rows) = load(&count_true(), Rule::Loops, Mode::Promoted);
-        // A string among the items: only the interpreter shares it. It
-        // is scripted to leave the loop.
+        // A string among the items: only the runtime shares it, and it
+        // puts it in the item's register. The loop goes on in machine
+        // code, to the `testn` of the string, which is the
+        // interpreter's (scripted to leave the loop).
         let items = list_of(vec![Value::Bool(true), Value::Str("s".into())]);
         let mut frame = counting(items, 0, 0);
         let mut host = Recording {
@@ -1079,11 +1199,17 @@ mod runs {
             ..Recording::default()
         };
         let (stop, _) = enter(&code, &rows, 4, &mut frame, 1_000, &mut host);
-        assert_eq!(host.again_calls, vec![4], "the `iternext`, at the string");
+        assert_eq!(host.elem_calls, vec![(5, 3, 4)], "the string, by `elem`");
+        assert_eq!(host.again_calls, vec![6], "the `testn`, at the string");
         assert_eq!(stop, Stop::At(9));
         assert!(matches!(frame[1], Value::Int(1)), "{}", frame[1].repr());
         assert!(
-            matches!(frame[4], Value::Int(1)),
+            matches!(&frame[5], Value::Str(s) if &**s == "s"),
+            "{}",
+            frame[5].repr()
+        );
+        assert!(
+            matches!(frame[4], Value::Int(2)),
             "the count was the frame's when the interpreter was asked: {}",
             frame[4].repr()
         );
@@ -1361,6 +1487,221 @@ mod runs {
             vec![0, 0],
             "asked again after the interpreter ran"
         );
+    }
+
+    /// A map with these fields, in this order, as a script's literal
+    /// makes it: it has their shape.
+    fn record(fields: &[(&str, Value)]) -> Value {
+        let mut entries = cigscript::shape::Entries::new();
+        for (name, value) in fields {
+            entries.add_field(name, value.clone());
+        }
+        Value::record(entries)
+    }
+
+    fn shape_of(v: &Value) -> u32 {
+        match v {
+            Value::Map(m) => m.borrow().shape(),
+            other => panic!("not a map: {}", other.repr()),
+        }
+    }
+
+    fn field(v: &Value, name: &str) -> String {
+        match v {
+            Value::Map(m) => m.borrow().get(name).map_or("none".to_string(), Value::repr),
+            other => panic!("not a map: {}", other.repr()),
+        }
+    }
+
+    /// The frame of `sum_fields` at the loop's start, turn `i`.
+    fn summing_fields(m: Value, total: Value, i: i64) -> Vec<Value> {
+        vec![
+            m,
+            total,
+            Value::Int(i),
+            Value::Int(4),
+            Value::Int(1),
+            Value::Int(i),
+            Value::Null,
+        ]
+    }
+
+    /// What the runtime keeps at a field instruction that found its
+    /// field at `place` of a map of shape `shape`.
+    fn found(shape: u32, place: u32) -> u64 {
+        u64::from(shape) << 32 | u64::from(place)
+    }
+
+    #[test]
+    fn a_field_is_read_and_written_where_it_lies_once_its_site_knows_the_maps_shape() {
+        for mode in [Mode::Promoted, Mode::Frame, Mode::Checked] {
+            let (code, rows) = load(&sum_fields(), Rule::Loops, mode);
+            let m = record(&[("x", Value::Float(2.5)), ("y", Value::Int(0))]);
+            let shape = shape_of(&m);
+            assert_ne!(shape, cigscript::shape::NONE);
+            let mut frame = summing_fields(m.clone(), Value::Int(0), 0);
+            // The `getfield` found `x` at place 0 of this shape before,
+            // and the `setfield` found `y` at place 1.
+            let mut sites = vec![0; 256];
+            sites[6] = found(shape, 0);
+            sites[8] = found(shape, 1);
+            let mut host = Recording {
+                sites,
+                ..Recording::default()
+            };
+            let (stop, ctx) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+            assert_eq!(stop, Stop::At(10), "{mode:?}");
+            assert!(
+                matches!(frame[1], Value::Float(v) if v == 10.0),
+                "{mode:?}: {}",
+                frame[1].repr()
+            );
+            assert_eq!(field(&m, "y"), "10.0", "{mode:?}: the last total, in place");
+            assert_eq!(field(&m, "x"), "2.5", "{mode:?}");
+            assert_eq!(ctx.steps_left, 996, "{mode:?}");
+            // Four reads and four writes, one question: nothing moved
+            // the map's values in between, so they stayed in view.
+            assert_eq!(host.fields_calls, vec![0], "{mode:?}");
+            assert!(
+                host.quick_calls.is_empty(),
+                "{mode:?}: {:?}",
+                host.quick_calls
+            );
+            assert!(host.again_calls.is_empty() && host.run_calls.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_field_whose_site_has_not_seen_the_maps_shape_is_the_runtimes_to_find() {
+        let (code, rows) = load(&sum_fields(), Rule::Loops, Mode::Promoted);
+        let m = record(&[("x", Value::Float(2.5)), ("y", Value::Int(0))]);
+        let shape = shape_of(&m);
+        let mut frame = summing_fields(m.clone(), Value::Int(0), 0);
+        // The cells are zero: no shape. The runtime runs each field
+        // instruction where the frame stands (scripted: the read puts
+        // 2.5 in `R6`; the write is said to be done), and that is no
+        // failed guess.
+        let turn = |n: usize| -> Vec<(u32, Option<(u32, Value)>)> {
+            (0..n)
+                .flat_map(|_| [(1, Some((6, Value::Float(2.5)))), (1, None)])
+                .collect()
+        };
+        let mut host = Recording {
+            quick_returns: turn(4),
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(10));
+        assert_eq!(host.quick_calls, vec![6, 8, 6, 8, 6, 8, 6, 8]);
+        assert!(host.again_calls.is_empty(), "{:?}", host.again_calls);
+        assert!(matches!(frame[1], Value::Float(v) if v == 10.0));
+        // The map stayed in view through all of it: the runtime wrote
+        // a register and a value, and moved nothing.
+        assert_eq!(host.fields_calls, vec![0]);
+        // A site that knows another shape is no better off: the same
+        // fields in another order are another map to it.
+        let other = record(&[("y", Value::Int(0)), ("x", Value::Float(2.5))]);
+        assert_ne!(shape_of(&other), shape);
+        let mut frame = summing_fields(other, Value::Int(0), 3);
+        let mut sites = vec![0; 256];
+        sites[6] = found(shape, 0);
+        sites[8] = found(shape, 1);
+        let mut host = Recording {
+            quick_returns: turn(1),
+            sites,
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(10));
+        assert_eq!(host.quick_calls, vec![6, 8]);
+    }
+
+    #[test]
+    fn what_a_field_form_does_not_cover_is_the_runtimes_and_then_the_interpreters() {
+        let (code, rows) = load(&sum_fields(), Rule::Loops, Mode::Promoted);
+        let sites = |shape: u32| {
+            let mut cells = vec![0; 256];
+            cells[6] = found(shape, 0);
+            cells[8] = found(shape, 1);
+            cells
+        };
+        // A string in the field: shared by a count only the runtime
+        // keeps. It is asked; scripted to do nothing, so the
+        // interpreter runs the read, and is scripted to leave the loop.
+        let m = record(&[("x", Value::Str("s".into())), ("y", Value::Int(0))]);
+        let mut frame = summing_fields(m.clone(), Value::Int(0), 3);
+        let mut host = Recording {
+            again_returns: vec![Stop::At(10)],
+            sites: sites(shape_of(&m)),
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(10));
+        assert_eq!((host.quick_calls, host.again_calls), (vec![6], vec![6]));
+        // A string where the write goes: the runtime frees it.
+        let m = record(&[("x", Value::Float(1.0)), ("y", Value::Str("old".into()))]);
+        let mut frame = summing_fields(m.clone(), Value::Int(0), 3);
+        let mut host = Recording {
+            quick_returns: vec![(1, None)],
+            sites: sites(shape_of(&m)),
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(10));
+        assert_eq!(
+            host.quick_calls,
+            vec![8],
+            "the write alone: the read was inline"
+        );
+        // No shape (a key was taken out of the map): nothing is in
+        // view, and each field is the runtime's.
+        let mut entries = cigscript::shape::Entries::new();
+        for (name, value) in [
+            ("z", Value::Null),
+            ("x", Value::Float(1.0)),
+            ("y", Value::Int(0)),
+        ] {
+            entries.add_field(name, value);
+        }
+        entries.shift_remove("z");
+        assert_eq!(entries.shape(), cigscript::shape::NONE);
+        let mut frame = summing_fields(Value::record(entries), Value::Int(0), 3);
+        let mut host = Recording {
+            quick_returns: vec![(1, Some((6, Value::Float(1.0)))), (1, None)],
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(10));
+        assert_eq!(host.quick_calls, vec![6, 8]);
+        assert_eq!(host.fields_calls, vec![0, 0], "asked at each, and refused");
+        // What is no map at all: the runtime does nothing, and the
+        // interpreter raises its error.
+        let mut frame = summing_fields(Value::Int(3), Value::Int(0), 3);
+        let mut host = Recording {
+            again_returns: vec![Stop::Raised(6)],
+            ..Recording::default()
+        };
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::Raised(6));
+        assert_eq!((host.quick_calls, host.again_calls), (vec![6], vec![6]));
+    }
+
+    #[test]
+    fn an_instruction_the_runtime_raised_in_ends_the_body_with_its_error() {
+        let (code, rows) = load(&sum_fields(), Rule::Loops, Mode::Promoted);
+        let m = record(&[("x", Value::Float(2.5)), ("y", Value::Int(0))]);
+        let mut frame = summing_fields(m, Value::Int(7), 1);
+        let mut host = Recording {
+            quick_returns: vec![(2, None)],
+            ..Recording::default()
+        };
+        let (stop, ctx) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        // The read at pc 6 raised: the body returns that, with the
+        // frame whole and the steps it took counted.
+        assert_eq!(stop, Stop::Raised(6));
+        assert!(host.again_calls.is_empty());
+        assert!(matches!(frame[1], Value::Int(7)), "{}", frame[1].repr());
+        assert_eq!(ctx.steps_left, 999);
     }
 
     #[test]

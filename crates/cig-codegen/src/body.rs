@@ -90,8 +90,12 @@ const HLP_LIST: i32 = core::mem::offset_of!(cig_native::Helpers, list) as i32;
 const HLP_PUSH: i32 = core::mem::offset_of!(cig_native::Helpers, push) as i32;
 const HLP_COPY: i32 = core::mem::offset_of!(cig_native::Helpers, copy) as i32;
 const HLP_CLEAR: i32 = core::mem::offset_of!(cig_native::Helpers, clear) as i32;
+const HLP_FIELDS: i32 = core::mem::offset_of!(cig_native::Helpers, fields) as i32;
+const HLP_QUICK: i32 = core::mem::offset_of!(cig_native::Helpers, quick) as i32;
+const HLP_ELEM: i32 = core::mem::offset_of!(cig_native::Helpers, elem) as i32;
 const CTX_LEFT: i32 = core::mem::offset_of!(cig_native::Context, left) as i32;
 const CTX_RIGHT: i32 = core::mem::offset_of!(cig_native::Context, right) as i32;
+const CTX_SITES: i32 = core::mem::offset_of!(cig_native::Context, sites) as i32;
 
 /// The widest counted loop the interpreter runs (`range_fits`): a wider
 /// one is the interpreter's to refuse.
@@ -456,6 +460,30 @@ fn compile_one(
         b.def_var(view.count, zero);
         views.insert(list, view);
     }
+    // And one for each register a native field form takes its map from.
+    let mut maps = BTreeMap::new();
+    for d in code.iter().flatten() {
+        let map = match d.op {
+            Op::GETFIELD => d.b_u,
+            Op::SETFIELD => d.a,
+            _ => continue,
+        };
+        if plan.how(d.pc) != How::Native || maps.contains_key(&map) {
+            continue;
+        }
+        let view = MapView {
+            known: b.declare_var(types::I8),
+            first: b.declare_var(ptr),
+            shape: b.declare_var(types::I64),
+            step: b.declare_var(types::I64),
+        };
+        let no = b.ins().iconst(types::I8, 0);
+        b.def_var(view.known, no);
+        b.def_var(view.first, null);
+        b.def_var(view.shape, zero);
+        b.def_var(view.step, zero);
+        maps.insert(map, view);
+    }
 
     let blocks: BTreeMap<u32, CbBlock> = plan
         .leaders
@@ -478,6 +506,7 @@ fn compile_one(
         copy_sig,
         clear_sig,
         views,
+        maps,
         ctx,
         frame,
         steps,
@@ -621,6 +650,18 @@ struct View {
     count: Variable,
 }
 
+/// A map's values as machine code has them in view: the runtime said
+/// where the first lies, how far each is from the last, and which shape
+/// the map has. It holds as long as a list's view does.
+#[derive(Clone, Copy)]
+struct MapView {
+    /// 1 while the three below hold.
+    known: Variable,
+    first: Variable,
+    shape: Variable,
+    step: Variable,
+}
+
 /// An edge block: the block, the registers it writes to the frame
 /// (each with the type it is held as), and the block it goes on to.
 type EdgeBlock = (CbBlock, Vec<(u32, Ty)>, CbBlock);
@@ -641,6 +682,8 @@ struct Emit<'a> {
     clear_sig: SigRef,
     /// The view of each register a native index form takes a list from.
     views: BTreeMap<u32, View>,
+    /// The view of each register a native field form takes a map from.
+    maps: BTreeMap<u32, MapView>,
     ctx: Variable,
     frame: Variable,
     steps: Variable,
@@ -969,7 +1012,37 @@ impl Emit<'_> {
         let index = self.index_of(b, x, fb);
         // The value, as a tag and a payload.
         let v = self.operand(b, pc, d.c);
-        let (tag, payload) = match v {
+        let (tag, payload) = self.plain_value(b, v, fb);
+        let at = self.element(b, d.a, index, fb)?;
+        let old = b.ins().load(types::I8, flags(), at, value::TAG as i32);
+        let owns = b.ins().icmp_imm_s(
+            IntCC::UnsignedGreaterThanOrEqual,
+            old,
+            i64::from(value::OWNS),
+        );
+        let plain = b.create_block();
+        b.ins().brif(owns, fb, &[], plain, &[]);
+        b.switch_to_block(plain);
+        b.ins().store(flags(), tag, at, value::TAG as i32);
+        if let Some(p) = payload {
+            b.ins().store(flags(), p, at, value::PAYLOAD as i32);
+        }
+        b.ins().jump(join, &[]);
+        self.fall_back(b, d, fb, join)?;
+        b.switch_to_block(join);
+        Ok(())
+    }
+
+    /// A value to store where one lies, as its tag and its payload
+    /// (none for null): to `fb` when it owns memory, which only the
+    /// runtime shares.
+    fn plain_value(
+        &mut self,
+        b: &mut FunctionBuilder,
+        v: Opd,
+        fb: CbBlock,
+    ) -> (CbValue, Option<CbValue>) {
+        match v {
             Opd::Null => (b.ins().iconst(types::I8, i64::from(value::NULL)), None),
             Opd::Bool(x) => (
                 b.ins().iconst(types::I8, i64::from(value::BOOL)),
@@ -989,8 +1062,131 @@ impl Emit<'_> {
                 b.switch_to_block(plain);
                 (t, Some(self.bits(b, r)))
             }
-        };
-        let at = self.element(b, d.a, index, fb)?;
+        }
+    }
+
+    /// The address of the value the field instruction at `pc` names, in
+    /// the map in register `r`: to `fb` when the register holds no map
+    /// that has a shape, or the instruction has not found its field in
+    /// a map of that shape yet.
+    ///
+    /// The runtime says where the map's values lie, how far each is
+    /// from the last, and which shape the map has (`fields`, asked when
+    /// they are not in view). Maps of one shape have the same keys in
+    /// the same places, and the function keeps, for each field
+    /// instruction, the shape of the last map it found its field in
+    /// and the field's place there (`ctx.sites`, written by the runtime
+    /// when it runs the instruction). When that shape is this map's,
+    /// the value is at that place: one compare, with no key looked at.
+    fn site(
+        &mut self,
+        b: &mut FunctionBuilder,
+        pc: u32,
+        r: u32,
+        fb: CbBlock,
+    ) -> Result<CbValue, String> {
+        let view = *self
+            .maps
+            .get(&r)
+            .ok_or_else(|| format!("no view was made for the map in register {r}"))?;
+        let cell = pc
+            .checked_mul(8)
+            .and_then(|at| i32::try_from(at).ok())
+            .ok_or("a function too long for its field sites")?;
+        let have = b.create_block();
+        let ask = b.create_block();
+        let known = b.use_var(view.known);
+        b.ins().brif(known, have, &[], ask, &[]);
+        b.switch_to_block(ask);
+        b.set_cold_block(ask);
+        let reg = b.ins().iconst(types::I32, i64::from(r));
+        let got = self.helper(b, HLP_FIELDS, self.clear_sig, &[reg]);
+        let yes = b.create_block();
+        b.ins().brif(got, yes, &[], fb, &[]);
+        b.switch_to_block(yes);
+        let ctx = b.use_var(self.ctx);
+        let first = b.ins().load(self.ptr, flags(), ctx, CTX_LEFT);
+        let right = b.ins().load(types::I64, flags(), ctx, CTX_RIGHT);
+        let low = b.ins().ireduce(types::I32, right);
+        let shape = b.ins().uextend(types::I64, low);
+        let step = b.ins().ushr_imm_u(right, 32);
+        b.def_var(view.first, first);
+        b.def_var(view.shape, shape);
+        b.def_var(view.step, step);
+        let one = b.ins().iconst(types::I8, 1);
+        b.def_var(view.known, one);
+        b.ins().jump(have, &[]);
+        b.switch_to_block(have);
+        // What the instruction last found: the shape in the high half,
+        // the place in the low. Zero, no shape, until it found one.
+        let ctx = b.use_var(self.ctx);
+        let sites = b.ins().load(self.ptr, flags(), ctx, CTX_SITES);
+        let found = b.ins().load(types::I64, flags(), sites, cell);
+        let of = b.ins().ushr_imm_u(found, 32);
+        let shape = b.use_var(view.shape);
+        let same = b.ins().icmp(IntCC::Equal, of, shape);
+        let ok = b.create_block();
+        b.ins().brif(same, ok, &[], fb, &[]);
+        b.switch_to_block(ok);
+        let low = b.ins().ireduce(types::I32, found);
+        let place = b.ins().uextend(types::I64, low);
+        let step = b.use_var(view.step);
+        let offset = b.ins().imul(place, step);
+        let first = b.use_var(view.first);
+        Ok(b.ins().iadd(first, offset))
+    }
+
+    /// `getfield A, B, K`: `R(A) = R(B).K` for a map of the shape the
+    /// instruction last found the field in, and a value that owns no
+    /// memory: the value is copied from where it lies. Anything else
+    /// is the runtime's: a map of another shape or of none (it finds
+    /// the field, and the instruction learns the shape), a value that
+    /// is a string, a list or a map (it is shared), what is no map and
+    /// a map without the field (the interpreter's error).
+    fn getfield(&mut self, b: &mut FunctionBuilder, d: &DecodedInstr) -> Result<(), String> {
+        let pc = d.pc;
+        let fb = b.create_block();
+        let join = b.create_block();
+        let at = self.site(b, pc, d.b_u, fb)?;
+        let tag = b.ins().load(types::I8, flags(), at, value::TAG as i32);
+        let owns = b.ins().icmp_imm_s(
+            IntCC::UnsignedGreaterThanOrEqual,
+            tag,
+            i64::from(value::OWNS),
+        );
+        let plain = b.create_block();
+        b.ins().brif(owns, fb, &[], plain, &[]);
+        b.switch_to_block(plain);
+        let bits = b.ins().load(types::I64, flags(), at, value::PAYLOAD as i32);
+        // The value is read before `R(A)` is made ready: `R(A)` may
+        // hold the map itself (`x = x.n`), and clearing it may free it.
+        self.over(b, pc, d.a, fb);
+        // The type pass has `R(A)` as anything after a read: it is in
+        // the frame.
+        let frame = b.use_var(self.frame);
+        let to = Self::slot(d.a);
+        b.ins().store(flags(), tag, frame, to + value::TAG as i32);
+        b.ins()
+            .store(flags(), bits, frame, to + value::PAYLOAD as i32);
+        b.ins().jump(join, &[]);
+        self.fall_back(b, d, fb, join)?;
+        b.switch_to_block(join);
+        Ok(())
+    }
+
+    /// `setfield A, K, C`: `R(A).K = R(C)` for a map of the shape the
+    /// instruction last found the field in, a value that owns no
+    /// memory and a field that holds one that owns none (so nothing is
+    /// freed and nothing shared): the value is stored where the
+    /// field's lies. A field the map does not have yet is the
+    /// interpreter's to add.
+    fn setfield(&mut self, b: &mut FunctionBuilder, d: &DecodedInstr) -> Result<(), String> {
+        let pc = d.pc;
+        let fb = b.create_block();
+        let join = b.create_block();
+        let v = self.operand(b, pc, d.c);
+        let (tag, payload) = self.plain_value(b, v, fb);
+        let at = self.site(b, pc, d.a, fb)?;
         let old = b.ins().load(types::I8, flags(), at, value::TAG as i32);
         let owns = b.ins().icmp_imm_s(
             IntCC::UnsignedGreaterThanOrEqual,
@@ -1006,6 +1202,55 @@ impl Emit<'_> {
         }
         b.ins().jump(join, &[]);
         self.fall_back(b, d, fb, join)?;
+        b.switch_to_block(join);
+        Ok(())
+    }
+
+    /// `callb A, math.sqrt, 1`: `R(A) = math.sqrt(R(A+1))` for a number
+    /// that is not below zero: the machine's square root of it as a
+    /// float, which is what the builtin gives. Anything else is the
+    /// runtime's: a number below zero (the builtin's error), what is no
+    /// number.
+    fn sqrt(&mut self, b: &mut FunctionBuilder, d: &DecodedInstr) -> Result<(), String> {
+        let (pc, next) = (d.pc, d.pc + d.width);
+        let fb = b.create_block();
+        let join = b.create_block();
+        let x = self.operand(b, pc, d.a + 1);
+        match self.is_number(b, x) {
+            Cond::Always => {}
+            Cond::If(c) => {
+                let ok = b.create_block();
+                b.ins().brif(c, ok, &[], fb, &[]);
+                b.switch_to_block(ok);
+            }
+            Cond::Never => {
+                let dead = b.create_block();
+                b.ins().jump(fb, &[]);
+                b.switch_to_block(dead);
+            }
+        }
+        let v = self.float_of(b, x);
+        let zero = b.ins().f64const(0.0);
+        // Not a number (NaN) is not below zero: the builtin gives its
+        // root, which is not a number either.
+        let below = b.ins().fcmp(FloatCC::LessThan, v, zero);
+        let ok = b.create_block();
+        b.ins().brif(below, fb, &[], ok, &[]);
+        b.switch_to_block(ok);
+        let root = b.ins().sqrt(v);
+        self.put(b, pc, next, d.a, fb, Opd::Float(root));
+        b.ins().jump(join, &[]);
+        self.fall_back(b, d, fb, join)?;
+        b.switch_to_block(join);
+        Ok(())
+    }
+
+    /// An instruction with no inline form that the runtime runs where
+    /// the frame stands ([`Emit::quick`]), and the interpreter when the
+    /// runtime does not.
+    fn quick_form(&mut self, b: &mut FunctionBuilder, d: &DecodedInstr) -> Result<(), String> {
+        let join = b.create_block();
+        self.fall_back_here(b, d, join)?;
         b.switch_to_block(join);
         Ok(())
     }
@@ -1464,14 +1709,23 @@ impl Emit<'_> {
             let no = b.ins().iconst(types::I8, 0);
             b.def_var(view.known, no);
         }
+        if let Some(view) = self.maps.get(&r) {
+            let no = b.ins().iconst(types::I8, 0);
+            b.def_var(view.known, no);
+        }
     }
 
     /// No list is where machine code last saw it (the runtime added to
     /// one, which may have moved its elements).
     fn forget_views(&self, b: &mut FunctionBuilder) {
-        for view in self.views.values() {
+        for known in self
+            .views
+            .values()
+            .map(|v| v.known)
+            .chain(self.maps.values().map(|v| v.known))
+        {
             let no = b.ins().iconst(types::I8, 0);
-            b.def_var(view.known, no);
+            b.def_var(known, no);
         }
     }
 
@@ -1506,6 +1760,56 @@ impl Emit<'_> {
         self.write(b, pc, to, r, v);
     }
 
+    // ----- the runtime, for one instruction ---------------------------------
+
+    /// Have the runtime run the instruction `d` where the frame stands
+    /// (`quick`): on in `join` when it ran, the error returned when the
+    /// instruction raised, and on to `none` when the runtime did
+    /// nothing.
+    ///
+    /// The runtime reads the instruction's registers from the frame, so
+    /// what machine code holds is written there first. It runs no other
+    /// instruction and counts no step, so the frame's address and the
+    /// steps left stand; what the instruction wrote is read back where
+    /// the next instruction holds it in a machine register.
+    fn quick(
+        &mut self,
+        b: &mut FunctionBuilder,
+        d: &DecodedInstr,
+        none: CbBlock,
+        join: CbBlock,
+    ) -> Result<(), String> {
+        let (pc, next) = (d.pc, d.pc + d.width);
+        self.sync(b, pc);
+        let at = b.ins().iconst(types::I32, i64::from(pc));
+        let done = self.helper(b, HLP_QUICK, self.clear_sig, &[at]);
+        // What it may have added to or taken from is no longer where
+        // machine code saw it; otherwise only what it wrote is not.
+        if moves(d.op) {
+            self.forget_views(b);
+        } else {
+            for (r, _) in typed::writes(d).regs {
+                self.forget_view(b, r);
+            }
+        }
+        let ran = b.create_block();
+        let not = b.create_block();
+        let one = b.ins().icmp_imm_s(IntCC::Equal, done, 1);
+        b.ins().brif(one, ran, &[], not, &[]);
+        b.switch_to_block(not);
+        b.set_cold_block(not);
+        let raised = b.create_block();
+        let two = b.ins().icmp_imm_s(IntCC::Equal, done, 2);
+        b.ins().brif(two, raised, &[], none, &[]);
+        b.switch_to_block(raised);
+        b.set_cold_block(raised);
+        self.flush_steps(b);
+        let bits = b.ins().iconst(types::I64, Stop::Raised(pc).bits() as i64);
+        b.ins().return_(&[bits]);
+        b.switch_to_block(ran);
+        self.after_run(b, pc, next, next, join)
+    }
+
     // ----- the fall back -----------------------------------------------------
 
     /// Fill `fb`: the interpreter runs the instruction (`again`), then
@@ -1522,7 +1826,33 @@ impl Emit<'_> {
     ) -> Result<(), String> {
         b.switch_to_block(fb);
         b.set_cold_block(fb);
+        self.fall_back_here(b, d, join)
+    }
+
+    /// [`Emit::fall_back`] in the block being filled. Before the
+    /// interpreter, the runtime is asked to run the instruction where
+    /// the frame stands ([`Emit::quick`]), which it can for most of
+    /// what an inline form does not cover: a string where a number was
+    /// guessed, a value that owns memory, a map of another shape. That
+    /// is no failed guess, and costs a call; only what the runtime does
+    /// not run that way either is the interpreter's.
+    fn fall_back_here(
+        &mut self,
+        b: &mut FunctionBuilder,
+        d: &DecodedInstr,
+        join: CbBlock,
+    ) -> Result<(), String> {
         let (pc, next) = (d.pc, d.pc + d.width);
+        // Not for a form whose types are proven: what that does not
+        // cover (an overflow, a zero divisor) the runtime's fast path
+        // does not either.
+        let proven = class_of(self.f, self.flow, self.types, self.code, d) == Class::Sure;
+        if self.flow.cells.is_empty() && quick_runs(d.op) && !proven {
+            let none = b.create_block();
+            self.quick(b, d, none, join)?;
+            b.switch_to_block(none);
+            b.set_cold_block(none);
+        }
         let stop = self.again(b, pc);
         let mut exits = Vec::new();
         // The interpreter goes on past the `nop`s after an index
@@ -1568,6 +1898,14 @@ impl Emit<'_> {
                 let nest = b.ins().iconst(types::I32, i64::from(d.a));
                 b.ins().store(flags(), nest, ctx, CTX_NEST);
                 Ok(())
+            }
+            Op::LOADK
+                if !matches!(
+                    self.constant(d.b_u),
+                    Some(Constant::Bool(_) | Constant::Int(_) | Constant::Float(_))
+                ) =>
+            {
+                self.quick_form(b, d)
             }
             Op::LOADNULL | Op::LOADBOOL | Op::LOADINT | Op::LOADK => {
                 let v = match d.op {
@@ -1675,8 +2013,12 @@ impl Emit<'_> {
             Op::FORLOOP => self.forloop(b, d),
             Op::GETINDEX => self.getindex(b, d),
             Op::SETINDEX => self.setindex(b, d),
+            Op::GETFIELD => self.getfield(b, d),
+            Op::SETFIELD => self.setfield(b, d),
             Op::ITERNEXT => self.iternext(b, d),
-            Op::CALLM => self.push(b, d),
+            Op::CALLM if is_push(self.f, d) => self.push(b, d),
+            Op::CALLB if is_sqrt(d) => self.sqrt(b, d),
+            _ if quick_runs(d.op) => self.quick_form(b, d),
             other => Err(format!("{other:?} has no inline form")),
         }
     }
@@ -2398,7 +2740,9 @@ impl Emit<'_> {
             i64::from(value::OWNS),
         );
         let plain = b.create_block();
-        b.ins().brif(owns, fb, &[], plain, &[]);
+        let shared = b.create_block();
+        let stored = b.create_block();
+        b.ins().brif(owns, shared, &[], plain, &[]);
         b.switch_to_block(plain);
         let bits = b
             .ins()
@@ -2410,6 +2754,19 @@ impl Emit<'_> {
         b.ins().store(flags(), tag, frame, to + value::TAG as i32);
         b.ins()
             .store(flags(), bits, frame, to + value::PAYLOAD as i32);
+        b.ins().jump(stored, &[]);
+        // An item that owns memory is shared by a count the runtime
+        // keeps: it puts the item in its register (`elem`), reading
+        // the list and the count from the frame.
+        b.switch_to_block(shared);
+        self.store(b, d.a + 2, Opd::Int(at));
+        let dst = b.ins().iconst(types::I32, i64::from(d.a + 3));
+        let list = b.ins().iconst(types::I32, i64::from(d.a + 1));
+        let index = b.ins().iconst(types::I32, i64::from(d.a + 2));
+        let done = self.helper(b, HLP_ELEM, self.push_sig, &[dst, list, index]);
+        self.forget_view(b, d.a + 3);
+        b.ins().brif(done, stored, &[], fb, &[]);
+        b.switch_to_block(stored);
         let n = b.ins().iadd_imm_s(at, 1);
         self.write(b, pc, next, d.a + 2, Opd::Int(n));
         let on = self.edge_into(b, pc, next, join);
@@ -2443,6 +2800,62 @@ impl Emit<'_> {
     }
 }
 
+/// Whether the runtime may be asked to run an instruction of this kind
+/// where the frame stands (`quick`): one that goes on at the next
+/// instruction and nowhere else, counts no step and ends no frame. The
+/// runtime has the same list and the last word: it answers 0 for
+/// anything it does not run that way.
+fn quick_runs(op: Op) -> bool {
+    !matches!(
+        op,
+        Op::JMP
+            | Op::LOOP
+            | Op::EQJ
+            | Op::NEJ
+            | Op::LTJ
+            | Op::LEJ
+            | Op::TEST
+            | Op::TESTN
+            | Op::TESTSET
+            | Op::STEPS
+            | Op::FORPREP
+            | Op::FORLOOP
+            | Op::ITERPREP
+            | Op::ITERNEXT
+            | Op::CALL
+            | Op::TAILCALL
+            | Op::RET
+            | Op::WIDE
+    )
+}
+
+/// Whether an instruction the runtime runs may add to a list or a map
+/// or take from one, so that nothing is where machine code last saw
+/// it: a call of a builtin or a method, an element or a key added, a
+/// store by an index (a map's may add its key).
+fn moves(op: Op) -> bool {
+    matches!(
+        op,
+        Op::CALLB | Op::CALLM | Op::APPENDLIST | Op::INSERTMAP | Op::SETINDEX
+    )
+}
+
+/// The methods that call a script's function, which the runtime does
+/// not run where the frame stands.
+const CALLS_BACK: [&str; 8] = [
+    "map", "filter", "reduce", "each", "any", "all", "find", "sort_by",
+];
+
+/// Whether `d` calls `math.sqrt` with one argument: the one builtin
+/// machine code has a form for, a machine instruction.
+fn is_sqrt(d: &DecodedInstr) -> bool {
+    d.op == Op::CALLB
+        && d.c == 1
+        && cigscript::stdlib::builtin_catalogue()
+            .get(d.b_u as usize)
+            .is_some_and(|builtin| builtin.name == "math.sqrt")
+}
+
 /// Whether `d` is a method call machine code has a form for: a `push`
 /// of one value (`xs.push(v)`), which a list answers.
 fn is_push(f: &BcFunction, d: &DecodedInstr) -> bool {
@@ -2472,9 +2885,9 @@ fn item_class(code: &[Option<DecodedInstr>], d: &DecodedInstr) -> Class {
         };
         let is = |r: u32| names.contains(&r);
         match i.op {
-            Op::GETFIELD | Op::GETINDEX if is(i.b_u) => return Class::Interp,
+            Op::GETFIELD | Op::GETINDEX if is(i.b_u) => return Class::Index(0),
             Op::SETFIELD | Op::SETINDEX | Op::CALLM | Op::CALL | Op::TAILCALL if is(i.a) => {
-                return Class::Interp
+                return Class::Index(0)
             }
             Op::SUB | Op::MUL | Op::DIV | Op::MOD | Op::LT | Op::LE if is(i.b_u) || is(i.c) => {
                 number = true
@@ -2554,12 +2967,18 @@ fn class_of(
     };
     let number = |t: Ty| matches!(t, Ty::Int | Ty::Float);
     let no_number = |t: Ty| matches!(t, Ty::Null | Ty::Bool);
+    // The runtime runs an instruction where the frame stands only in a
+    // function none of whose registers carries a cell.
+    let quick = |moves: bool, direct: bool| match flow.cells.is_empty() {
+        true => Class::Quick { moves, direct },
+        false => Class::Interp,
+    };
     match d.op {
         Op::NOP | Op::JMP | Op::LOOP | Op::STEPS => Class::Sure,
         Op::LOADNULL | Op::LOADBOOL | Op::LOADINT => dst(d.a),
         Op::LOADK => match konst(d.b_u) {
             Some(_) => dst(d.a),
-            None => Class::Interp,
+            None => quick(false, true),
         },
         Op::MOV if d.a == d.b_u => Class::Sure,
         Op::MOV => match ty(d.b_u) {
@@ -2686,8 +3105,35 @@ fn class_of(
         },
         // The next item of a `for` loop over a list.
         Op::ITERNEXT => item_class(code, d),
+        // A map's field: most often a number in a record a loop makes
+        // or walks, at a site that sees one shape.
+        Op::GETFIELD => Class::Field(85),
+        Op::SETFIELD => match ty(d.c) {
+            Ty::Any => Class::Field(70),
+            _ => Class::Field(85),
+        },
         // `xs.push(v)`: the runtime's own function for it.
         Op::CALLM if is_push(f, d) => Class::Push,
+        // What the runtime runs where the frame stands: an upvalue, a
+        // string, a list or a map made, a builtin or a method that
+        // calls no function of the script.
+        Op::GETUP | Op::CELLGET => quick(false, true),
+        Op::NEWLIST | Op::NEWMAP | Op::INTERP => quick(false, false),
+        Op::APPENDLIST | Op::INSERTMAP => quick(true, false),
+        // The square root of a number: most often of one not below
+        // zero.
+        Op::CALLB if is_sqrt(d) => match ty(d.a + 1) {
+            Ty::Null | Ty::Bool => Class::Interp,
+            _ => Class::Guess(95),
+        },
+        Op::CALLB => match cigscript::stdlib::builtin_catalogue().get(d.b_u as usize) {
+            Some(builtin) if !builtin.calls_back => quick(true, false),
+            _ => Class::Interp,
+        },
+        Op::CALLM => match f.constants.get(d.b_u as usize) {
+            Some(Constant::Str(name)) if !CALLS_BACK.contains(&name.as_str()) => quick(true, false),
+            _ => Class::Interp,
+        },
         _ => Class::Interp,
     }
 }

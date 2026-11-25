@@ -592,11 +592,16 @@ note: tool.cig is a stage b program: none of its loops would run faster as nativ
 - **A loop whose work is arithmetic** on ints, floats and bools:
   counters, sums, comparisons, `for i in a..b`, `while`, in any
   function and at the top level; **reads and writes of a list's
-  elements by an int** (`xs[i]`, `xs[i] = v`) and **`for x in xs`**
-  where the elements are numbers, bools or null; and **`xs.push(v)`**. The loop's native code runs on the
-  function's own registers, so it may sit beside anything: what it has
-  no machine code for (a string, a list, a map, a builtin, a `try`, a
-  `burn`) the interpreter runs.
+  elements by an int** (`xs[i]`, `xs[i] = v`); **`for x in xs`**,
+  whatever the items are; **`xs.push(v)`**; **reads and writes of a
+  record's fields** (`b.vx`, `b.vx = v`) where the field holds a
+  number; and **`math.sqrt`**. The loop's native code runs on the
+  function's own registers, so it may sit beside anything. What it has
+  no machine code for, cig's runtime most often runs one instruction
+  at a time without its interpreter's loop (a string, a field that
+  holds one, a list or a map made, a builtin that calls no function of
+  the script), and the interpreter runs the rest (a `try`, a `burn`, a
+  call).
 - **A function's own code, loops or not**, when there is enough
   arithmetic in it to pay for entering it: a helper a hot loop calls.
   A call inside native code no longer ends it: the runtime makes the

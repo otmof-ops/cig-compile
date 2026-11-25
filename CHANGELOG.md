@@ -5,6 +5,42 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **Stage `c`: a record's fields are read where they lie, and the
+  runtime runs one instruction at a time for what machine code does
+  not** ([decision 0008](docs/decisions/0008-native-code-on-the-vms-frame.md),
+  "A map's field, and the runtime for one instruction"; #32, #35).
+  - **`b.vx` and `b.vx = v` are native** where the field holds a
+    number. cig's runtime gives every map a script writes as a record
+    a shape (a number shared by the maps with the same keys in the
+    same order) and keeps, for each field instruction, the shape it
+    last found its field in and the field's place. Machine code
+    compares one number and reads the value at that place.
+  - **What an inline form does not cover is no failed guess any
+    more.** Its fall back asks the runtime to run that one instruction
+    where the frame stands (`quick`): a string where a number was
+    guessed, a value that owns memory, a map of another shape. Only
+    what the runtime does not run that way is the interpreter's, and
+    counted.
+  - **An instruction with no machine code is one such call** where the
+    runtime has it: an upvalue, a string, a list or a map made, a
+    builtin that calls no function of the script. A loop no longer
+    needs a stretch of the interpreter for one of them.
+  - **`for x in xs` is native whatever the items are:** one that owns
+    memory is put in its register by the runtime.
+  - **`math.sqrt` is a machine instruction.**
+  - **The plan's figures were fit again.** cig's interpreter runs the
+    compute programs in 0.85 of the time it took, so an instruction in
+    it now counts 15 where it counted 21, and a loop is taken to make
+    ten turns. With the old figures `trees` got native code that ran
+    slower than its bytecode.
+  - **First readings**, this machine, against the stage `b` program on
+    the runtime before this work: `nbody` takes 0.43 (it took 1.01),
+    `richards` 0.65 (0.94), and the 21 programs together 0.585 (0.667).
+    The bytecode itself now takes 0.85, and no program is slower
+    compiled than as bytecode by more than the measurement's noise.
+  - **Needs** cig's source at the commit this compiler now pins (in no
+    release yet): cig-native's table has nine functions.
+
 - **Stage `c`: `for x in xs`, `xs.push(v)`, and values that own memory
   moved without a failed guess**
   ([decision 0008](docs/decisions/0008-native-code-on-the-vms-frame.md),
