@@ -105,6 +105,10 @@ pub(crate) enum Class {
     /// runtime says where they lie, and that holds until machine code
     /// next calls the runtime.
     Index(u8),
+    /// `xs.push(v)`: machine code asks the runtime's own function for
+    /// it, which costs less than the interpreter's method call. The
+    /// list may move, so no list is in view after it.
+    Push,
     /// No inline form: the interpreter's.
     Interp,
     /// `call`: the VM's own instruction makes the frame, in the VM's
@@ -144,6 +148,10 @@ pub(crate) struct Costs {
     /// the value, which is more than its plain instructions do.
     pub index_native: u32,
     pub index_interp: u32,
+    /// A `push` through the runtime's own function, and as the
+    /// interpreter's method call.
+    pub push_native: u32,
+    pub push_interp: u32,
     /// The VM enters a body at its function's first instruction, on
     /// the frame a call has just made: nothing is held in a machine
     /// register there, so nothing is read back from the frame.
@@ -172,6 +180,8 @@ pub(crate) const COSTS: Costs = Costs {
     view: 100,
     index_native: 10,
     index_interp: 40,
+    push_native: 40,
+    push_interp: 80,
     begin: 70,
     carry: 40,
     guess: 40,
@@ -302,7 +312,7 @@ fn every(flow: &Flow, class: &BTreeMap<u32, Class>, carry: bool) -> BTreeMap<u32
         .iter()
         .map(|pc| {
             let how = match class.get(pc).copied().unwrap_or(Class::Interp) {
-                Class::Sure | Class::Guess(_) | Class::Index(_) => How::Native,
+                Class::Sure | Class::Guess(_) | Class::Index(_) | Class::Push => How::Native,
                 Class::Interp => How::Stretch,
                 Class::Call if carry => How::Stretch,
                 Class::Call | Class::Exit => How::Leave,
@@ -472,6 +482,9 @@ fn item_cost(item: &Item, state: usize, c: &Costs) -> u32 {
         (Item::Own(_, Class::Index(_)), NATIVE) => NEVER,
         (Item::Own(_, Class::Index(_)), _) => c.index_interp,
         (Item::Own(_, Class::Sure | Class::Guess(_)), _) => c.interp,
+        (Item::Own(_, Class::Push), NATIVE) => c.push_native,
+        (Item::Own(_, Class::Push), VIEWED) => NEVER,
+        (Item::Own(_, Class::Push), _) => c.push_interp,
         (Item::Own(_, Class::Interp), NATIVE | VIEWED) => NEVER,
         (Item::Own(_, Class::Interp), _) => 0,
         // The VM's own loop makes it for nothing more; under the body

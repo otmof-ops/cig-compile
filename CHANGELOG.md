@@ -5,6 +5,29 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **Stage `c`: `for x in xs`, `xs.push(v)`, and values that own memory
+  moved without a failed guess**
+  ([decision 0008](docs/decisions/0008-native-code-on-the-vms-frame.md),
+  "What owns memory is asked for"; #32, #34).
+  - **A loop over a list is native** where its items are numbers,
+    bools or null: the list is read where it lies, as `xs[i]` reads
+    it. A loop whose items are strings or maps (it reads a field of
+    them, or calls a method on them) stays the interpreter's.
+  - **`xs.push(v)` is native,** through a function of cig's runtime.
+  - **A string, a list or a map in the way no longer costs a loop its
+    native code.** Machine code cannot share or free such a value, so
+    a `mov` of one, or a number stored over one, used to be handed to
+    the interpreter and counted as a failed guess, and a body whose
+    guesses keep failing is given up. It now asks the runtime for the
+    move (`copy`) or for the register to be freed (`clear`), which is
+    no guess.
+  - **First readings**, this machine: `sieve` takes 0.39 of its stage
+    `b` time (it took 0.71), and `fannkuch` holds its 0.23 under every
+    set of figures tried, where one `mov` of a list could send it back
+    to bytecode.
+  - **Needs** cig's source at the commit this compiler now pins (in no
+    release yet): cig-native's table has six functions.
+
 - **Stage `c`: a call no longer ends native code, and a function's own
   code can be native**
   ([decision 0008](docs/decisions/0008-native-code-on-the-vms-frame.md),

@@ -148,12 +148,14 @@ body. What is machine code is a question of time alone.
   divides exactly and a float otherwise, as the interpreter has it);
   `neg`, `not`; `eq`, `lt`, `le`, their `k` forms and their jump
   forms; `test`, `testn`, `testset`; `forprep` and `forloop` with a
-  step of 1; `getindex` and `setindex` of a list by an int, for an
-  element that is a number, a bool or null. A form is the
+  step of 1; `getindex` and `setindex` of a list by an int, and
+  `iternext` over the list a `for` loop walks, for an element that is
+  a number, a bool or null; `callm` of a list's `push` with one value,
+  through the runtime's own function for it. A form is the
   interpreter's result for the operands it covers. For any others (an
-  overflow, a zero divisor, a string, a write over a register that
-  holds a list) it calls the runtime's `again(ctx, pc)` before it has
-  written anything, and the interpreter runs that one instruction.
+  overflow, a zero divisor, a string among the operands) it calls the
+  runtime's `again(ctx, pc)` before it has written anything, and the
+  interpreter runs that one instruction.
 - **A stretch:** a run of instructions with no inline form is one
   call, `run(ctx, from, to)`, and the body goes on wherever the
   bytecode comes out of that range. A `call` in a stretch is
@@ -182,6 +184,33 @@ rules keep that exact:
 3. a held register's place in the frame never holds a value that owns
    memory, so writing it back frees nothing.
 
+### What owns memory is the runtime's
+
+A string, a list, a map or a function is shared by a count and freed
+when the count runs out, and only the runtime keeps the count. So
+machine code never copies such a value and never stores over one. It
+does not have the interpreter run the instruction for that either:
+that is a failed guess, and a body whose guesses keep failing is
+given up, loop and all. It asks the runtime for the one thing it
+cannot do:
+
+- **`copy(ctx, dst, src)`:** `mov` of a value that owns memory, or
+  over one that does. The runtime shares the one and frees the other.
+- **`clear(ctx, reg)`:** before a number is stored over a register
+  that holds a value that owns memory, the runtime frees it and
+  leaves null there. It is asked for where the instruction can no
+  longer fail (every operand tested and read), and just before the
+  store: an instruction the interpreter runs instead must find the
+  register as it was.
+- **`push(ctx, list, value, dst)`:** `xs.push(v)`. Adding to a list
+  may move every element, so no list is in view after it.
+
+None of the three runs an instruction, so the frame's address, the
+steps left and (after `copy` and `clear`) every other list in view
+stand. Each says when it cannot (a register that carries a cell, a
+list something is walking), and then the interpreter runs the
+instruction.
+
 ### A list's elements, where they lie
 
 A register that holds a list is never held in a machine register: the
@@ -202,6 +231,9 @@ one. Machine code reads and writes its **elements**:
   copies the tag and the payload to the register.
 - **A write** takes the same, a value that owns no memory, and an old
   element that owns none, so nothing is freed and nothing is shared.
+- **The next item of a `for` loop** is read the same way: `iterprep`
+  makes a list of what the loop walks and counts from zero, and
+  `iternext` takes the item at the count, where the list has one.
 - **Anything else is the interpreter's**, through `again`: a map or a
   string in the register, an index past the end (its error), a string
   read out of a list or written into one.
@@ -245,6 +277,8 @@ x86-64 laptop and rounded:
 | a list's element read or written as machine code | 10 |
 | the same in the interpreter | 40 |
 | asking the runtime where a list's elements lie | 100 |
+| a list's `push` through the runtime's own function | 40 |
+| the same as the interpreter's method call | 80 |
 
 Entering at a function's first instruction is the cheap way in: the
 frame is new, no register is held in a machine register yet, and
@@ -260,6 +294,15 @@ that keeps failing is given up by the runtime and costs nothing
 more, so over a run it costs less than its rate. A guess next to
 instructions the interpreter runs anyway joins their stretch, where a
 failure costs nothing.
+
+**The item of a `for` loop is read from the loop's own instructions.**
+An inline `iternext` copies an item that owns no memory, and a loop
+over strings or maps would fail that test every turn. So the
+instructions from the `iternext` to the jump back are read: an item
+that is the object of a field or an index, the receiver of a method,
+or called, owns memory for certain, and its `iternext` is the
+interpreter's; one that is multiplied, subtracted or ordered is taken
+for a number (failing 5% of the time), and any other fails 20%.
 
 **The estimates lean towards a guess holding**, because the runtime
 bounds what it costs when it does not: a body whose guesses keep
@@ -348,8 +391,11 @@ and hold its native code to the result, byte for byte.
   stretch, a call carried in one a turn and left in the checked
   build, an int divided by an int over its edges, a stop the body
   hands back, and a register that is not of its proven type; a
-  function's straight code entered at its start; a list of numbers
-  read where it lies and asked for
+  function's straight code entered at its start; a value that owns
+  memory moved by the runtime, a register that holds one cleared
+  before a number is stored (and not before the instruction can still
+  fail), a loop's items read where they lie, a `push` through the
+  runtime; a list of numbers read where it lies and asked for
   once, an element machine code may not copy, an index with no
   element, a register that holds no list, and a list written in place
   until a string is in the way.
