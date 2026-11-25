@@ -496,6 +496,7 @@ fn run_case(tools: &Tools, src: &Path, case: &Case, tally: &mut Tally) {
             .env("NO_COLOR", "1")
             .env("CIG_DOCTOR", "0")
             .env("CIG_SEAL_KEY", "file")
+            .env("CIG_ENGINE", "tree")
             .env("CIG_REPORTS", "never")
             .env("CIG_INTERNAL_TRACKER_DIR", sb.path().join("tracker"))
             .env("CIG_UPDATE_MANIFEST", sb.path().join("no-releases.json"))
@@ -978,6 +979,7 @@ fn explain_pages(tools: &Tools, tally: &mut Tally) {
             .env("CIG_DOCTOR", "0")
             .env("CIG_REPORTS", "never")
             .env("CIG_SEAL_KEY", "file")
+            .env("CIG_ENGINE", "tree")
             .env("CIGSCRIPT_HOME", &home)
             .env_remove("CI")
             .stdin(Stdio::null());

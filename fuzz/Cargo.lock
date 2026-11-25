@@ -448,7 +448,7 @@ dependencies = [
 [[package]]
 name = "cig-bytecode"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?rev=ed7ad3ab7f2d2580d3b1106fee704f1dd2333436#ed7ad3ab7f2d2580d3b1106fee704f1dd2333436"
+source = "git+https://github.com/otmof-ops/cig-script?rev=da5cd6f55e949f6be3db010a199dec3da2c2261d#da5cd6f55e949f6be3db010a199dec3da2c2261d"
 dependencies = [
  "blake3",
 ]
@@ -467,12 +467,12 @@ dependencies = [
 [[package]]
 name = "cig-copy"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?rev=ed7ad3ab7f2d2580d3b1106fee704f1dd2333436#ed7ad3ab7f2d2580d3b1106fee704f1dd2333436"
+source = "git+https://github.com/otmof-ops/cig-script?rev=da5cd6f55e949f6be3db010a199dec3da2c2261d#da5cd6f55e949f6be3db010a199dec3da2c2261d"
 
 [[package]]
 name = "cig-native"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?rev=ed7ad3ab7f2d2580d3b1106fee704f1dd2333436#ed7ad3ab7f2d2580d3b1106fee704f1dd2333436"
+source = "git+https://github.com/otmof-ops/cig-script?rev=da5cd6f55e949f6be3db010a199dec3da2c2261d#da5cd6f55e949f6be3db010a199dec3da2c2261d"
 dependencies = [
  "libc",
 ]
@@ -497,7 +497,7 @@ dependencies = [
 [[package]]
 name = "cig-pass"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?rev=ed7ad3ab7f2d2580d3b1106fee704f1dd2333436#ed7ad3ab7f2d2580d3b1106fee704f1dd2333436"
+source = "git+https://github.com/otmof-ops/cig-script?rev=da5cd6f55e949f6be3db010a199dec3da2c2261d#da5cd6f55e949f6be3db010a199dec3da2c2261d"
 dependencies = [
  "base64",
  "blake3",
@@ -514,7 +514,7 @@ dependencies = [
 [[package]]
 name = "cig-vault"
 version = "0.1.0"
-source = "git+https://github.com/otmof-ops/cig-script?rev=ed7ad3ab7f2d2580d3b1106fee704f1dd2333436#ed7ad3ab7f2d2580d3b1106fee704f1dd2333436"
+source = "git+https://github.com/otmof-ops/cig-script?rev=da5cd6f55e949f6be3db010a199dec3da2c2261d#da5cd6f55e949f6be3db010a199dec3da2c2261d"
 dependencies = [
  "getrandom 0.2.17",
  "hex",
@@ -597,7 +597,7 @@ dependencies = [
 [[package]]
 name = "cigscript"
 version = "1.25.0"
-source = "git+https://github.com/otmof-ops/cig-script?rev=ed7ad3ab7f2d2580d3b1106fee704f1dd2333436#ed7ad3ab7f2d2580d3b1106fee704f1dd2333436"
+source = "git+https://github.com/otmof-ops/cig-script?rev=da5cd6f55e949f6be3db010a199dec3da2c2261d#da5cd6f55e949f6be3db010a199dec3da2c2261d"
 dependencies = [
  "argon2",
  "blake3",
@@ -606,7 +606,7 @@ dependencies = [
  "cig-bytecode",
  "cig-copy",
  "cig-native",
- "cig-pass 0.1.0 (git+https://github.com/otmof-ops/cig-script?rev=ed7ad3ab7f2d2580d3b1106fee704f1dd2333436)",
+ "cig-pass 0.1.0 (git+https://github.com/otmof-ops/cig-script?rev=da5cd6f55e949f6be3db010a199dec3da2c2261d)",
  "cig-vault",
  "clap",
  "fastcdc",

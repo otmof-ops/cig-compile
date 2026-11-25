@@ -60,7 +60,7 @@ warmup  = 1
 # The harness starts every case from an empty environment, so the pinned cig's
 # checkout is named here, relative to this folder (the sibling `../../CigScript`
 # is where CI puts it).
-env     = { NO_COLOR = "1", CIG_DOCTOR = "0", CIG_SEAL_KEY = "file", CIGSCRIPT_SRC = "../../CigScript" }
+env     = { NO_COLOR = "1", CIG_DOCTOR = "0", CIG_SEAL_KEY = "file", CIG_ENGINE = "tree", CIGSCRIPT_SRC = "../../CigScript" }
 
 # ----- build ------------------------------------------------------------------
 

@@ -101,6 +101,7 @@ fn run(dir: &Path, name: &str, text: &str) -> (String, Option<i32>) {
         .current_dir(&d)
         .env("CIGSCRIPT_HOME", d.join("home"))
         .env("CIG_SEAL_KEY", "file")
+        .env("CIG_ENGINE", "tree")
         .env("CIG_DOCTOR", "0")
         .env("CIG_REPORTS", "never")
         .env("NO_COLOR", "1")
