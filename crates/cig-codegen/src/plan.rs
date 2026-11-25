@@ -109,6 +109,19 @@ pub(crate) enum Class {
     /// it, which costs less than the interpreter's method call. The
     /// list may move, so no list is in view after it.
     Push,
+    /// An inline read or write of a map's field. It tests what it finds
+    /// as a guess does (the number is how often it is taken to find a
+    /// number in a map of the shape the site last saw), and it needs
+    /// the map's values in view, as an index form needs a list's.
+    Field(u8),
+    /// No inline form, but one instruction the runtime runs where the
+    /// frame stands, without its loop (`quick`): an upvalue read, a
+    /// string loaded or built, a builtin called. `direct` when the
+    /// runtime has a path of its own for the kind (an upvalue, a
+    /// constant), which costs little more than the instruction;
+    /// `moves` when it may add to a list or a map or take from one, so
+    /// nothing is in view after it.
+    Quick { moves: bool, direct: bool },
     /// No inline form: the interpreter's.
     Interp,
     /// `call`: the VM's own instruction makes the frame, in the VM's
@@ -152,6 +165,17 @@ pub(crate) struct Costs {
     /// interpreter's method call.
     pub push_native: u32,
     pub push_interp: u32,
+    /// A map's field read or written as machine code (the shape
+    /// compared, the value copied), and by the interpreter.
+    pub field_native: u32,
+    pub field_interp: u32,
+    /// One instruction run by the runtime where the frame stands,
+    /// beyond what the interpreter takes to run it: what machine code
+    /// holds is written to the frame, and the runtime is called. Less
+    /// for a kind the runtime has a path of its own for than for one
+    /// that goes through its fast path's function.
+    pub quick: u32,
+    pub quick_call: u32,
     /// The VM enters a body at its function's first instruction, on
     /// the frame a call has just made: nothing is held in a machine
     /// register there, so nothing is read back from the frame.
@@ -173,19 +197,23 @@ pub(crate) struct Costs {
 /// The figures of one x86-64 laptop, rounded.
 pub(crate) const COSTS: Costs = Costs {
     native: 3,
-    interp: 21,
+    interp: 15,
     stretch: 120,
     out: 50,
     enter: 250,
     view: 100,
     index_native: 10,
-    index_interp: 40,
+    index_interp: 30,
     push_native: 40,
     push_interp: 80,
+    field_native: 8,
+    field_interp: 24,
+    quick: 5,
+    quick_call: 20,
     begin: 70,
     carry: 40,
     guess: 40,
-    turns: 8,
+    turns: 10,
 };
 
 /// What a plan is asked for beyond its rule.
@@ -312,7 +340,12 @@ fn every(flow: &Flow, class: &BTreeMap<u32, Class>, carry: bool) -> BTreeMap<u32
         .iter()
         .map(|pc| {
             let how = match class.get(pc).copied().unwrap_or(Class::Interp) {
-                Class::Sure | Class::Guess(_) | Class::Index(_) | Class::Push => How::Native,
+                Class::Sure
+                | Class::Guess(_)
+                | Class::Index(_)
+                | Class::Push
+                | Class::Field(_)
+                | Class::Quick { .. } => How::Native,
                 Class::Interp => How::Stretch,
                 Class::Call if carry => How::Stretch,
                 Class::Call | Class::Exit => How::Leave,
@@ -466,10 +499,10 @@ fn is_native(state: usize) -> bool {
     state == NATIVE || state == VIEWED
 }
 
-/// The item is an inline index form: the one thing that can bring a
-/// list into view.
+/// The item is an inline index or field form: what brings a list's
+/// elements or a map's values into view.
 fn takes_view(item: &Item) -> bool {
-    matches!(item, Item::Own(_, Class::Index(_)))
+    matches!(item, Item::Own(_, Class::Index(_) | Class::Field(_)))
 }
 
 /// What an item costs in a state: [`NEVER`] when it cannot be in it.
@@ -485,6 +518,15 @@ fn item_cost(item: &Item, state: usize, c: &Costs) -> u32 {
         (Item::Own(_, Class::Push), NATIVE) => c.push_native,
         (Item::Own(_, Class::Push), VIEWED) => NEVER,
         (Item::Own(_, Class::Push), _) => c.push_interp,
+        (Item::Own(_, Class::Field(p)), VIEWED) => c.field_native + miss(*p),
+        (Item::Own(_, Class::Field(_)), NATIVE) => NEVER,
+        (Item::Own(_, Class::Field(_)), _) => c.field_interp,
+        // The interpreter's work is the instruction's own either way:
+        // what machine code pays is the call.
+        (Item::Own(_, Class::Quick { moves: true, .. }), VIEWED) => NEVER,
+        (Item::Own(_, Class::Quick { direct: true, .. }), NATIVE | VIEWED) => c.quick,
+        (Item::Own(_, Class::Quick { direct: false, .. }), NATIVE | VIEWED) => c.quick_call,
+        (Item::Own(_, Class::Quick { .. }), _) => 0,
         (Item::Own(_, Class::Interp), NATIVE | VIEWED) => NEVER,
         (Item::Own(_, Class::Interp), _) => 0,
         // The VM's own loop makes it for nothing more; under the body

@@ -234,9 +234,62 @@ one. Machine code reads and writes its **elements**:
 - **The next item of a `for` loop** is read the same way: `iterprep`
   makes a list of what the loop walks and counts from zero, and
   `iternext` takes the item at the count, where the list has one.
-- **Anything else is the interpreter's**, through `again`: a map or a
-  string in the register, an index past the end (its error), a string
-  read out of a list or written into one.
+- **An item that owns memory** (a string, a map in the list a loop
+  walks) is put in its register by the runtime (`elem`), and the loop
+  goes on in machine code.
+- **Anything else is the runtime's first, then the interpreter's**
+  (below): a map or a string in the register, an index past the end
+  (its error), a string read out of a list or written into one.
+
+### A map's fields, where they lie
+
+A map a script writes as a record has a **shape** in cig's runtime: a
+number every map has which got the same keys in the same order. Maps
+of one shape have the same keys in the same places, and the runtime
+keeps, for each field instruction, the shape of the last map it found
+its field in and the field's place there, in a cell machine code can
+read (`ctx.sites`, one cell a pc).
+
+- **It asks the runtime once** (`fields(ctx, reg)`) where the map's
+  values lie, how far each is from the last, and which shape the map
+  has, and keeps that (a view, as of a list) in machine registers.
+- **A read** compares the map's shape with the one in the
+  instruction's cell. When they are the same, the value is at the
+  cell's place: it copies the tag and the payload of a value that owns
+  no memory to the register. No hash, no key looked at.
+- **A write** takes the same, a value that owns no memory, and a field
+  that holds one that owns none, and stores where the field's value
+  lies.
+- **Anything else is the runtime's:** a map of another shape or of
+  none (the runtime finds the field, and the cell learns the shape), a
+  field that holds a string, a field the map does not have yet.
+
+### The runtime, for one instruction
+
+What has no machine code, or met operands its machine code does not
+cover, used to be the interpreter's alone: `again` for one instruction
+(a failed guess, counted against the body) or a stretch of them
+(`run`). Most of it the runtime can run where the frame stands,
+without its loop: `quick(ctx, pc)`.
+
+- **The fall back of every form that tests its operands** asks `quick`
+  first, and the interpreter only when `quick` did nothing. A string
+  where a number was guessed, a value that owns memory, a map of
+  another shape are no failed guesses any more: each costs a call, and
+  the body is not given up for them. A form whose types are proven
+  does not ask: what it does not cover (an overflow, a zero divisor)
+  the runtime's fast path does not either.
+- **An instruction with no inline form** is one `quick` call where
+  the runtime has it: an upvalue read, a constant that is no number, a
+  string built, a list or a map made or added to, a builtin or a
+  method that calls no function of the script. The plan weighs that
+  against a stretch.
+- **The body writes what it holds to the frame first** (the runtime
+  reads the instruction's operands there) and reads back what the
+  instruction wrote. `quick` never runs what jumps, counts a step or
+  ends the frame: those are the body's own, or the interpreter's.
+- **`math.sqrt` of a number not below zero is one machine
+  instruction.** It is the one builtin with a form of its own.
 
 ### Where machine code pays (`src/plan.rs`)
 
@@ -268,17 +321,32 @@ x86-64 laptop and rounded:
 | | cost |
 |---|---:|
 | an instruction as machine code | 3 |
-| an instruction in the interpreter | 21 |
+| an instruction in the interpreter | 15 |
 | a stretch (a call into the runtime and back) | 120 |
 | a `call` carried in a stretch, beyond the stretch | 40 |
 | leaving a body | 50 |
 | entering a body | 250 |
 | entering a body at its function's first instruction | 70 |
 | a list's element read or written as machine code | 10 |
-| the same in the interpreter | 40 |
-| asking the runtime where a list's elements lie | 100 |
+| the same in the interpreter | 30 |
+| a map's field read or written as machine code | 8 |
+| the same in the interpreter | 24 |
+| asking the runtime where a list's elements or a map's values lie | 100 |
 | a list's `push` through the runtime's own function | 40 |
 | the same as the interpreter's method call | 80 |
+| one instruction run by the runtime where the frame stands, beyond the instruction itself: a kind it has a path of its own for | 5 |
+| the same for any other kind | 20 |
+
+A loop is taken to make ten turns each time it is reached: what
+entering and leaving it are spread over.
+
+**The figures are of one runtime.** An instruction in the interpreter
+stood at 21 until the VM's fast loop read each instruction's own word
+and its calls stopped leaving the loop: the interpreter then ran the
+compute programs in 0.85 of the time it had taken, and a plan made
+with the old figure gave bodies to functions the bytecode now runs
+faster (`trees`, whose work is calls, took 0.85 where its bytecode
+took 0.77). They were fit again by sweeps over the 21 programs.
 
 Entering at a function's first instruction is the cheap way in: the
 frame is new, no register is held in a machine register yet, and
