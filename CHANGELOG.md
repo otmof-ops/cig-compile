@@ -5,6 +5,25 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **Measured again on 2026-11-26**, both built from `main` (this
+  compiler at `6882f02`, cig at otmof-ops/cig-script `ca5236b`), whole
+  processes, every side in the same rounds, fifteen hours after the run
+  before ([the
+  paper](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCHMARKS-2026-11-26.md)):
+  a stage `c` program takes 0.94 times Lua 5.4's time over the compute
+  programs both have (0.98 in the run before) and 0.45 of CPython 3.12's
+  (0.48); a stage `b` program takes 1.31 times Lua's time (1.36).
+  `mandel` takes 0.18 of its stage `b` time (0.24), chiefly for a loop's
+  scratch registers being freed once. The 21 compute programs take 0.76
+  of their stage `b` time: faster on 9, level on 9, slower on 3. **Three
+  come out slower with their native code than as bytecode:** `maps`
+  1.04, `strings` 1.03 and `words` 1.05, where in the run before they
+  were level (0.99, 0.97, 0.99). Timed alone, `maps` and `words` are
+  1.05 and 1.05 and `strings` is at the 3% line. Their loops are strings
+  and dictionary lookups, which the runtime does for the native code one
+  call at a time, and the plan's figures were measured before the VM's
+  fast loop changed; what moved the three is not separated yet (#117).
+
 - **The pinned cig moves to cig-script `da5cd6f`**, and the tests name
   the tree-walker.
   - **What a program gets from it.** A program runs on the runtime it

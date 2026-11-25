@@ -84,19 +84,19 @@ and puts everything back, with no cig on the machine:
 - **A stage `b` program** (`cigcompile build --stage b`, the script's bytecode on cig's VM) takes 0.52 of `cig run`'s time, faster on all 21, and 0.82 of CPython 3.13's; it starts in 3.7 ms, where CPython takes 13.5 ms.
 - **A stage `a` program**, the default, runs on the interpreter as `cig run` does (0.93 of its time).
 - **Lua is faster**: a stage `b` program takes 1.97 times Lua 5.4's time and 5.20 times LuaJIT's.
-- **Stage `c`** (`--stage c`, on `main`, in no release yet) adds native code for a script's loops, for the lists and records they work on and for its functions on numbers, where that comes out ahead. Measured on 2026-11-25, both built from `main`, on another machine than the table above ([the paper](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCHMARKS-2026-11-25.md)):
+- **Stage `c`** (`--stage c`, on `main`, in no release yet) adds native code for a script's loops, for the lists and records they work on and for its functions on numbers, where the compiler counts that as coming out ahead. Measured on 2026-11-26, both built from `main`, on another machine than the table above ([the paper](https://github.com/otmof-ops/cig-script/blob/main/docs/BENCHMARKS-2026-11-26.md)):
 
   | program | stage b, ms | stage c, ms | stage c ÷ stage b | Lua 5.4, ms | CPython 3.12, ms |
   |---|---:|---:|---:|---:|---:|
-  | `mandel` | 26.5 | 6.3 | 0.24 | 16.0 | 52.6 |
-  | `fib` | 9.7 | 2.9 | 0.30 | 4.3 | 12.4 |
-  | `fannkuch` | 30.5 | 9.8 | 0.32 | 22.4 | 33.1 |
-  | `sieve` | 26.6 | 14.2 | 0.53 | 11.2 | 25.0 |
-  | `loop` | 5.7 | 3.0 | 0.54 | 4.3 | 21.7 |
-  | `nbody` | 61.0 | 34.0 | 0.56 | 28.9 | 82.9 |
-  | `richards` | 5.5 | 4.8 | 0.88 | 2.7 | 10.6 |
+  | `mandel` | 23.9 | 4.3 | 0.18 | 15.6 | 52.3 |
+  | `fib` | 9.3 | 2.7 | 0.29 | 4.2 | 12.4 |
+  | `fannkuch` | 28.7 | 9.3 | 0.32 | 22.2 | 32.8 |
+  | `loop` | 4.9 | 2.6 | 0.52 | 4.1 | 21.2 |
+  | `nbody` | 56.5 | 32.8 | 0.58 | 28.2 | 82.3 |
+  | `sieve` | 20.8 | 14.4 | 0.69 | 11.2 | 24.8 |
+  | `richards` | 5.2 | 4.4 | 0.86 | 2.4 | 10.6 |
 
-  Over the compute programs a stage `c` program takes 0.98 times Lua 5.4's time (stage `b`: 1.36), 0.48 of CPython 3.12's (stage `b`: 0.63) and 1.84 times LuaJIT's (stage `b`: 2.55). A day earlier, on the same machine and the same core, before the VM's calls and start-up were reworked and before stage `c` read lists and records, it took 1.37 times Lua's time and 0.66 of CPython's. 14 of the 21 compute programs have native code, and over all 21 a stage `c` program takes 0.76 of its stage `b` time: faster on 9, level on 11, and slower on 1 (`json-deep`, three milliseconds long, which has no native code: its stage `b` and stage `c` programs are the same file). A loop whose work is calls, strings or dictionary lookups is not faster yet and runs as stage `b` does.
+  Over the compute programs a stage `c` program takes 0.94 times Lua 5.4's time (stage `b`: 1.31), 0.45 of CPython 3.12's (stage `b`: 0.60) and 1.79 times LuaJIT's (stage `b`: 2.48). In the run before, fifteen hours earlier on the same machine and the same core, before the VM counted a loop turn's steps in one instruction and ran a loop over a list itself, and before a loop's scratch registers were freed once, it took 0.98 times Lua's time and 0.48 of CPython's. 14 of the 21 compute programs have native code, and over all 21 a stage `c` program takes 0.76 of its stage `b` time: faster on 9, level on 9, and slower on 3. The three that come out slower are `maps`, `strings` and `words` (1.04, 1.03, 1.05), which were level in the run before: timed alone, `maps` and `words` are 1.05 and 1.05 of their stage `b` time and `strings` is at the 3% line. Their loops are strings and dictionary lookups, which the runtime does for the native code one call at a time; what moved them is being separated ([#117](https://github.com/otmof-ops/cig-compile/issues/117)). A loop whose work is calls is not faster yet and runs as stage `b` does.
 
 Whole processes, start-up included: the table at the top on a 2018 laptop on battery, with cig 1.24.0 as released; stage `c`'s on a 2025 laptop on mains power, every process pinned to one core.
 
