@@ -1704,6 +1704,188 @@ mod runs {
         assert_eq!(ctx.steps_left, 999);
     }
 
+    // ----- a loop's scratch registers ---------------------------------------
+
+    /// Two loops, one inside the other, each with a value it computes
+    /// and uses in the same turn:
+    ///
+    /// ```text
+    ///  0 loadint R0, 0       total
+    ///  1 loadint R1, 0       the outer window: start,
+    ///  2 loadint R2, 3         limit,
+    ///  3 loadint R3, 1         step
+    ///  4 forprep R1 -> 17
+    ///  5 steps 1, 1          <- the outer loop, i in R4
+    ///  6 sub R5, R4, R3      R5 = i - 1, read after the inner loop
+    ///  7 loadint R6, 0       the inner window
+    ///  8 loadint R7, 2
+    ///  9 loadint R8, 1
+    /// 10 forprep R6 -> 15
+    /// 11 steps 2, 1          <- the inner loop, j in R9
+    /// 12 sub R10, R9, R4     R10 = j - i
+    /// 13 add R0, R0, R10
+    /// 14 forloop R6 -> 11
+    /// 15 add R0, R0, R5
+    /// 16 forloop R1 -> 5
+    /// 17 ret R0
+    /// ```
+    ///
+    /// R5 and R10 are written before they are read in every turn, by
+    /// an instruction that only writes numbers: whatever they held
+    /// when the loops are entered is nobody's to read.
+    fn two_loops() -> Module {
+        module(function(
+            11,
+            0,
+            vec![
+                Instr::asbx(Op::LOADINT, 0, 0),
+                Instr::asbx(Op::LOADINT, 1, 0),
+                Instr::asbx(Op::LOADINT, 2, 3),
+                Instr::asbx(Op::LOADINT, 3, 1),
+                Instr::asbx(Op::FORPREP, 1, 12),
+                steps(1, 1),
+                Instr::abc(Op::SUB, 5, 4, 3),
+                Instr::asbx(Op::LOADINT, 6, 0),
+                Instr::asbx(Op::LOADINT, 7, 2),
+                Instr::asbx(Op::LOADINT, 8, 1),
+                Instr::asbx(Op::FORPREP, 6, 4),
+                steps(2, 1),
+                Instr::abc(Op::SUB, 10, 9, 4),
+                Instr::abc(Op::ADD, 0, 0, 10),
+                Instr::asbx(Op::FORLOOP, 6, -4),
+                Instr::abc(Op::ADD, 0, 0, 5),
+                Instr::asbx(Op::FORLOOP, 1, -12),
+                Instr::abc(Op::RET, 0, 0, 0),
+            ],
+        ))
+    }
+
+    /// The frame of `two_loops` where the outer loop starts its first
+    /// turn, with `r5` and `r10` in its two scratch registers and what
+    /// an earlier use left in the inner loop's window.
+    fn entering(r5: Value, r10: Value) -> Vec<Value> {
+        let mut frame = ints(&[0, 0, 3, 1, 0]);
+        frame.push(r5);
+        frame.extend([Value::str("x"), Value::Null, Value::Bool(true)]);
+        frame.push(Value::Int(0));
+        frame.push(r10);
+        frame
+    }
+
+    #[test]
+    fn a_loops_scratch_registers_are_freed_once_where_it_is_entered() {
+        for mode in [Mode::Promoted, Mode::Frame, Mode::Checked] {
+            let (code, rows) = load(&two_loops(), Rule::Loops, mode);
+            // A string in each scratch register, and one in the inner
+            // loop's window, which the outer loop sets before the inner
+            // one reads it.
+            let mut frame = entering(Value::str("five"), Value::str("ten"));
+            let mut host = Recording::default();
+            let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+            assert_eq!(stop, Stop::At(17), "{mode:?}");
+            // i = 0: (0 + 1) - 1; i = 1: (-1 + 0) + 0; i = 2: (-2 - 1) + 1.
+            assert!(
+                matches!(frame[0], Value::Int(-3)),
+                "{mode:?}: {}",
+                frame[0].repr()
+            );
+            // Each register that owned memory was freed by the runtime,
+            // once, where the outer loop was entered: three turns of
+            // it and six of the inner one asked for nothing more.
+            assert_eq!(host.clear_calls, [5, 6, 10], "{mode:?}");
+            assert!(
+                host.run_calls.is_empty()
+                    && host.again_calls.is_empty()
+                    && host.quick_calls.is_empty(),
+                "{mode:?}"
+            );
+            assert!(matches!(frame[5], Value::Int(1)), "{mode:?}");
+            assert!(matches!(frame[10], Value::Int(-1)), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn a_scratch_register_that_owns_nothing_asks_the_runtime_for_nothing() {
+        let (code, rows) = load(&two_loops(), Rule::Loops, Mode::Promoted);
+        let mut frame = entering(Value::Int(77), Value::Float(1.5));
+        frame[6] = Value::Null;
+        let mut host = Recording::default();
+        let (stop, _) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(17));
+        assert!(matches!(frame[0], Value::Int(-3)), "{}", frame[0].repr());
+        assert!(host.clear_calls.is_empty(), "{:?}", host.clear_calls);
+    }
+
+    #[test]
+    fn a_register_the_runtime_cannot_free_leaves_the_loop_to_the_interpreter() {
+        let (code, rows) = load(&two_loops(), Rule::Loops, Mode::Promoted);
+        let mut frame = entering(Value::str("five"), Value::Int(0));
+        let mut host = Recording {
+            refuses: true,
+            ..Recording::default()
+        };
+        // Nothing ran: the bytecode goes on where the body was entered,
+        // with the frame as it was.
+        let (stop, ctx) = enter(&code, &rows, 5, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::At(5));
+        assert_eq!(ctx.steps_left, 1_000);
+        assert_eq!(host.clear_calls, [5]);
+        assert_eq!(frame[5].repr(), "\"five\"");
+        assert!(matches!(frame[0], Value::Int(0)));
+    }
+
+    /// The frame of `two_loops` as the interpreter leaves it where the
+    /// inner loop starts in the outer loop's second turn (i = 1), with
+    /// `r5` where that turn's `i - 1` is and `r10` in the inner loop's
+    /// scratch register.
+    fn inside(r5: Value, r10: Value) -> Vec<Value> {
+        let mut frame = ints(&[0, 1, 3, 1, 1]);
+        frame.push(r5);
+        frame.extend(ints(&[0, 2, 1, 0]));
+        frame.push(r10);
+        frame
+    }
+
+    #[test]
+    fn a_body_entered_inside_a_loop_makes_its_scratch_registers_ready_there() {
+        for mode in [Mode::Promoted, Mode::Frame, Mode::Checked] {
+            // With a body for every function the inner loop's start is
+            // a place the VM enters at: the interpreter may have run
+            // the outer loop up to there, and made nothing ready.
+            let (code, rows) = load(&two_loops(), Rule::Every, mode);
+            let mut frame = inside(Value::Int(0), Value::str("ten"));
+            let mut host = Recording::default();
+            let (stop, _) = enter(&code, &rows, 11, &mut frame, 1_000, &mut host);
+            assert_eq!(stop, Stop::At(17), "{mode:?}");
+            // The first turn gave 0; i = 1 gives -1 and i = 2 gives -2.
+            assert!(
+                matches!(frame[0], Value::Int(-3)),
+                "{mode:?}: {}",
+                frame[0].repr()
+            );
+            // The inner loop's scratch register, which nobody reads
+            // again there, was freed where the body was entered. The
+            // outer loop's holds this turn's number and is read after
+            // the inner loop: it was left alone.
+            assert_eq!(host.clear_calls, [10], "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn a_scratch_register_that_owns_memory_where_it_is_read_again_is_a_defect() {
+        // R5 is read after the inner loop, so in a real run the outer
+        // loop's `sub` wrote it in this turn, and that writes a number
+        // or raises. A string there is a frame no run makes: the body
+        // says so and runs nothing on it.
+        let (code, rows) = load(&two_loops(), Rule::Every, Mode::Promoted);
+        let mut frame = inside(Value::str("five"), Value::Int(0));
+        let mut host = Recording::default();
+        let (stop, _) = enter(&code, &rows, 11, &mut frame, 1_000, &mut host);
+        assert_eq!(stop, Stop::Defect(11));
+        assert!(host.clear_calls.is_empty());
+        assert_eq!(frame[5].repr(), "\"five\"");
+    }
+
     #[test]
     fn a_register_that_is_not_of_its_proven_type_is_a_defect() {
         // The pass proved `total` an int at the loop's start. A frame

@@ -438,6 +438,20 @@ fn loops_of(code: &[Option<DecodedInstr>]) -> Vec<Loop> {
     nest(&flat, &mut at, u32::MAX)
 }
 
+/// Every loop of the function as the pcs it runs from and to, an outer
+/// loop before the loops inside it.
+pub(crate) fn loop_spans(code: &[Option<DecodedInstr>]) -> Vec<(u32, u32)> {
+    fn flat(loops: &[Loop], out: &mut Vec<(u32, u32)>) {
+        for l in loops {
+            out.push((l.start, l.end));
+            flat(&l.inside, out);
+        }
+    }
+    let mut out = Vec::new();
+    flat(&loops_of(code), &mut out);
+    out
+}
+
 /// [`Rule::Loops`]: each loop's cheapest answers, innermost first; then,
 /// with `straight`, the function's own code around its loops. The rest
 /// is the interpreter's.

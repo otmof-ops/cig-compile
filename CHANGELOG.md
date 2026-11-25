@@ -5,6 +5,37 @@ project follows semantic versioning.
 
 ## Unreleased
 
+- **Stage `c`: a loop's scratch registers are freed once, where the
+  loop is entered** ([decision 0008](docs/decisions/0008-native-code-on-the-vms-frame.md),
+  "A loop's scratch registers").
+  - **What it was.** Machine code may store a number over a register
+    only when what was there owns no memory, so every inline write
+    tested the register's old value first, with a call of the runtime
+    beside the test for the case that it did. In a loop of arithmetic
+    that is a test at every write of every turn. The call is never
+    made there, and it still kept every float the loop holds out of
+    the machine's registers, which a call does not preserve.
+  - **What it is.** For each loop the compiler finds the registers
+    that own no memory anywhere in it: those nobody reads again where
+    the loop starts, and that every instruction of the loop that
+    writes them can only leave a number, a bool or null in. `a - b` is
+    a number or an error; `a + b` is a string when both are, so it
+    counts only when one side is known to be none. They are freed
+    once, by the runtime, where the loop is entered from outside, and
+    written with a plain store from then on.
+  - **Entered elsewhere.** A body entered inside such a loop, and one
+    the interpreter comes back into from a run that began outside it,
+    makes the same registers ready before it goes on. The checked
+    build tests every such write instead of trusting it.
+  - **Measured**, cycles of whole processes pinned to one core,
+    against this compiler before, on one runtime: `mandel` takes 0.66,
+    `loop` 0.90, `fannkuch` and `richards` 0.98, the 21 programs
+    0.976. In machine instructions `mandel` runs 0.71 and `loop` 0.79,
+    and no program more.
+  - **It also takes back what the list forms cost.** Since `for x in
+    xs` landed, a loop of arithmetic carried that call: `mandel` ran
+    6.7% more instructions than before it, and `loop` 2.9% more.
+
 - **A stage `c` program calls its bytecode functions at the speed of a
   stage `b` one** (cig's runtime, the commit pinned here). A program
   whose top level is native and whose functions are bytecode paid
